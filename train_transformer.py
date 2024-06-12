@@ -1,3 +1,4 @@
+from sklearn.model_selection import train_test_split
 import torch
 import pickle
 import click
@@ -6,7 +7,6 @@ import torch
 import numpy as np 
 import pandas as pd
 from torch.utils.data import DataLoader
-from sklearn.model_selection import train_test_split
 from src import model
 
 def split(plm_vectors, plm_integer, test_size=0.2):
@@ -22,7 +22,7 @@ def split(plm_vectors, plm_integer, test_size=0.2):
     y = list()
     removed = []
 
-    for g in genomes[:2000]:
+    for g in genomes:
         # get the genes in this genome
         this_genes = genome_genes.get(g)
 
@@ -45,10 +45,11 @@ def split(plm_vectors, plm_integer, test_size=0.2):
 @click.command()
 @click.option('--batch_size', default=16, help='Batch size for training.', type=int)
 @click.option('--lr', default=1e-4, help='Learning rate for the optimizer.', type=float)
-@click.option('--epochs', default=5, help='Number of training epochs.', type=int)
+@click.option('--epochs', default=10, help='Number of training epochs.', type=int)
 @click.option('--hidden_dim', default=512, help='Hidden dimension size for the transformer model.', type=int)
 @click.option('--num_heads', default=4, help='Number of attention heads in the transformer model.', type=int)
-def main(batch_size, lr, epochs, hidden_dim, num_heads):
+@click.option('-o', '--out', default='transformer.model', help='Path to save the output.', type=str)
+def main(batch_size, lr, epochs, hidden_dim, num_heads, out):
     ###########################
     # some scrappy code which needs fixing to get the plm vectors
     plm_vectors = pickle.load(open('/home/grig0076/scratch/glm_embeddings/LSTM_test_example/data/phrogs_genomes/pLM_embs.pkl', 'rb'))
@@ -82,13 +83,10 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads):
     transformer_model = model.VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=10, num_heads=num_heads, hidden_dim=hidden_dim)
 
     # Train the model
-    model.train(transformer_model, train_dataloader, epochs=epochs, lr=lr)
+    model.train(transformer_model, train_dataloader, test_dataloader, epochs=epochs, lr=lr, save_path=out)
 
     # Evaluate the model
-    model.evaluate_with_threshold(transformer_model, test_dataloader, threshold=0.8)
-
-    # Save the model
-    # TODO update the part that has been added 
+    model.evaluate(transformer_model, test_dataloader, threshold=0.8)
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
