@@ -58,13 +58,16 @@ def masked_loss(output, target, mask, ignore_index=-1):
     loss = loss * mask.view(-1)
     return loss.sum() / mask.sum()
 
-def train(model, dataloader, epochs=5, lr=1e-5, save_path='model.pth'):
+def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path='model.pth'):
     optimizer = optim.Adam(model.parameters(), lr=lr)
+    train_losses = [] 
+    val_losses = [] 
     model.train()
+    total_loss = 0 
     
     for epoch in range(epochs):
         total_loss = 0
-        for embeddings, categories, masks in dataloader:
+        for embeddings, categories, masks in train_dataloader:
             embeddings, categories, masks = embeddings.float(), categories.long(), masks.float()
             optimizer.zero_grad()
             src_key_padding_mask = (masks == 0)  # Mask for transformer
@@ -74,8 +77,24 @@ def train(model, dataloader, epochs=5, lr=1e-5, save_path='model.pth'):
             optimizer.step()
             total_loss += loss.item()
         
-        avg_loss = total_loss / len(dataloader)
-        print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_loss}")
+        avg_train_loss = total_loss / len(train_dataloader)
+        train_losses.append(avg_train_loss)
+        print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_train_loss}")
+
+        # Validation loss 
+        model.eval() 
+        total_val_loss = 0 
+        with torch.no_grad():
+            for embeddings, categories, masks in test_dataloader:
+                embeddings, categories, masks = embeddings.float(), categories.long(), masks.float()
+                src_key_padding_mask = (masks == 0)  # Mask for transformer
+                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                val_loss = masked_loss(outputs, categories, masks)
+                total_val_loss += val_loss.item()
+        
+        avg_val_loss = total_val_loss / len(test_dataloader)
+        val_losses.append(avg_val_loss)
+        print(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {avg_val_loss}")
 
     # Save the model
     torch.save(model.state_dict(), save_path)
