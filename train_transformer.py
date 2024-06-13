@@ -22,7 +22,7 @@ def split(plm_vectors, plm_integer, test_size=0.2):
     y = list()
     removed = []
 
-    for g in genomes[:5000]:
+    for g in genomes[:300]:
         # get the genes in this genome
         this_genes = genome_genes.get(g)
 
@@ -48,8 +48,9 @@ def split(plm_vectors, plm_integer, test_size=0.2):
 @click.option('--epochs', default=10, help='Number of training epochs.', type=int)
 @click.option('--hidden_dim', default=512, help='Hidden dimension size for the transformer model.', type=int)
 @click.option('--num_heads', default=4, help='Number of attention heads in the transformer model.', type=int)
-@click.option('-o', '--out', default='transformer.model', help='Path to save the output.', type=str)
-def main(batch_size, lr, epochs, hidden_dim, num_heads, out):
+@click.option('-o', '--out', default='train_out', help='Path to save the output.', type=click.STRING)
+@click.option("-f", "--force", is_flag=True, help="Overwrite output directory")
+def main(batch_size, lr, epochs, hidden_dim, num_heads, out, force):
     ###########################
     print('Reading in data', flush = True)
 
@@ -95,11 +96,11 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out):
     #model.train(transformer_model, train_dataloader, test_dataloader, epochs=epochs, lr=lr, save_path=out)
     
     # Train the model wqith kfold cross validataion 
-    model.train_crossValidation(train_dataset, n_splits=3, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim)
+    model.train_crossValidation(train_dataset, phrog_integer, n_splits=3, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim)
 
     # Evaluate the model
     #model.evaluate_with_metrics_and_save(transformer_model, test_dataloader, threshold=0.5, output_dir='metrics_output')
-    model.evaluate_with_optimal_thresholds(transformer_model, test_dataloader, output_dir='metrics_output')
+    model.evaluate_with_optimal_thresholds(transformer_model, test_dataloader,phrog_integer, output_dir=out)
 
     # Evaluate the model
     print('Evaluating the model', flush=True)

@@ -12,6 +12,7 @@ from sklearn.metrics import roc_curve, auc, f1_score, precision_score, recall_sc
 from sklearn.model_selection import KFold
 import numpy as np
 import pandas as pd
+import random
 import os
 
 class VariableSeq2SeqEmbeddingDataset(Dataset):
@@ -28,6 +29,19 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         category = self.categories[idx]
         mask = (category != self.mask_token).float()  # 1 for valid, 0 for missing
         return embedding, category, mask 
+
+    def shuffle_rows(self):
+        """
+        Shuffle rows within each instance in the dataset. 
+        This modifies the code in place 
+        """ 
+
+        zipped_data = list(zip(self.embeddings, self.categories))
+        random.shuffle(zipped_data)
+        self.embeddings, self.categories = zip(*zipped_data)
+        self.embeddings = list(self.embeddings)
+        self.categories = list(self.categories)
+        
 
 class VariableSeq2SeqTransformerClassifier(nn.Module):
     def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512):
@@ -105,7 +119,7 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
     # Save the model
     torch.save(model.state_dict(), save_path)
 
-def train_crossValidation(dataset, n_splits=10, batch_size=16, epochs=10, lr=1e-5, save_path='model.pth', num_heads=4, hidden_dim=512): 
+def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, epochs=10, lr=1e-5, save_path='out', num_heads=4, hidden_dim=512): 
 
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
     fold = 1
@@ -124,8 +138,8 @@ def train_crossValidation(dataset, n_splits=10, batch_size=16, epochs=10, lr=1e-
         train(kfold_transformer_model, train_kfold_loader, val_kfold_loader, epochs=epochs, lr=lr, save_path='model.pth')
         
         # evaluate performance for this kfold 
-        output_dir =  f'metrics_output/fold_{fold}'
-        evaluate_with_optimal_thresholds(kfold_transformer_model, val_kfold_loader, output_dir=output_dir)
+        output_dir =  f'{save_path}/fold_{fold}'
+        evaluate_with_optimal_thresholds(kfold_transformer_model, val_kfold_loader, phrog_integer, output_dir=output_dir)
         fold += 1 
 
 
@@ -246,7 +260,7 @@ def evaluate_with_metrics_and_save(model, dataloader, threshold=0.5, output_dir=
 
     # Modified evaluation function to include ROC curve and metrics calculation
 
-def evaluate_with_optimal_thresholds(model, dataloader, output_dir='metrics_output'):
+def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, output_dir='metrics_output'):
     """
     Threshold is selected that optimises Youden's J index 
     """
@@ -279,24 +293,28 @@ def evaluate_with_optimal_thresholds(model, dataloader, output_dir='metrics_outp
     
     all_labels = np.array(all_labels)
     all_probs = np.array(all_probs)
+    print(all_probs)
     
     # Ensure there are predictions to evaluate
     if len(all_labels) == 0 or len(all_probs) == 0:
         print("No predictions to evaluate.")
         return
     
-    num_classes = all_probs.shape[1]
-    optimal_thresholds = np.zeros(num_classes)
-    for i in range(num_classes):
-        fpr, tpr, thresholds = roc_curve(all_labels == i, all_probs[:, i])
+    #num_classes = all_probs.shape[1]
+    labels = list(set(all_labels))
+    optimal_thresholds = np.zeros(len(labels))
+
+
+    for idx, label in enumerate(labels):
+        fpr, tpr, thresholds = roc_curve(all_labels == label, all_probs[:, idx])
         roc_auc = auc(fpr, tpr)
         optimal_idx = np.argmax(tpr - fpr)
-        optimal_thresholds[i] = thresholds[optimal_idx]
+        optimal_thresholds[idx] = thresholds[optimal_idx]
         roc_df = pd.DataFrame({'FPR': fpr, 'TPR': tpr})
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
-        roc_df.to_csv(os.path.join(output_dir, f'roc_curve_category_{i}.csv'), index=False)
-        print(f"Category {i} ROC AUC: {roc_auc:.4f}, Optimal Threshold: {optimal_thresholds[i]:.4f}")
+        roc_df.to_csv(os.path.join(output_dir, f'roc_curve_category_{phrog_integer.get(label)}.csv'), index=False)
+        print(f"Category: {phrog_integer.get(label)} \n\tROC AUC: {roc_auc:.4f}, Optimal Threshold: {optimal_thresholds[idx]:.4f}")
 
     # Use optimal thresholds to make final predictions
     final_preds = (all_probs >= optimal_thresholds).astype(int)
@@ -313,3 +331,4 @@ def evaluate_with_optimal_thresholds(model, dataloader, output_dir='metrics_outp
     print(f"F1 Scores per category: {f1}")
     print(f"Precision per category: {precision}")
     print(f"Recall per category: {recall}")
+
