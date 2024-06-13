@@ -64,6 +64,8 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out, force):
 
     # read in integer encoding of the categories
     phrog_integer = pickle.load(open('/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl', 'rb'))
+    phrog_integer = dict(zip([i -1 for i in list(phrog_integer.keys())], [i for i in list(phrog_integer.values())]))
+    print(phrog_integer)
     phrog_integer_reverse = dict(zip(list(phrog_integer.values()), list(phrog_integer.keys())))
     phrog_integer_reverse['unknown function'] = -1
 
@@ -89,7 +91,8 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out, force):
 
     # Create model
     print('Creating model', flush=True)
-    transformer_model = model.VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=10, num_heads=num_heads, hidden_dim=hidden_dim)
+    num_classes = len(phrog_integer)
+    transformer_model = model.VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=num_classes, num_heads=num_heads, hidden_dim=hidden_dim)
 
     # Train the model
     print('Training model...', flush=True)
@@ -100,11 +103,11 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out, force):
 
     # Evaluate the model
     #model.evaluate_with_metrics_and_save(transformer_model, test_dataloader, threshold=0.5, output_dir='metrics_output')
-    model.evaluate_with_optimal_thresholds(transformer_model, test_dataloader,phrog_integer, output_dir=out)
+    #model.evaluate_with_optimal_thresholds(transformer_model, test_dataloader,phrog_integer, output_dir=out)
 
     # Evaluate the model
     print('Evaluating the model', flush=True)
-    model.evaluate(transformer_model, test_dataloader)
+    #model.evaluate(transformer_model, test_dataloader)
 
     print('FINISHED! :D')
 

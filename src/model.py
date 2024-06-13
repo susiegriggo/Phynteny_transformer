@@ -60,6 +60,12 @@ class VariableSeq2SeqTransformerClassifier(nn.Module):
         x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # x: [seq_len, batch_size, hidden_dim]
         x = x.permute(1, 0, 2)  # x: [batch_size, seq_len, hidden_dim]
         x = self.fc(x)  # x: [batch_size, seq_len, num_classes]
+
+        # Ensure the masked category index (-1) is never predicted
+        masked_category_index = -1
+        if masked_category_index >= 0:  # if the index is non-negative, we can directly zero it out
+            x[:, :, masked_category_index] = float('-inf')
+
         return x 
        
 def collate_fn(batch):
@@ -131,17 +137,16 @@ def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, ep
         train_subset = Subset(dataset, train_index)
         val_subset = Subset(dataset, val_index)
         train_kfold_loader = DataLoader(train_subset, batch_size = batch_size, shuffle=True, collate_fn=collate_fn)
-        val_kfold_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+        val_kfold_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
 
         # train model 
-        kfold_transformer_model = VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=10, num_heads=num_heads, hidden_dim=hidden_dim)
+        kfold_transformer_model = VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=9, num_heads=num_heads, hidden_dim=hidden_dim)
         train(kfold_transformer_model, train_kfold_loader, val_kfold_loader, epochs=epochs, lr=lr, save_path='model.pth')
         
         # evaluate performance for this kfold 
         output_dir =  f'{save_path}/fold_{fold}'
         evaluate_with_optimal_thresholds(kfold_transformer_model, val_kfold_loader, phrog_integer, output_dir=output_dir)
         fold += 1 
-
 
 def evaluate(model, dataloader):
     model.eval()
@@ -293,8 +298,7 @@ def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, output_di
     
     all_labels = np.array(all_labels)
     all_probs = np.array(all_probs)
-    print(all_probs)
-    
+
     # Ensure there are predictions to evaluate
     if len(all_labels) == 0 or len(all_probs) == 0:
         print("No predictions to evaluate.")
@@ -303,7 +307,6 @@ def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, output_di
     #num_classes = all_probs.shape[1]
     labels = list(set(all_labels))
     optimal_thresholds = np.zeros(len(labels))
-
 
     for idx, label in enumerate(labels):
         fpr, tpr, thresholds = roc_curve(all_labels == label, all_probs[:, idx])
