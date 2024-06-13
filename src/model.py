@@ -8,6 +8,10 @@ from torch.utils.data import Dataset
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
 import torch.optim as optim
+from sklearn.metrics import roc_curve, auc, f1_score, precision_score, recall_score
+import numpy as np
+import pandas as pd
+import os
 
 class VariableSeq2SeqEmbeddingDataset(Dataset):
     def __init__(self, embeddings, categories, mask_token=-1):
@@ -152,3 +156,64 @@ def evaluate_with_threshold(model, dataloader, threshold=0.5):
     accuracy = correct / total_confident_predictions if total_confident_predictions > 0 else 0
     print(f"Accuracy: {accuracy:.4f}")
     print(f"Confident Predictions: {total_confident_predictions}")
+
+def evaluate_with_metrics_and_save(model, dataloader, threshold=0.5, output_dir='metrics_output'):
+    model.eval()
+    all_labels = []
+    all_preds = []
+    all_probs = []
+    
+    with torch.no_grad():
+        for embeddings, categories, masks in dataloader:
+            embeddings = embeddings.float()
+            src_key_padding_mask = (masks == 0)  # Mask for transformer
+            outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+            
+            # Apply softmax to get probabilities
+            probs = F.softmax(outputs, dim=2)
+            max_probs, predicted = torch.max(probs, dim=2)
+            
+            valid = masks.byte()
+            confident_predictions = max_probs >= threshold
+            
+            # Flatten arrays and filter out padding
+            valid = valid.view(-1)
+            probs = probs.view(-1, probs.size(-1)).cpu().numpy()
+            predicted = predicted.view(-1).cpu().numpy()
+            categories = categories.view(-1).cpu().numpy()
+            
+            confident_indices = confident_predictions.view(-1).cpu().numpy().astype(bool)
+            valid_indices = valid.cpu().numpy().astype(bool)
+            mask = confident_indices & valid_indices
+            
+            all_labels.extend(categories[mask])
+            all_preds.extend(predicted[mask])
+            all_probs.extend(probs[mask])
+    
+    all_labels = np.array(all_labels)
+    all_preds = np.array(all_preds)
+    all_probs = np.array(all_probs)
+    
+    # Compute F1 score, precision, recall for each category
+    f1 = f1_score(all_labels, all_preds, average=None)
+    precision = precision_score(all_labels, all_preds, average=None)
+    recall = recall_score(all_labels, all_preds, average=None)
+    
+    # Save F1, precision, recall to CSV
+    metrics_df = pd.DataFrame({'Category': np.arange(len(f1)), 'F1': f1, 'Precision': precision, 'Recall': recall})
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+    metrics_df.to_csv(os.path.join(output_dir, 'metrics.csv'), index=False)
+    
+    # Save ROC curve data to CSV
+    num_classes = all_probs.shape[1]
+    for i in range(num_classes):
+        fpr, tpr, _ = roc_curve(all_labels == i, all_probs[:, i])
+        roc_auc = auc(fpr, tpr)
+        roc_df = pd.DataFrame({'FPR': fpr, 'TPR': tpr})
+        roc_df.to_csv(os.path.join(output_dir, f'roc_curve_category_{i}.csv'), index=False)
+        print(f"Category {i} ROC AUC: {roc_auc:.4f}")
+
+    print(f"F1 Scores per category: {f1}")
+    print(f"Precision per category: {precision}")
+    print(f"Recall per category: {recall}")

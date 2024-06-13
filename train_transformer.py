@@ -22,7 +22,7 @@ def split(plm_vectors, plm_integer, test_size=0.2):
     y = list()
     removed = []
 
-    for g in genomes:
+    for g in genomes[:200]:
         # get the genes in this genome
         this_genes = genome_genes.get(g)
 
@@ -51,6 +51,8 @@ def split(plm_vectors, plm_integer, test_size=0.2):
 @click.option('-o', '--out', default='transformer.model', help='Path to save the output.', type=str)
 def main(batch_size, lr, epochs, hidden_dim, num_heads, out):
     ###########################
+    print('Reading in data', flush = True)
+
     # some scrappy code which needs fixing to get the plm vectors
     plm_vectors = pickle.load(open('/home/grig0076/scratch/glm_embeddings/LSTM_test_example/data/phrogs_genomes/pLM_embs.pkl', 'rb'))
     plm_ogg = pickle.load(open('/home/grig0076/scratch/glm_embeddings/LSTM_test_example/data/phrogs_genomes/ogg_assignment.pkl', 'rb'))
@@ -69,24 +71,37 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out):
 
     ##########################
     # Train and test split
+    print('Performing train and test split', flush=True)
     X_train, X_test, y_train, y_test = split(plm_vectors, plm_integer)
+    print('Size of training data: ' + str(len(X_train)) + ' genomes')
+    print('Size of testing data: ' + str(len(X_test)) + ' genomes')
 
     # Generate datasets
+    print('Building dataset', flush = True)
     train_dataset = model.VariableSeq2SeqEmbeddingDataset(X_train, y_train)
     test_dataset = model.VariableSeq2SeqEmbeddingDataset(X_test, y_test)
 
     # Create dataloader objects
+    print('Creating dataloader objects', flush=True)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=model.collate_fn)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, collate_fn=model.collate_fn)
 
     # Create model
+    print('Creating model', flush=True)
     transformer_model = model.VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=10, num_heads=num_heads, hidden_dim=hidden_dim)
 
     # Train the model
+    print('Training model...', flush=True)
     model.train(transformer_model, train_dataloader, test_dataloader, epochs=epochs, lr=lr, save_path=out)
 
     # Evaluate the model
-    model.evaluate(transformer_model, test_dataloader, threshold=0.8)
+    model.evaluate_with_metrics_and_save(transformer_model, test_dataloader, threshold=0.5, output_dir='metrics_output')
+
+    # Evaluate the model
+    print('Evaluating the model', flush=True)
+    model.evaluate(transformer_model, test_dataloader)
+
+    
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
