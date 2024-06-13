@@ -4,11 +4,12 @@ Modules for building transformer model
 
 import torch.nn as nn 
 import torch
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset, DataLoader
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
 import torch.optim as optim
 from sklearn.metrics import roc_curve, auc, f1_score, precision_score, recall_score
+from sklearn.model_selection import KFold
 import numpy as np
 import pandas as pd
 import os
@@ -79,6 +80,7 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
             loss = masked_loss(outputs, categories, masks)
             loss.backward()
             optimizer.step()
+            
             total_loss += loss.item()
         
         avg_train_loss = total_loss / len(train_dataloader)
@@ -102,6 +104,30 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
 
     # Save the model
     torch.save(model.state_dict(), save_path)
+
+def train_crossValidation(dataset, n_splits=10, batch_size=16, epochs=10, lr=1e-5, save_path='model.pth', num_heads=4, hidden_dim=512): 
+
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    fold = 1
+
+    for train_index, val_index in kf.split(dataset): 
+
+        print('FOLD: ' +str(fold))
+        # subset the data
+        train_subset = Subset(dataset, train_index)
+        val_subset = Subset(dataset, val_index)
+        train_kfold_loader = DataLoader(train_subset, batch_size = batch_size, shuffle=True, collate_fn=collate_fn)
+        val_kfold_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+
+        # train model 
+        kfold_transformer_model = VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=10, num_heads=num_heads, hidden_dim=hidden_dim)
+        train(kfold_transformer_model, train_kfold_loader, val_kfold_loader, epochs=epochs, lr=lr, save_path='model.pth')
+        
+        # evaluate performance for this kfold 
+        output_dir =  f'metrics_output/fold_{fold}'
+        evaluate_with_optimal_thresholds(kfold_transformer_model, val_kfold_loader, output_dir=output_dir)
+        fold += 1 
+
 
 def evaluate(model, dataloader):
     model.eval()
@@ -213,6 +239,76 @@ def evaluate_with_metrics_and_save(model, dataloader, threshold=0.5, output_dir=
         roc_df = pd.DataFrame({'FPR': fpr, 'TPR': tpr})
         roc_df.to_csv(os.path.join(output_dir, f'roc_curve_category_{i}.csv'), index=False)
         print(f"Category {i} ROC AUC: {roc_auc:.4f}")
+
+    print(f"F1 Scores per category: {f1}")
+    print(f"Precision per category: {precision}")
+    print(f"Recall per category: {recall}")
+
+    # Modified evaluation function to include ROC curve and metrics calculation
+
+def evaluate_with_optimal_thresholds(model, dataloader, output_dir='metrics_output'):
+    """
+    Threshold is selected that optimises Youden's J index 
+    """
+    model.eval()
+    all_labels = []
+    all_probs = []
+    
+    with torch.no_grad():
+        for embeddings, categories, masks in dataloader:
+            embeddings = embeddings.float()
+            src_key_padding_mask = (masks == 0)  # Mask for transformer
+            outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+            
+            # Apply softmax to get probabilities
+            probs = F.softmax(outputs, dim=2)
+            max_probs, predicted = torch.max(probs, dim=2)
+            
+            valid = masks.byte()
+            
+            # Flatten arrays and filter out padding
+            valid = valid.view(-1)
+            probs = probs.view(-1, probs.size(-1)).cpu().numpy()
+            predicted = predicted.view(-1).cpu().numpy()
+            categories = categories.view(-1).cpu().numpy()
+            
+            valid_indices = valid.cpu().numpy().astype(bool)
+            
+            all_labels.extend(categories[valid_indices])
+            all_probs.extend(probs[valid_indices])
+    
+    all_labels = np.array(all_labels)
+    all_probs = np.array(all_probs)
+    
+    # Ensure there are predictions to evaluate
+    if len(all_labels) == 0 or len(all_probs) == 0:
+        print("No predictions to evaluate.")
+        return
+    
+    num_classes = all_probs.shape[1]
+    optimal_thresholds = np.zeros(num_classes)
+    for i in range(num_classes):
+        fpr, tpr, thresholds = roc_curve(all_labels == i, all_probs[:, i])
+        roc_auc = auc(fpr, tpr)
+        optimal_idx = np.argmax(tpr - fpr)
+        optimal_thresholds[i] = thresholds[optimal_idx]
+        roc_df = pd.DataFrame({'FPR': fpr, 'TPR': tpr})
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+        roc_df.to_csv(os.path.join(output_dir, f'roc_curve_category_{i}.csv'), index=False)
+        print(f"Category {i} ROC AUC: {roc_auc:.4f}, Optimal Threshold: {optimal_thresholds[i]:.4f}")
+
+    # Use optimal thresholds to make final predictions
+    final_preds = (all_probs >= optimal_thresholds).astype(int)
+    
+    # Compute F1 score, precision, recall for each category using optimal thresholds
+    f1 = f1_score(all_labels, final_preds.argmax(axis=1), average=None, zero_division=1)
+    precision = precision_score(all_labels, final_preds.argmax(axis=1), average=None, zero_division=1)
+    recall = recall_score(all_labels, final_preds.argmax(axis=1), average=None, zero_division=1)
+    
+    # Save F1, precision, recall to CSV
+    metrics_df = pd.DataFrame({'Category': np.arange(len(f1)), 'F1': f1, 'Precision': precision, 'Recall': recall, 'Optimal Threshold': optimal_thresholds})
+    metrics_df.to_csv(os.path.join(output_dir, 'metrics_with_optimal_thresholds.csv'), index=False)
 
     print(f"F1 Scores per category: {f1}")
     print(f"Precision per category: {precision}")

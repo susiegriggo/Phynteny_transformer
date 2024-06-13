@@ -22,7 +22,7 @@ def split(plm_vectors, plm_integer, test_size=0.2):
     y = list()
     removed = []
 
-    for g in genomes[:200]:
+    for g in genomes[:5000]:
         # get the genes in this genome
         this_genes = genome_genes.get(g)
 
@@ -92,16 +92,20 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out):
 
     # Train the model
     print('Training model...', flush=True)
-    model.train(transformer_model, train_dataloader, test_dataloader, epochs=epochs, lr=lr, save_path=out)
+    #model.train(transformer_model, train_dataloader, test_dataloader, epochs=epochs, lr=lr, save_path=out)
+    
+    # Train the model wqith kfold cross validataion 
+    model.train_crossValidation(train_dataset, n_splits=3, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim)
 
     # Evaluate the model
-    model.evaluate_with_metrics_and_save(transformer_model, test_dataloader, threshold=0.5, output_dir='metrics_output')
+    #model.evaluate_with_metrics_and_save(transformer_model, test_dataloader, threshold=0.5, output_dir='metrics_output')
+    model.evaluate_with_optimal_thresholds(transformer_model, test_dataloader, output_dir='metrics_output')
 
     # Evaluate the model
     print('Evaluating the model', flush=True)
     model.evaluate(transformer_model, test_dataloader)
 
-    
+    print('FINISHED! :D')
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
