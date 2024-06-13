@@ -22,7 +22,7 @@ def split(plm_vectors, plm_integer, test_size=0.2):
     y = list()
     removed = []
 
-    for g in genomes[:300]:
+    for g in genomes:
         # get the genes in this genome
         this_genes = genome_genes.get(g)
 
@@ -73,6 +73,13 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out, force):
     plm_integer = dict(zip(list(plm_ogg.keys()), [phrog_integer_reverse.get(category_dict.get(int(i[0][6:]))) for i in plm_ogg.values()]))
 
     ##########################
+    # Checks that the GPU is available 
+    #print(torch.cuda.is_available())  # Should return True if GPU is available
+    #print(torch.cuda.current_device())  # Should return the index of the current GPU device
+    #print(torch.cuda.device_count())  # Should return the number of GPU devices
+    #print(torch.cuda.get_device_name(0))  # Should return the name of the GPU device
+
+    ##############################
     # Train and test split
     print('Performing train and test split', flush=True)
     X_train, X_test, y_train, y_test = split(plm_vectors, plm_integer)
@@ -99,7 +106,7 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out, force):
     #model.train(transformer_model, train_dataloader, test_dataloader, epochs=epochs, lr=lr, save_path=out)
     
     # Train the model wqith kfold cross validataion 
-    model.train_crossValidation(train_dataset, phrog_integer, n_splits=3, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim)
+    model.train_crossValidation(train_dataset, phrog_integer, n_splits=10, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim)
 
     # Evaluate the model
     #model.evaluate_with_metrics_and_save(transformer_model, test_dataloader, threshold=0.5, output_dir='metrics_output')

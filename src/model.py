@@ -46,12 +46,12 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
 class VariableSeq2SeqTransformerClassifier(nn.Module):
     def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512):
         super(VariableSeq2SeqTransformerClassifier, self).__init__()
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim)
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
         
-        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads)
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads).cuda()
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers).cuda()
         
-        self.fc = nn.Linear(hidden_dim, num_classes)
+        self.fc = nn.Linear(hidden_dim, num_classes).cuda()
     
     def forward(self, x, src_key_padding_mask=None):
         x = x.float()  # Ensure input is of type float
@@ -78,12 +78,13 @@ def collate_fn(batch):
 def masked_loss(output, target, mask, ignore_index=-1):
     target = target.clone()
     target[mask == 0] = ignore_index
-    loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction='none')
+    loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction='none').cuda()
     loss = loss_fct(output.view(-1, output.size(-1)), target.view(-1))
     loss = loss * mask.view(-1)
     return loss.sum() / mask.sum()
 
-def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path='model.pth'):
+def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path='model.pth', device='cuda'):
+    model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
     train_losses = [] 
     val_losses = [] 
@@ -93,7 +94,7 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
     for epoch in range(epochs):
         total_loss = 0
         for embeddings, categories, masks in train_dataloader:
-            embeddings, categories, masks = embeddings.float(), categories.long(), masks.float()
+            embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
             optimizer.zero_grad()
             src_key_padding_mask = (masks == 0)  # Mask for transformer
             outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
@@ -112,7 +113,7 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
         total_val_loss = 0 
         with torch.no_grad():
             for embeddings, categories, masks in test_dataloader:
-                embeddings, categories, masks = embeddings.float(), categories.long(), masks.float()
+                embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
                 src_key_padding_mask = (masks == 0)  # Mask for transformer
                 outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
                 val_loss = masked_loss(outputs, categories, masks)
@@ -125,7 +126,7 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
     # Save the model
     torch.save(model.state_dict(), save_path)
 
-def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, epochs=10, lr=1e-5, save_path='out', num_heads=4, hidden_dim=512): 
+def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, epochs=10, lr=1e-5, save_path='out', num_heads=4, hidden_dim=512, device='cuda'): 
 
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
     fold = 1
@@ -145,7 +146,7 @@ def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, ep
         
         # evaluate performance for this kfold 
         output_dir =  f'{save_path}/fold_{fold}'
-        evaluate_with_optimal_thresholds(kfold_transformer_model, val_kfold_loader, phrog_integer, output_dir=output_dir)
+        evaluate_with_optimal_thresholds(kfold_transformer_model, val_kfold_loader, phrog_integer, device, output_dir=output_dir)
         fold += 1 
 
 def evaluate(model, dataloader):
@@ -265,17 +266,18 @@ def evaluate_with_metrics_and_save(model, dataloader, threshold=0.5, output_dir=
 
     # Modified evaluation function to include ROC curve and metrics calculation
 
-def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, output_dir='metrics_output'):
+def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer,device, output_dir='metrics_output'):
     """
     Threshold is selected that optimises Youden's J index 
     """
+    model.to(device)
     model.eval()
     all_labels = []
     all_probs = []
     
     with torch.no_grad():
         for embeddings, categories, masks in dataloader:
-            embeddings = embeddings.float()
+            embeddings, categories, masks  = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
             src_key_padding_mask = (masks == 0)  # Mask for transformer
             outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
             
