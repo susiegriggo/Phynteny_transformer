@@ -9,9 +9,9 @@ import pandas as pd
 from torch.utils.data import DataLoader
 from src import model
 
-def split(plm_vectors, plm_integer, test_size=0.2):
+def process_data(plm_vectors, plm_integer, max_genes=1000):
     """
-    :return: X_train, X_test, y_train, y_test
+    frame as a supervised learning problem
     """
     # Organise info
     df = pd.DataFrame({'key': list(plm_vectors.keys()), 'genome': ['_'.join(re.split('_', i)[:-1]) for i in plm_vectors.keys()]})
@@ -22,13 +22,13 @@ def split(plm_vectors, plm_integer, test_size=0.2):
     y = list()
     removed = []
 
-    for g in genomes:
+    for g in genomes[:300]:
         # get the genes in this genome
         this_genes = genome_genes.get(g)
 
         # get the corresponding vectors
         this_vectors = [plm_vectors.get(i) for i in this_genes]
-        if len(this_vectors) > 1000: 
+        if len(this_vectors) > max_genes: 
             print('Number of genes in ' + g + ' is ' + str(len(this_vectors)))
 
         else: 
@@ -44,17 +44,19 @@ def split(plm_vectors, plm_integer, test_size=0.2):
                 X.append(torch.tensor(np.array(this_vectors)))
                 y.append(torch.tensor(np.array(this_categories)))
     
-    return train_test_split(X, y, test_size=test_size, random_state=42)
+    return X,y
 
 @click.command()
+@click.option('--max_genes', default=1000, help='Maximum number of genes per genome included in training', type=int)
 @click.option('--batch_size', default=16, help='Batch size for training.', type=int)
 @click.option('--lr', default=1e-4, help='Learning rate for the optimizer.', type=float)
 @click.option('--epochs', default=10, help='Number of training epochs.', type=int)
+@click.option('--dropout', default=0.1, help='Dropout value for dropout layer.', type=int)
 @click.option('--hidden_dim', default=512, help='Hidden dimension size for the transformer model.', type=int)
 @click.option('--num_heads', default=4, help='Number of attention heads in the transformer model.', type=int)
 @click.option('-o', '--out', default='train_out', help='Path to save the output.', type=click.STRING)
-@click.option("-f", "--force", is_flag=True, help="Overwrite output directory")
-def main(batch_size, lr, epochs, hidden_dim, num_heads, out, force):
+@click.option( "--device", default='cuda', help="specify cuda or cpu.", type=click.STRING)
+def main(max_genes, batch_size, lr, epochs, hidden_dim, num_heads, out, dropout, device):
     ###########################
     print('Reading in data', flush = True)
 
@@ -86,14 +88,15 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out, force):
     ##############################
 
     # Train and test split
-    print('Performing train and test split', flush=True)
-    X_train, X_test, y_train, y_test = split(plm_vectors, plm_integer)
-    print('Size of training data: ' + str(len(X_train)) + ' genomes')
-    print('Size of testing data: ' + str(len(X_test)) + ' genomes')
+    #print('Test and train split', flush=True)
+    #X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
+    #print('Size of training data: ' + str(len(X_train)) + ' genomes')
+    #print('Size of testing data: ' + str(len(X_test)) + ' genomes')
 
     # Generate datasets
     print('Building dataset', flush = True)
-    train_dataset = model.VariableSeq2SeqEmbeddingDataset(X_train, y_train)
+    X, y = process_data(plm_vectors, plm_integer, max_genes=1000)
+    train_dataset = model.VariableSeq2SeqEmbeddingDataset(X,y )
     #test_dataset = model.VariableSeq2SeqEmbeddingDataset(X_test, y_test)
 
     # Return the size of the test dataset to try and find 
@@ -109,8 +112,8 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out, force):
     #test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, collate_fn=model.collate_fn)
 
     # Create model
-    print('Creating model', flush=True)
-    num_classes = len(phrog_integer)
+    #print('Creating model', flush=True)
+    #num_classes = len(phrog_integer)
     #transformer_model = model.VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=num_classes, num_heads=num_heads, hidden_dim=hidden_dim)
 
     # Train the model
@@ -118,7 +121,7 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out, force):
     #model.train(transformer_model, train_dataloader, test_dataloader, epochs=epochs, lr=lr, save_path=out)
     
     # Train the model wqith kfold cross validataion 
-    model.train_crossValidation(train_dataset, phrog_integer, n_splits=10, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim)
+    model.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=batch_size, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device)
 
     # Evaluate the model
     #model.evaluate_with_metrics_and_save(transformer_model, test_dataloader, threshold=0.5, output_dir='metrics_output')
