@@ -14,9 +14,9 @@ def split(plm_vectors, plm_integer, test_size=0.2):
     :return: X_train, X_test, y_train, y_test
     """
     # Organise info
-    df = pd.DataFrame({'key': list(plm_vectors.keys()), 'genome': [re.split('_', i)[0] for i in plm_vectors.keys()]})
+    df = pd.DataFrame({'key': list(plm_vectors.keys()), 'genome': ['_'.join(re.split('_', i)[:-1]) for i in plm_vectors.keys()]})
     genome_genes = df.groupby('genome')['key'].apply(list).to_dict()
-    genomes = list(set([re.split('_', i)[0] for i in plm_vectors.keys()]))
+    genomes = list(set(['_'.join(re.split('_', i)[:-1]) for i in plm_vectors.keys()]))
 
     X = list()
     y = list()
@@ -28,18 +28,22 @@ def split(plm_vectors, plm_integer, test_size=0.2):
 
         # get the corresponding vectors
         this_vectors = [plm_vectors.get(i) for i in this_genes]
+        if len(this_vectors) > 1000: 
+            print('Number of genes in ' + g + ' is ' + str(len(this_vectors)))
 
-        # get the corresponding functions
-        this_categories = [plm_integer.get(i) if plm_integer.get(i) is not None else -1 for i in this_genes]
+        else: 
 
-        # keep the information for the genomes that are not entirely unknown
-        if all(element == -1 for element in this_categories):
-            removed.append(g)
-        else:
-            # store the info in the dataset
-            X.append(torch.tensor(np.array(this_vectors)))
-            y.append(torch.tensor(np.array(this_categories)))
+            # get the corresponding functions
+            this_categories = [plm_integer.get(i) if plm_integer.get(i) is not None else -1 for i in this_genes]
 
+            # keep the information for the genomes that are not entirely unknown
+            if all(element == -1 for element in this_categories):
+                removed.append(g)
+            else:
+                # store the info in the dataset
+                X.append(torch.tensor(np.array(this_vectors)))
+                y.append(torch.tensor(np.array(this_categories)))
+    
     return train_test_split(X, y, test_size=test_size, random_state=42)
 
 @click.command()
@@ -80,6 +84,7 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out, force):
     #print(torch.cuda.get_device_name(0))  # Should return the name of the GPU device
 
     ##############################
+
     # Train and test split
     print('Performing train and test split', flush=True)
     X_train, X_test, y_train, y_test = split(plm_vectors, plm_integer)
@@ -89,17 +94,24 @@ def main(batch_size, lr, epochs, hidden_dim, num_heads, out, force):
     # Generate datasets
     print('Building dataset', flush = True)
     train_dataset = model.VariableSeq2SeqEmbeddingDataset(X_train, y_train)
-    test_dataset = model.VariableSeq2SeqEmbeddingDataset(X_test, y_test)
+    #test_dataset = model.VariableSeq2SeqEmbeddingDataset(X_test, y_test)
+
+    # Return the size of the test dataset to try and find 
+    #print(np.max([len(i) for i in X_train]))
+    #print(np.min([len(i) for i in X_train]))
+    #print(np.max([len(i) for i in y_train]))
+    #print(np.min([len(i) for i in y_train]))
+
 
     # Create dataloader objects
-    print('Creating dataloader objects', flush=True)
-    train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=model.collate_fn)
-    test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, collate_fn=model.collate_fn)
+    #print('Creating dataloader objects', flush=True)
+    #train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=model.collate_fn)
+    #test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, collate_fn=model.collate_fn)
 
     # Create model
     print('Creating model', flush=True)
     num_classes = len(phrog_integer)
-    transformer_model = model.VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=num_classes, num_heads=num_heads, hidden_dim=hidden_dim)
+    #transformer_model = model.VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=num_classes, num_heads=num_heads, hidden_dim=hidden_dim)
 
     # Train the model
     print('Training model...', flush=True)

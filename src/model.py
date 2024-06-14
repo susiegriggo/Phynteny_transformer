@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import random
 import os
+import gc 
 
 class VariableSeq2SeqEmbeddingDataset(Dataset):
     def __init__(self, embeddings, categories, mask_token=-1):
@@ -83,45 +84,62 @@ def masked_loss(output, target, mask, ignore_index=-1):
     loss = loss * mask.view(-1)
     return loss.sum() / mask.sum()
 
-def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path='model.pth', device='cuda'):
+def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, accumulation_steps=4, save_path='model.pth', device='cuda'):
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    train_losses = [] 
-    val_losses = [] 
+    scaler = torch.cuda.amp.GradScaler()  # For mixed precision training
+    train_losses = []
+    val_losses = []
     model.train()
-    total_loss = 0 
+    total_loss = 0
     
     for epoch in range(epochs):
         total_loss = 0
-        for embeddings, categories, masks in train_dataloader:
+        optimizer.zero_grad()
+        for i, (embeddings, categories, masks) in enumerate(train_dataloader):
             embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
-            optimizer.zero_grad()
-            src_key_padding_mask = (masks == 0)  # Mask for transformer
-            outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-            loss = masked_loss(outputs, categories, masks)
-            loss.backward()
-            optimizer.step()
+            with torch.cuda.amp.autocast():  # Mixed precision context
+                src_key_padding_mask = (masks == 0)  # Mask for transformer
+                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                loss = masked_loss(outputs, categories, masks)
+                loss = loss / accumulation_steps  # Normalize loss to account for gradient accumulation
             
+            scaler.scale(loss).backward()
+            
+            if (i + 1) % accumulation_steps == 0:
+                scaler.step(optimizer)
+                scaler.update()
+                optimizer.zero_grad()
+
             total_loss += loss.item()
         
         avg_train_loss = total_loss / len(train_dataloader)
         train_losses.append(avg_train_loss)
         print(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_train_loss}")
 
+        # Clear cache after training epoch
+        gc.collect()
+        torch.cuda.empty_cache()
+
         # Validation loss 
-        model.eval() 
-        total_val_loss = 0 
+        model.eval()
+        total_val_loss = 0
         with torch.no_grad():
             for embeddings, categories, masks in test_dataloader:
                 embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
                 src_key_padding_mask = (masks == 0)  # Mask for transformer
-                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-                val_loss = masked_loss(outputs, categories, masks)
+                with torch.cuda.amp.autocast():  # Mixed precision context
+                    outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                    val_loss = masked_loss(outputs, categories, masks)
                 total_val_loss += val_loss.item()
-        
+
         avg_val_loss = total_val_loss / len(test_dataloader)
         val_losses.append(avg_val_loss)
         print(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {avg_val_loss}")
+
+        # Clear cache after validation epoch
+        gc.collect()
+        torch.cuda.empty_cache()
 
     # Save the model
     torch.save(model.state_dict(), save_path)
@@ -137,13 +155,17 @@ def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, ep
         # subset the data
         train_subset = Subset(dataset, train_index)
         val_subset = Subset(dataset, val_index)
-        train_kfold_loader = DataLoader(train_subset, batch_size = batch_size, shuffle=True, collate_fn=collate_fn)
-        val_kfold_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+        train_kfold_loader = DataLoader(train_subset, batch_size = batch_size, shuffle=True, collate_fn=collate_fn,  pin_memory=False )
+        val_kfold_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn,  pin_memory=False )
 
         # train model 
         kfold_transformer_model = VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=9, num_heads=num_heads, hidden_dim=hidden_dim)
         train(kfold_transformer_model, train_kfold_loader, val_kfold_loader, epochs=epochs, lr=lr, save_path='model.pth')
         
+        # Clear cache after training each fold
+        gc.collect()
+        torch.cuda.empty_cache()
+
         # evaluate performance for this kfold 
         output_dir =  f'{save_path}/fold_{fold}'
         evaluate_with_optimal_thresholds(kfold_transformer_model, val_kfold_loader, phrog_integer, device, output_dir=output_dir)
