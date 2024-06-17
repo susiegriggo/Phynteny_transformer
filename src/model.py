@@ -47,21 +47,19 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
 class VariableSeq2SeqTransformerClassifier(nn.Module):
     def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, dropout=0.1):
         super(VariableSeq2SeqTransformerClassifier, self).__init__()
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim)#.cuda()
-        self.dropout = nn.Dropout(dropout)#.cuda()
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
+        self.dropout = nn.Dropout(dropout).cuda()
         
-        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads)#.cuda()
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)#.cuda()
+        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads, batch_first=True).cuda()
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers).cuda()
         
-        self.fc = nn.Linear(hidden_dim, num_classes)#.cuda()
+        self.fc = nn.Linear(hidden_dim, num_classes).cuda()
     
     def forward(self, x, src_key_padding_mask=None):
         x = x.float()  # Ensure input is of type float
         x = self.embedding_layer(x)  # x: [batch_size, seq_len, input_dim]
-        x = self.dropout(x) # Apply dropout after embedding layer 
-        x = x.permute(1, 0, 2)  # x: [seq_len, batch_size, hidden_dim]
-        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # x: [seq_len, batch_size, hidden_dim]
-        x = x.permute(1, 0, 2)  # x: [batch_size, seq_len, hidden_dim]
+        x = self.dropout(x)  # Apply dropout after embedding layer 
+        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # x: [batch_size, seq_len, hidden_dim]
         x = self.fc(x)  # x: [batch_size, seq_len, num_classes]
 
         # Ensure the masked category index (-1) is never predicted
@@ -69,7 +67,7 @@ class VariableSeq2SeqTransformerClassifier(nn.Module):
         if masked_category_index >= 0:  # if the index is non-negative, we can directly zero it out
             x[:, :, masked_category_index] = float('-inf')
 
-        return x 
+        return x
        
 def collate_fn(batch):
     embeddings, categories, masks = zip(*batch)
@@ -135,7 +133,6 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
         gc.collect()
         torch.cuda.empty_cache()
         
-
     # Save the model
     torch.save(model.state_dict(), save_path + 'transformer.model')
 
@@ -300,12 +297,10 @@ def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, device, o
     model.eval()
     all_labels = []
     all_probs = []
-    total_predictions = 0
-    retained_predictions = 0
     
     with torch.no_grad():
         for embeddings, categories, masks in dataloader:
-            embeddings, categories, masks  = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
+            embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
             src_key_padding_mask = (masks == 0)  # Mask for transformer
             outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
             
@@ -326,7 +321,6 @@ def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, device, o
             all_labels.extend(categories[valid_indices])
             all_probs.extend(probs[valid_indices])
             
-            total_predictions += valid_indices.sum()
     
     all_labels = np.array(all_labels)
     all_probs = np.array(all_probs)
@@ -338,12 +332,20 @@ def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, device, o
     
     labels = list(set(all_labels))
     optimal_thresholds = np.zeros(len(labels))
+    retained_propotion = np.zeros(len(labels))
 
     for idx, label in enumerate(labels):
         fpr, tpr, thresholds = roc_curve(all_labels == label, all_probs[:, idx])
         roc_auc = auc(fpr, tpr)
+
         optimal_idx = np.argmax(tpr - fpr)
         optimal_thresholds[idx] = thresholds[optimal_idx]
+
+        # use threshold to mkke predictions 
+        total_predictions = len(all_probs[:,idx]) 
+        correct_predicitons = np.sum(all_probs[:,idx] > optimal_thresholds[idx])
+        retained_propotion[idx] = correct_predicitons/total_predictions
+
         roc_df = pd.DataFrame({'FPR': fpr, 'TPR': tpr})
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
@@ -353,15 +355,10 @@ def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, device, o
     # Use optimal thresholds to make final predictions
     final_preds = (all_probs >= optimal_thresholds).astype(int)
     
-    retained_predictions = final_preds.sum()
-
     # Compute F1 score, precision, recall for each category using optimal thresholds
     f1 = f1_score(all_labels, final_preds.argmax(axis=1), average=None, zero_division=1)
     precision = precision_score(all_labels, final_preds.argmax(axis=1), average=None, zero_division=1)
     recall = recall_score(all_labels, final_preds.argmax(axis=1), average=None, zero_division=1)
-    
-    # Calculate the proportion of retained predictions
-    proportion_retained = retained_predictions / total_predictions
     
     # Save F1, precision, recall to CSV
     metrics_df = pd.DataFrame({
@@ -370,11 +367,11 @@ def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, device, o
         'Precision': precision, 
         'Recall': recall, 
         'Optimal Threshold': optimal_thresholds,
-        'Proportion Retained': proportion_retained
+        'Proportion Retained': retained_propotion
     })
     metrics_df.to_csv(os.path.join(output_dir, 'metrics_with_optimal_thresholds.csv'), index=False)
 
     print(f"F1 Scores per category: {f1}")
     print(f"Precision per category: {precision}")
     print(f"Recall per category: {recall}")
-    print(f"Proportion of predictions retained: {proportion_retained:.4f}")
+    print(f"Proportion of predictions retained: {retained_propotion}")

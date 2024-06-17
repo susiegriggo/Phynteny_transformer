@@ -49,7 +49,7 @@ def process_data(plm_vectors, plm_integer, max_genes=1000):
 @click.command()
 @click.option('--max_genes', default=1000, help='Maximum number of genes per genome included in training', type=int)
 @click.option('--batch_size', default=16, help='Batch size for training.', type=int)
-@click.option('--lr', default=1e-4, help='Learning rate for the optimizer.', type=float)
+@click.option('--lr', default=1e-5, help='Learning rate for the optimizer.', type=float)
 @click.option('--epochs', default=10, help='Number of training epochs.', type=int)
 @click.option('--dropout', default=0.1, help='Dropout value for dropout layer.', type=int)
 @click.option('--hidden_dim', default=512, help='Hidden dimension size for the transformer model.', type=int)
