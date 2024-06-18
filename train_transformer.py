@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import DataLoader
 from src import model
+import os 
 
 def process_data(plm_vectors, plm_integer, max_genes=1000):
     """
@@ -22,7 +23,7 @@ def process_data(plm_vectors, plm_integer, max_genes=1000):
     y = list()
     removed = []
 
-    for g in genomes[:300]:
+    for g in genomes[:10000]:
         # get the genes in this genome
         this_genes = genome_genes.get(g)
 
@@ -48,15 +49,22 @@ def process_data(plm_vectors, plm_integer, max_genes=1000):
 
 @click.command()
 @click.option('--max_genes', default=1000, help='Maximum number of genes per genome included in training', type=int)
-@click.option('--batch_size', default=16, help='Batch size for training.', type=int)
-@click.option('--lr', default=1e-5, help='Learning rate for the optimizer.', type=float)
+@click.option('--lr', default=1e-6, help='Learning rate for the optimizer.', type=float)
 @click.option('--epochs', default=10, help='Number of training epochs.', type=int)
 @click.option('--dropout', default=0.1, help='Dropout value for dropout layer.', type=int)
 @click.option('--hidden_dim', default=512, help='Hidden dimension size for the transformer model.', type=int)
 @click.option('--num_heads', default=4, help='Number of attention heads in the transformer model.', type=int)
 @click.option('-o', '--out', default='train_out', help='Path to save the output.', type=click.STRING)
 @click.option( "--device", default='cuda', help="specify cuda or cpu.", type=click.STRING)
-def main(max_genes, batch_size, lr, epochs, hidden_dim, num_heads, out, dropout, device):
+def main(max_genes, lr, epochs, hidden_dim, num_heads, out, dropout, device):
+    
+    # Create the output directory if it doesn't exist
+    if not os.path.exists(out):
+        os.makedirs(out)
+        print(f"Directory created: {out}")
+    else:
+        print(f"Warning: Directory {out} already exists.")
+    
     ###########################
     print('Reading in data', flush = True)
 
@@ -121,7 +129,8 @@ def main(max_genes, batch_size, lr, epochs, hidden_dim, num_heads, out, dropout,
     #model.train(transformer_model, train_dataloader, test_dataloader, epochs=epochs, lr=lr, save_path=out)
     
     # Train the model wqith kfold cross validataion 
-    model.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=batch_size, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device)
+    # use batch size = 1 as it makes results easier to analyse with respsect to genomes of different sizes 
+    model.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=1, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device)
 
     # Evaluate the model
     #model.evaluate_with_metrics_and_save(transformer_model, test_dataloader, threshold=0.5, output_dir='metrics_output')

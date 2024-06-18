@@ -4,7 +4,8 @@ Modules for building transformer model
 
 import torch.nn as nn 
 import torch
-from torch.utils.data import Dataset, Subset, DataLoader
+import pickle
+from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
 import torch.optim as optim
@@ -145,32 +146,46 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
                    , index=False)
 
 def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, epochs=10, lr=1e-5, save_path='out', num_heads=4, hidden_dim=512, device='cuda', dropout=0.1): 
-
+    
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
     fold = 1
 
-    for train_index, val_index in kf.split(dataset): 
+    for train_index, val_index in kf.split(dataset):
+        print(f'FOLD: {fold}', flush=True)
+        
+        # Create output directory for the current fold
+        output_dir = f'{save_path}/fold_{fold}'
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+            print(f"Directory created: {output_dir}")
+        else:
+            print(f"Warning: Directory {output_dir} already exists.")
+        
 
-        print('FOLD: ' +str(fold))
-        # subset the data
-        train_subset = Subset(dataset, train_index)
-        val_subset = Subset(dataset, val_index)
-        train_kfold_loader = DataLoader(train_subset, batch_size = batch_size, shuffle=True, collate_fn=collate_fn,  pin_memory=False )
-        val_kfold_loader = DataLoader(val_subset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn,  pin_memory=False )
+        # Use SubsetRandomSampler for efficient subsetting
+        train_sampler = SubsetRandomSampler(train_index)
+        val_sampler = SubsetRandomSampler(val_index)
+        
+        # Create data loaders with samplers
+        train_kfold_loader = DataLoader(dataset, batch_size=batch_size, sampler=train_sampler, collate_fn=collate_fn, pin_memory=True)
+        val_kfold_loader = DataLoader(dataset, batch_size=batch_size, sampler=val_sampler, collate_fn=collate_fn, pin_memory=True)
+        pickle.dump(val_kfold_loader, open(output_dir + '/val_kfold_loader.pkl', 'wb'))
 
-        # train model 
+        # Initialize model
         kfold_transformer_model = VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=9, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout)
-        output_dir =  f'{save_path}/fold_{fold}'
+        kfold_transformer_model.to(device)
+
+        # Train model
         train(kfold_transformer_model, train_kfold_loader, val_kfold_loader, epochs=epochs, lr=lr, save_path=output_dir, device=device)
         
         # Clear cache after training each fold
         gc.collect()
         torch.cuda.empty_cache()
 
-        # evaluate performance for this kfold 
-        output_dir =  f'{save_path}/fold_{fold}'
+        # Evaluate performance for this kfold
         evaluate_with_optimal_thresholds(kfold_transformer_model, val_kfold_loader, phrog_integer, device, output_dir=output_dir)
-        fold += 1 
+        
+        fold += 1
 
 def evaluate(model, dataloader):
     model.eval()
@@ -320,7 +335,6 @@ def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, device, o
             
             all_labels.extend(categories[valid_indices])
             all_probs.extend(probs[valid_indices])
-            
     
     all_labels = np.array(all_labels)
     all_probs = np.array(all_probs)
@@ -332,21 +346,22 @@ def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, device, o
     
     labels = list(set(all_labels))
     optimal_thresholds = np.zeros(len(labels))
-    retained_propotion = np.zeros(len(labels))
+    retained_proportion = np.zeros(len(labels))
 
     for idx, label in enumerate(labels):
         fpr, tpr, thresholds = roc_curve(all_labels == label, all_probs[:, idx])
         roc_auc = auc(fpr, tpr)
 
+        # Find the optimal threshold using Youden's J statistic (maximizing (sensitivity + specificity - 1))
         optimal_idx = np.argmax(tpr - fpr)
         optimal_thresholds[idx] = thresholds[optimal_idx]
 
-        # use threshold to mkke predictions 
-        total_predictions = len(all_probs[:,idx]) 
-        correct_predicitons = np.sum(all_probs[:,idx] > optimal_thresholds[idx])
-        retained_propotion[idx] = correct_predicitons/total_predictions
+        # Calculate the retained proportion of predictions above the optimal threshold
+        total_predictions = len(all_probs[:, idx])
+        retained_predictions = np.sum(all_probs[:, idx] >= optimal_thresholds[idx])
+        retained_proportion[idx] = retained_predictions / total_predictions
 
-        roc_df = pd.DataFrame({'FPR': fpr, 'TPR': tpr})
+        roc_df = pd.DataFrame({'FPR': fpr, 'TPR': tpr, 'Thresholds': thresholds})
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
         roc_df.to_csv(os.path.join(output_dir, f'roc_curve_category_{phrog_integer.get(label)}.csv'), index=False)
@@ -367,11 +382,11 @@ def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, device, o
         'Precision': precision, 
         'Recall': recall, 
         'Optimal Threshold': optimal_thresholds,
-        'Proportion Retained': retained_propotion
+        'Proportion Retained': retained_proportion
     })
     metrics_df.to_csv(os.path.join(output_dir, 'metrics_with_optimal_thresholds.csv'), index=False)
 
     print(f"F1 Scores per category: {f1}")
     print(f"Precision per category: {precision}")
     print(f"Recall per category: {recall}")
-    print(f"Proportion of predictions retained: {retained_propotion}")
+    print(f"Proportion of predictions retained: {retained_proportion}")
