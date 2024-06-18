@@ -313,6 +313,8 @@ def evaluate_with_optimal_thresholds(model, dataloader, phrog_integer, device, o
     all_labels = []
     all_probs = []
     
+
+    # TODO - this evaluate is incorrect - work through this 
     with torch.no_grad():
         for embeddings, categories, masks in dataloader:
             embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()

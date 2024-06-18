@@ -3,6 +3,7 @@ import torch
 import pickle
 import click
 import re
+import random 
 import torch
 import numpy as np 
 import pandas as pd
@@ -48,7 +49,8 @@ def process_data(plm_vectors, plm_integer, max_genes=1000):
     return X,y
 
 @click.command()
-@click.option('--max_genes', default=1000, help='Maximum number of genes per genome included in training', type=int)
+@click.option('--max_genes', default=1000, help='Maximum number of genes per genome included in training - COMING SOON', type=int)
+@click.option('--shuffle', is_flag=True, default = False, help='Shuffle order of the genes. Helpful for determining if gene order increases predictive power')
 @click.option('--lr', default=1e-6, help='Learning rate for the optimizer.', type=float)
 @click.option('--epochs', default=10, help='Number of training epochs.', type=int)
 @click.option('--dropout', default=0.1, help='Dropout value for dropout layer.', type=int)
@@ -56,7 +58,7 @@ def process_data(plm_vectors, plm_integer, max_genes=1000):
 @click.option('--num_heads', default=4, help='Number of attention heads in the transformer model.', type=int)
 @click.option('-o', '--out', default='train_out', help='Path to save the output.', type=click.STRING)
 @click.option( "--device", default='cuda', help="specify cuda or cpu.", type=click.STRING)
-def main(max_genes, lr, epochs, hidden_dim, num_heads, out, dropout, device):
+def main(max_genes, shuffle, lr, epochs, hidden_dim, num_heads, out, dropout, device):
     
     # Create the output directory if it doesn't exist
     if not os.path.exists(out):
@@ -104,7 +106,26 @@ def main(max_genes, lr, epochs, hidden_dim, num_heads, out, dropout, device):
     # Generate datasets
     print('Building dataset', flush = True)
     X, y = process_data(plm_vectors, plm_integer, max_genes=1000)
-    train_dataset = model.VariableSeq2SeqEmbeddingDataset(X,y )
+
+    # Shuffle if specified 
+    print('Shuffling gene orders...', flush=True)
+    if shuffle: 
+        for i in range(len(X)): 
+            
+            # generate indices for shuffling 
+            indices = list(range(len(X[i])))
+            random.shuffle(indices)
+
+            # Use shuffled indices to reorder X and y 
+            X[i] = X[i][indices]
+            y[i] = y[i][indices]
+
+    print('\t Done shuffling gene orders', flush=True)
+
+    # Produce the dataset object 
+    train_dataset = model.VariableSeq2SeqEmbeddingDataset(X,y)
+
+
     #test_dataset = model.VariableSeq2SeqEmbeddingDataset(X_test, y_test)
 
     # Return the size of the test dataset to try and find 
