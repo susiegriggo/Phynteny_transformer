@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from torch.utils.data import DataLoader
 from src import model
+from src import model_masker 
 import os 
 
 def process_data(plm_vectors, plm_integer, max_genes=1000):
@@ -48,9 +49,56 @@ def process_data(plm_vectors, plm_integer, max_genes=1000):
     
     return X,y
 
+def process_data_with_category(plm_vectors, plm_integer, max_genes=1000):
+    """
+    frame as a supervised learning problem
+    """
+    # Organise info
+    df = pd.DataFrame({'key': list(plm_vectors.keys()), 'genome': ['_'.join(re.split('_', i)[:-1]) for i in plm_vectors.keys()]})
+    genome_genes = df.groupby('genome')['key'].apply(list).to_dict()
+    genomes = list(set(['_'.join(re.split('_', i)[:-1]) for i in plm_vectors.keys()]))
+
+    X = list()
+    y = list()
+    removed = []
+
+    for g in genomes[:10000]:
+        # get the genes in this genome
+        this_genes = genome_genes.get(g)
+
+        # get the corresponding vectors
+        this_vectors = [plm_vectors.get(i) for i in this_genes]
+        if len(this_vectors) > max_genes: 
+            print('Number of genes in ' + g + ' is ' + str(len(this_vectors)))
+
+        else: 
+
+            # get the corresponding functions
+            this_categories = [plm_integer.get(i) if plm_integer.get(i) is not None else -1 for i in this_genes]
+
+            # keep the information for the genomes that are not entirely unknown
+            if all(element == -1 for element in this_categories):
+                removed.append(g)
+            else:
+                # store the info in the dataset
+                this_X = np.array(this_vectors) 
+                
+                # Reshape the new column to be a 2D array with one column
+                category_column = np.array(this_categories)[:, np.newaxis]
+
+                # Append the new column as the first column
+                this_X = np.hstack((category_column, this_X))
+                
+                X.append(torch.tensor(this_X))
+                y.append(torch.tensor(np.array(this_categories)))
+                
+    
+    return X,y
+
 @click.command()
 @click.option('--max_genes', default=1000, help='Maximum number of genes per genome included in training - COMING SOON', type=int)
 @click.option('--shuffle', is_flag=True, default = False, help='Shuffle order of the genes. Helpful for determining if gene order increases predictive power')
+@click.option('--inc_category', is_flag=True, default = False, help='Include category in the first column of the dataframe')
 @click.option('--lr', default=1e-6, help='Learning rate for the optimizer.', type=float)
 @click.option('--epochs', default=10, help='Number of training epochs.', type=int)
 @click.option('--dropout', default=0.1, help='Dropout value for dropout layer.', type=int)
@@ -58,7 +106,8 @@ def process_data(plm_vectors, plm_integer, max_genes=1000):
 @click.option('--num_heads', default=4, help='Number of attention heads in the transformer model.', type=int)
 @click.option('-o', '--out', default='train_out', help='Path to save the output.', type=click.STRING)
 @click.option( "--device", default='cuda', help="specify cuda or cpu.", type=click.STRING)
-def main(max_genes, shuffle, lr, epochs, hidden_dim, num_heads, out, dropout, device):
+
+def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, out, dropout, device):
     
     # Create the output directory if it doesn't exist
     if not os.path.exists(out):
@@ -105,11 +154,14 @@ def main(max_genes, shuffle, lr, epochs, hidden_dim, num_heads, out, dropout, de
 
     # Generate datasets
     print('Building dataset', flush = True)
-    X, y = process_data(plm_vectors, plm_integer, max_genes=1000)
+    if inc_category: 
+        X, y = process_data_with_category(plm_vectors, plm_integer, max_genes=1000) 
+    else: 
+        X, y = process_data(plm_vectors, plm_integer, max_genes=1000)
 
     # Shuffle if specified 
-    print('Shuffling gene orders...', flush=True)
     if shuffle: 
+        print('Shuffling gene orders...', flush=True)
         for i in range(len(X)): 
             
             # generate indices for shuffling 
@@ -120,10 +172,22 @@ def main(max_genes, shuffle, lr, epochs, hidden_dim, num_heads, out, dropout, de
             X[i] = X[i][indices]
             y[i] = y[i][indices]
 
-    print('\t Done shuffling gene orders', flush=True)
+        print('\t Done shuffling gene orders', flush=True)
+    else: 
+        print('Gene orders not shuffled!', flush=True)
 
-    # Produce the dataset object 
-    train_dataset = model.VariableSeq2SeqEmbeddingDataset(X,y)
+    if inc_category: 
+        train_dataset = model_masker.VariableSeq2SeqEmbeddingDataset(X,y) 
+        train_dataset.set_training(True) # this step allows us to mask 
+        print('Training model...', flush=True)
+        model_masker.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=1, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device)
+        
+    else: 
+        # Produce the dataset object 
+        train_dataset = model.VariableSeq2SeqEmbeddingDataset(X,y)
+        print('Training model...', flush=True)
+        model.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=1, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device)
+    
 
 
     #test_dataset = model.VariableSeq2SeqEmbeddingDataset(X_test, y_test)
@@ -146,12 +210,12 @@ def main(max_genes, shuffle, lr, epochs, hidden_dim, num_heads, out, dropout, de
     #transformer_model = model.VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=num_classes, num_heads=num_heads, hidden_dim=hidden_dim)
 
     # Train the model
-    print('Training model...', flush=True)
+    
     #model.train(transformer_model, train_dataloader, test_dataloader, epochs=epochs, lr=lr, save_path=out)
     
     # Train the model wqith kfold cross validataion 
     # use batch size = 1 as it makes results easier to analyse with respsect to genomes of different sizes 
-    model.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=1, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device)
+    
 
     # Evaluate the model
     #model.evaluate_with_metrics_and_save(transformer_model, test_dataloader, threshold=0.5, output_dir='metrics_output')
