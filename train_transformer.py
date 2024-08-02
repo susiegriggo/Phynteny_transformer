@@ -8,11 +8,38 @@ import torch
 import numpy as np 
 import pandas as pd
 from torch.utils.data import DataLoader
-from src import model
 from src import model_masker 
+from src import model_onehot
 import os 
 
-def process_data(plm_vectors, plm_integer, max_genes=1000):
+def encode_strand(strand):
+    """
+    One hot encode the direction of each gene
+
+    :param strand: sense encoded as a vector of + and - symbols 
+    :return: one hot encoding as two separate numpy arrays
+    """
+
+    encode = np.array([2 if i == "+" else 1 for i in strand])
+
+    strand_encode = np.array([1 if i == 1 else 0 for i in encode]), np.array(
+        [1 if i == 2 else 0 for i in encode]
+    )
+
+    return strand_encode[0], strand_encode[1]
+
+def encode_length(gene_positions): 
+    """
+    Extract the length of each of each gene so that it can be included in the embedding 
+
+    :param gene_positions: list of start and end position of each gene 
+    :return: length of each gene 
+    """
+
+    return [np.abs(i[1] - i[0]) for i in gene_positions]
+
+
+def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000):
     """
     frame as a supervised learning problem
     """
@@ -38,6 +65,15 @@ def process_data(plm_vectors, plm_integer, max_genes=1000):
 
             # get the corresponding functions
             this_categories = [plm_integer.get(i) if plm_integer.get(i) is not None else -1 for i in this_genes]
+
+            # get the strand information 
+            strand1, strand2  = encode_strand(contig_details.get(g).get('sense'))
+
+            # get the relative position of each gene in the genome 
+            
+            
+            # get the length of each gene 
+            gene_lengths = encode_length(contig_details.get(g).get('position'))
 
             # keep the information for the genomes that are not entirely unknown
             if all(element == -1 for element in this_categories):
@@ -122,6 +158,7 @@ def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, ou
     # some scrappy code which needs fixing to get the plm vectors
     plm_vectors = pickle.load(open('/home/grig0076/scratch/glm_embeddings/LSTM_test_example/data/phrogs_genomes/pLM_embs.pkl', 'rb'))
     plm_ogg = pickle.load(open('/home/grig0076/scratch/glm_embeddings/LSTM_test_example/data/phrogs_genomes/ogg_assignment.pkl', 'rb'))
+    contig_details = phynteny_dict = pickle.load(open('/home/grig0076/scratch/poznan_phynteny/phynteny_formatted/poznan_phynteny_all_data.pkl', 'rb')) 
 
     # read in annotation file
     phrogs = pd.read_csv('/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv', sep='\t')
@@ -130,7 +167,6 @@ def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, ou
     # read in integer encoding of the categories
     phrog_integer = pickle.load(open('/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl', 'rb'))
     phrog_integer = dict(zip([i -1 for i in list(phrog_integer.keys())], [i for i in list(phrog_integer.values())]))
-    print(phrog_integer)
     phrog_integer_reverse = dict(zip(list(phrog_integer.values()), list(phrog_integer.keys())))
     phrog_integer_reverse['unknown function'] = -1
 
@@ -157,7 +193,7 @@ def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, ou
     if inc_category: 
         X, y = process_data_with_category(plm_vectors, plm_integer, max_genes=1000) 
     else: 
-        X, y = process_data(plm_vectors, plm_integer, max_genes=1000)
+        X, y = process_data(plm_vectors, plm_integer, contig_details,max_genes=1000)
 
     # Shuffle if specified 
     if shuffle: 
@@ -184,10 +220,10 @@ def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, ou
         
     else: 
         # Produce the dataset object 
-        train_dataset = model.VariableSeq2SeqEmbeddingDataset(X,y)
+        train_dataset = model_onehot.VariableSeq2SeqEmbeddingDataset(X,y)
+        train_dataset.set_training(True)
         print('Training model...', flush=True)
-        model.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=1, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device)
-    
+        model_onehot.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=1, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device)
 
 
     #test_dataset = model.VariableSeq2SeqEmbeddingDataset(X_test, y_test)
