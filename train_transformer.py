@@ -1,4 +1,4 @@
-from sklearn.model_selection import train_test_split
+
 import torch
 import pickle
 import click
@@ -7,7 +7,6 @@ import random
 import torch
 import numpy as np 
 import pandas as pd
-from torch.utils.data import DataLoader
 from src import model_masker 
 from src import model_onehot
 import os 
@@ -26,7 +25,7 @@ def encode_strand(strand):
         [1 if i == 2 else 0 for i in encode]
     )
 
-    return strand_encode[0], strand_encode[1]
+    return np.array(strand_encode[0]).reshape(-1,1), np.array(strand_encode[1]).reshape(-1,1)
 
 def encode_length(gene_positions): 
     """
@@ -36,7 +35,13 @@ def encode_length(gene_positions):
     :return: length of each gene 
     """
 
-    return [np.abs(i[1] - i[0]) for i in gene_positions]
+    return np.array([np.abs(i[1] - i[0]) for i in gene_positions]).reshape(-1,1)
+
+def encode_position(length, positions): 
+    """
+    Extract the starting position of each gene so that it can be included in the embedding 
+    """
+    return np.array([round(np.min(i)/length, 3) for i in positions]).reshape(-1,1)
 
 
 def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000):
@@ -46,13 +51,15 @@ def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000):
     # Organise info
     df = pd.DataFrame({'key': list(plm_vectors.keys()), 'genome': ['_'.join(re.split('_', i)[:-1]) for i in plm_vectors.keys()]})
     genome_genes = df.groupby('genome')['key'].apply(list).to_dict()
-    genomes = list(set(['_'.join(re.split('_', i)[:-1]) for i in plm_vectors.keys()]))
-
+    # genomes = list(set(['_'.join(re.split('_', i)[:-1]) for i in plm_vectors.keys()]))
+    genomes = [ re.split('pharokka_phrogs_genomes_', i)[1] for i in list(contig_details.keys())]
+    
     X = list()
     y = list()
     removed = []
 
     for g in genomes[:10000]:
+
         # get the genes in this genome
         this_genes = genome_genes.get(g)
 
@@ -67,20 +74,25 @@ def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000):
             this_categories = [plm_integer.get(i) if plm_integer.get(i) is not None else -1 for i in this_genes]
 
             # get the strand information 
-            strand1, strand2  = encode_strand(contig_details.get(g).get('sense'))
+            genome_label  = 'pharokka_phrogs_genomes_' + g 
+            #print(contig_details.get(genome_label))
+            strand1, strand2  = encode_strand(contig_details.get(genome_label).get('sense'))
 
             # get the relative position of each gene in the genome 
-            
+            position = encode_position(contig_details.get(genome_label).get('length'), contig_details.get(genome_label).get('position'))
             
             # get the length of each gene 
-            gene_lengths = encode_length(contig_details.get(g).get('position'))
+            gene_lengths = encode_length(contig_details.get(genome_label).get('position'))
+
+            # merge these columns into a numpy array 
+            embedding = np.hstack((strand1, strand2, position, gene_lengths, np.array(this_vectors)))
 
             # keep the information for the genomes that are not entirely unknown
             if all(element == -1 for element in this_categories):
                 removed.append(g)
             else:
                 # store the info in the dataset
-                X.append(torch.tensor(np.array(this_vectors)))
+                X.append(torch.tensor(np.array(embedding)))
                 y.append(torch.tensor(np.array(this_categories)))
     
     return X,y
@@ -158,7 +170,7 @@ def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, ou
     # some scrappy code which needs fixing to get the plm vectors
     plm_vectors = pickle.load(open('/home/grig0076/scratch/glm_embeddings/LSTM_test_example/data/phrogs_genomes/pLM_embs.pkl', 'rb'))
     plm_ogg = pickle.load(open('/home/grig0076/scratch/glm_embeddings/LSTM_test_example/data/phrogs_genomes/ogg_assignment.pkl', 'rb'))
-    contig_details = phynteny_dict = pickle.load(open('/home/grig0076/scratch/poznan_phynteny/phynteny_formatted/poznan_phynteny_all_data.pkl', 'rb')) 
+    contig_details = pickle.load(open('/home/grig0076/scratch/poznan_phynteny/phynteny_formatted/poznan_phynteny_all_data.pkl', 'rb')) 
 
     # read in annotation file
     phrogs = pd.read_csv('/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv', sep='\t')
