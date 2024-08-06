@@ -35,7 +35,7 @@ def encode_length(gene_positions):
     :return: length of each gene 
     """
 
-    return np.array([np.abs(i[1] - i[0]) for i in gene_positions]).reshape(-1,1)
+    return np.array([round(np.abs(i[1] - i[0])/1000, 3) for i in gene_positions]).reshape(-1,1)
 
 def encode_position(length, positions): 
     """
@@ -44,7 +44,7 @@ def encode_position(length, positions):
     return np.array([round(np.min(i)/length, 3) for i in positions]).reshape(-1,1)
 
 
-def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000):
+def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000, extra_features = True, exclude_embedding=False):
     """
     frame as a supervised learning problem
     """
@@ -64,7 +64,12 @@ def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000):
         this_genes = genome_genes.get(g)
 
         # get the corresponding vectors
-        this_vectors = [plm_vectors.get(i) for i in this_genes]
+        if exclude_embedding: 
+            this_vectors = [[] for i in this_genes]
+            
+        else: 
+            this_vectors = [plm_vectors.get(i) for i in this_genes]
+        
         if len(this_vectors) > max_genes: 
             print('Number of genes in ' + g + ' is ' + str(len(this_vectors)))
 
@@ -73,20 +78,28 @@ def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000):
             # get the corresponding functions
             this_categories = [plm_integer.get(i) if plm_integer.get(i) is not None else -1 for i in this_genes]
 
-            # get the strand information 
-            genome_label  = 'pharokka_phrogs_genomes_' + g 
-            #print(contig_details.get(genome_label))
-            strand1, strand2  = encode_strand(contig_details.get(genome_label).get('sense'))
+            # handle if extra features are specified separateley
+            if extra_features: 
+                
+                # get the strand information 
+                genome_label  = 'pharokka_phrogs_genomes_' + g 
+                #print(contig_details.get(genome_label))
+                strand1, strand2  = encode_strand(contig_details.get(genome_label).get('sense'))
 
-            # get the relative position of each gene in the genome 
-            position = encode_position(contig_details.get(genome_label).get('length'), contig_details.get(genome_label).get('position'))
-            
-            # get the length of each gene 
-            gene_lengths = encode_length(contig_details.get(genome_label).get('position'))
+                # get the relative position of each gene in the genome 
+                position = encode_position(contig_details.get(genome_label).get('length'), contig_details.get(genome_label).get('position'))
 
-            # merge these columns into a numpy array 
-            embedding = np.hstack((strand1, strand2, position, gene_lengths, np.array(this_vectors)))
+                # get the length of each gene 
+                gene_lengths = encode_length(contig_details.get(genome_label).get('position'))
 
+                # merge these columns into a numpy array 
+                embedding = np.hstack((strand1, strand2, position, gene_lengths, np.array(this_vectors)))
+   
+            else: 
+        
+                # assemble array 
+                embedding = np.array(this_vectors)
+                
             # keep the information for the genomes that are not entirely unknown
             if all(element == -1 for element in this_categories):
                 removed.append(g)
@@ -95,6 +108,8 @@ def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000):
                 X.append(torch.tensor(np.array(embedding)))
                 y.append(torch.tensor(np.array(this_categories)))
     
+    print('Numer of genomes removed: ' + str(len(removed)))
+    print('Numer of genomes kept: ' + str(len(X)))
     return X,y
 
 def process_data_with_category(plm_vectors, plm_integer, max_genes=1000):
@@ -140,13 +155,17 @@ def process_data_with_category(plm_vectors, plm_integer, max_genes=1000):
                 X.append(torch.tensor(this_X))
                 y.append(torch.tensor(np.array(this_categories)))
                 
+    print('Numer of genomes removed: ' + str(len(removed)))
+    print('Numer of genomes kept: ' + str(len(X)))
     
     return X,y
 
 @click.command()
 @click.option('--max_genes', default=1000, help='Maximum number of genes per genome included in training - COMING SOON', type=int)
 @click.option('--shuffle', is_flag=True, default = False, help='Shuffle order of the genes. Helpful for determining if gene order increases predictive power')
-@click.option('--inc_category', is_flag=True, default = False, help='Include category in the first column of the dataframe')
+@click.option('--inc_category', is_flag=True, default = False, help='Include one-hot encoded category')
+@click.option('--exclude_embedding', is_flag=True, default = False, help='Exclude esm embeddings')
+@click.option('--extra_features', is_flag=True, default = False, help='Whether to include extra features alongside the embedding including the strand information, orientation and gene length')
 @click.option('--lr', default=1e-6, help='Learning rate for the optimizer.', type=float)
 @click.option('--epochs', default=10, help='Number of training epochs.', type=int)
 @click.option('--dropout', default=0.1, help='Dropout value for dropout layer.', type=int)
@@ -155,7 +174,7 @@ def process_data_with_category(plm_vectors, plm_integer, max_genes=1000):
 @click.option('-o', '--out', default='train_out', help='Path to save the output.', type=click.STRING)
 @click.option( "--device", default='cuda', help="specify cuda or cpu.", type=click.STRING)
 
-def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, out, dropout, device):
+def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, out, dropout, device, extra_features, exclude_embedding):
     
     # Create the output directory if it doesn't exist
     if not os.path.exists(out):
@@ -205,7 +224,13 @@ def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, ou
     if inc_category: 
         X, y = process_data_with_category(plm_vectors, plm_integer, max_genes=1000) 
     else: 
-        X, y = process_data(plm_vectors, plm_integer, contig_details,max_genes=1000)
+        
+        if extra_features: 
+            
+            X, y = process_data(plm_vectors, plm_integer, contig_details, max_genes=1000, exclude_embedding = exclude_embedding) 
+            
+        else:
+            X, y = process_data(plm_vectors, plm_integer, contig_details, max_genes=1000, extra_features = False, exclude_embedding = exclude_embedding) 
 
     # Shuffle if specified 
     if shuffle: 
