@@ -6,6 +6,7 @@ import torch.nn as nn
 import torch
 import pickle
 from torch.utils.data import Dataset, DataLoader, SubsetRandomSampler
+from torch.cuda.amp import GradScaler, autocast
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
 import torch.optim as optim
@@ -92,14 +93,23 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         
 
 class VariableSeq2SeqTransformerClassifier(nn.Module):
-    def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, dropout=0.1):
+    def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, lstm_hidden_dim = 256, dropout=0.1):
         super(VariableSeq2SeqTransformerClassifier, self).__init__()
         self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
         self.dropout = nn.Dropout(dropout).cuda()
 
+        # LSTM layer 
+        self.lstm = nn.LSTM(hidden_dim, lstm_hidden_dim, batch_first=True).cuda() 
+
+        # Layer Normalization
+        self.layer_norm = nn.LayerNorm(lstm_hidden_dim).cuda()
+
         # Positional Encoding
         self.positional_encoding = self.create_positional_encoding(hidden_dim, max_len=1000).cuda()
         
+        # Learnable scaling factor for positional encodings 
+        self.positional_scale = nn.Parameter(torch.ones(1))
+
         encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads, batch_first=True).cuda()
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers).cuda()
         
@@ -108,7 +118,9 @@ class VariableSeq2SeqTransformerClassifier(nn.Module):
     def forward(self, x, src_key_padding_mask=None):
         x = x.float()  # Ensure input is of type float
         x = self.embedding_layer(x)  # x: [batch_size, seq_len, input_dim]
-        x = x + self.positional_encoding[:, :x.size(1), :]  # Add positional encoding
+        x, _ = self.lstm(x) # Pass through LSTM layer 
+        x = self.layer_norm(x) # Apply Layer Normalisation
+        x = x + self.positional_scale * self.positional_encoding[:, :x.size(1), :]  # Add positional encoding
         x = self.dropout(x)  # Apply dropout after embedding layer 
         x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # x: [batch_size, seq_len, hidden_dim]
         x = self.fc(x)  # x: [batch_size, seq_len, num_classes]
@@ -151,6 +163,8 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
     print('Training on ' + str(device), flush=True)
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+    scaler = GradScaler()
     train_losses = []
     val_losses = []
     model.train()
@@ -162,11 +176,13 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
         for embeddings, categories, masks, idx in train_dataloader:
             embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
             optimizer.zero_grad()
-            src_key_padding_mask = (masks == 0)  # Mask for transformer
-            outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-            loss = masked_loss(outputs, categories, masks, idx) # need to specify which index to reference in the loss function
-            loss.backward()
-            optimizer.step()
+            src_key_padding_mask = (masks == 0).bool()  # Mask for transformer
+            with autocast():
+                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                loss = masked_loss(outputs, categories, masks, idx) # need to specify which index to reference in the loss function
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
             
             total_loss += loss.item()
         
@@ -184,9 +200,10 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
         with torch.no_grad():
             for embeddings, categories, masks, idx in test_dataloader:
                 embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
-                src_key_padding_mask = (masks == 0)  # Mask for transformer
-                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-                val_loss = masked_loss(outputs, categories, masks, idx) # need to include idx in the loss function 
+                src_key_padding_mask = (masks == 0).bool()  # Mask for transformer
+                with autocast():
+                    outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                    val_loss = masked_loss(outputs, categories, masks, idx) # need to include idx in the loss function 
                 total_val_loss += val_loss.item()
         
         avg_val_loss = total_val_loss / len(test_dataloader)
@@ -196,6 +213,9 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
         # Clear cache after validation epoch
         gc.collect()
         torch.cuda.empty_cache()
+
+        # Update scheduler
+        scheduler.step()
         
     # Save the model
     torch.save(model.state_dict(), save_path + 'transformer.model')
@@ -257,30 +277,29 @@ def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, ep
         fold += 1
 
 def evaluate(model, dataloader, phrog_integer, device, output_dir='metrics_output'):
-    """
-    Threshold is selected that optimizes Youden's J index 
-    """
     model.to(device)
     model.eval()
-    labels = [0, 1, 2, 3, 4, 5, 6, 7, 8]
+    labels = list(phrog_integer.keys())
     all_labels = []
     all_probs = []
-    all_preds = []
     
     with torch.no_grad():
         for embeddings, categories, masks, idx in dataloader:
             embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
-            src_key_padding_mask = (masks == 0)  # Mask for transformer
+            src_key_padding_mask = (masks == 0)
             outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
             
             # Apply softmax to get probabilities
-            probs = F.softmax(outputs, dim=2)
-            probs_idx = probs.detach().cpu().numpy()[0][idx][0]
+            probs = F.softmax(outputs, dim=2).detach().cpu().numpy()
+            categories = categories.detach().cpu().numpy()
+            masks = masks.detach().cpu().numpy()
+            
+            for i in range(probs.shape[0]):  # Iterate over the batch
+                valid_indices = np.where(masks[i] == 1)[0]
+                for idx in valid_indices:
+                    all_labels.append(categories[i][idx])
+                    all_probs.append(probs[i][idx])
 
-            all_labels.append(categories.detach().cpu().numpy()[0][idx][0])
-            all_probs.append(probs_idx)
-            all_preds.append(np.argmax(probs_idx))
-    
     all_labels = np.array(all_labels)
     all_probs = np.array(all_probs)
     
@@ -288,30 +307,30 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir='metrics_outpu
     retained_proportion = np.zeros(len(labels))
 
     for ii, label in enumerate(labels):
-        roc_probs = [i[ii] for i in all_probs] 
-        roc_labels = [1 if i ==ii else 0 for i in all_labels] 
+        roc_probs = all_probs[:, ii]
+        roc_labels = (all_labels == ii).astype(int)
         fpr, tpr, thresholds = roc_curve(roc_labels, roc_probs)
         roc_auc = auc(fpr, tpr)
-        print('AUC for category '+ phrog_integer.get(label) + ': ' + str(roc_auc))
+        print('AUC for category ' + phrog_integer[label] + ': ' + str(roc_auc))
 
         roc_df = pd.DataFrame({'FPR': fpr, 'TPR': tpr, 'Thresholds': thresholds})
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
-        roc_df.to_csv(os.path.join(output_dir, f'roc_curve_category_{phrog_integer.get(label)}.csv'), index=False)
+        roc_df.to_csv(os.path.join(output_dir, f'roc_curve_category_{phrog_integer[label]}.csv'), index=False)
 
-
-    # Compute F1 score, precision, recall for each category using optimal thresholds
+    # Compute F1 score, precision, recall for each category
+    all_preds = np.argmax(all_probs, axis=1)
     f1 = f1_score(all_labels, all_preds, average=None, zero_division=1)
     precision = precision_score(all_labels, all_preds, average=None, zero_division=1)
     recall = recall_score(all_labels, all_preds, average=None, zero_division=1)
         
     # Save F1, precision, recall to CSV
     metrics_df = pd.DataFrame({
-            'Category': [phrog_integer.get(label) for label in labels], 
-            'F1': f1, 
-            'Precision': precision, 
-            'Recall': recall, 
-            'Optimal Threshold': optimal_thresholds,
-            'Proportion Retained': retained_proportion
-        })
+        'Category': [phrog_integer[label] for label in labels], 
+        'F1': f1, 
+        'Precision': precision, 
+        'Recall': recall, 
+        'Optimal Threshold': optimal_thresholds,
+        'Proportion Retained': retained_proportion
+    })
     metrics_df.to_csv(os.path.join(output_dir, 'metrics_with_optimal_thresholds.csv'), index=False)

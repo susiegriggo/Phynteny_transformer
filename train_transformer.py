@@ -52,7 +52,7 @@ def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000, extra
     y = list()
     removed = []
 
-    for g in genomes[:10000]:
+    for g in genomes[:100000]:
 
         # get the genes in this genome
         this_genes = genome_genes.get(g)
