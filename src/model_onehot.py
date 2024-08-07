@@ -96,6 +96,9 @@ class VariableSeq2SeqTransformerClassifier(nn.Module):
         super(VariableSeq2SeqTransformerClassifier, self).__init__()
         self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
         self.dropout = nn.Dropout(dropout).cuda()
+
+        # Positional Encoding
+        self.positional_encoding = self.create_positional_encoding(hidden_dim, max_len=1000).cuda()
         
         encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads, batch_first=True).cuda()
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers).cuda()
@@ -105,12 +108,21 @@ class VariableSeq2SeqTransformerClassifier(nn.Module):
     def forward(self, x, src_key_padding_mask=None):
         x = x.float()  # Ensure input is of type float
         x = self.embedding_layer(x)  # x: [batch_size, seq_len, input_dim]
+        x = x + self.positional_encoding[:, :x.size(1), :]  # Add positional encoding
         x = self.dropout(x)  # Apply dropout after embedding layer 
         x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # x: [batch_size, seq_len, hidden_dim]
         x = self.fc(x)  # x: [batch_size, seq_len, num_classes]
 
         return x
-       
+    
+    def create_positional_encoding(self, dim, max_len=1000): 
+        pos_enc = torch.zeros(max_len, dim)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, dim,2).float() * (-np.log(10000) /dim ))
+        pos_enc[:, 0::2] = torch.sin(position * div_term)
+        pos_enc[:, 1::2] = torch.cos(position * div_term)
+        return pos_enc.unsqueeze(0)
+
 def collate_fn(batch):
     embeddings, categories, masks = zip(*batch)
     embeddings_padded = pad_sequence(embeddings, batch_first=True)
@@ -126,22 +138,23 @@ def masked_loss(output, target, mask, ignore_index=-1):
     loss = loss * mask.view(-1)
     return loss.sum() / mask.sum()
 
+
 def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path='model', device='cuda'):
-    print('Training on ' + str(device), flush = True)
+    print('Training on ' + str(device), flush=True)
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    train_losses = [] 
-    val_losses = [] 
+    train_losses = []
+    val_losses = []
     model.train()
-    total_loss = 0 
+    total_loss = 0
     
-    print('Beginning training loop', flush = True)
+    print('Beginning training loop', flush=True)
     for epoch in range(epochs):
         total_loss = 0
         for embeddings, categories, masks in train_dataloader:
             embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
             optimizer.zero_grad()
-            src_key_padding_mask = (masks == 0)  # Mask for transformer - referes to the masks tensor which is composed of 1s and 0s 
+            src_key_padding_mask = (masks == 0)  # Mask for transformer
             outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
             loss = masked_loss(outputs, categories, masks)
             loss.backward()
@@ -157,15 +170,15 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
         gc.collect()
         torch.cuda.empty_cache()
 
-        # Validation loss 
-        model.eval() 
-        total_val_loss = 0 
+        # Validation loss
+        model.eval()
+        total_val_loss = 0
         with torch.no_grad():
             for embeddings, categories, masks in test_dataloader:
                 embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
                 src_key_padding_mask = (masks == 0)  # Mask for transformer
                 outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-                val_loss = masked_loss(outputs, categories, masks)
+                val_loss = positional_loss(outputs, categories, masks, model.positional_encoding)
                 total_val_loss += val_loss.item()
         
         avg_val_loss = total_val_loss / len(test_dataloader)
@@ -184,8 +197,7 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
                             'training losses': train_losses, 
                             'validation losses': val_losses}) 
     output_dir =  f'{save_path}'
-    loss_df.to_csv(os.path.join(output_dir, 'metrics.csv')
-                   , index=False)
+    loss_df.to_csv(os.path.join(output_dir, 'metrics.csv'), index=False)
 
 def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, epochs=10, lr=1e-5, save_path='out', num_heads=4, hidden_dim=512, device='cuda', dropout=0.1): 
     

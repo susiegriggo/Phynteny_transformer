@@ -37,12 +37,6 @@ def encode_length(gene_positions):
 
     return np.array([round(np.abs(i[1] - i[0])/1000, 3) for i in gene_positions]).reshape(-1,1)
 
-def encode_position(length, positions): 
-    """
-    Extract the starting position of each gene so that it can be included in the embedding 
-    """
-    return np.array([round(np.min(i)/length, 3) for i in positions]).reshape(-1,1)
-
 
 def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000, extra_features = True, exclude_embedding=False):
     """
@@ -86,14 +80,11 @@ def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000, extra
                 #print(contig_details.get(genome_label))
                 strand1, strand2  = encode_strand(contig_details.get(genome_label).get('sense'))
 
-                # get the relative position of each gene in the genome 
-                position = encode_position(contig_details.get(genome_label).get('length'), contig_details.get(genome_label).get('position'))
-
                 # get the length of each gene 
                 gene_lengths = encode_length(contig_details.get(genome_label).get('position'))
 
                 # merge these columns into a numpy array 
-                embedding = np.hstack((strand1, strand2, position, gene_lengths, np.array(this_vectors)))
+                embedding = np.hstack((strand1, strand2, gene_lengths, np.array(this_vectors)))
    
             else: 
         
