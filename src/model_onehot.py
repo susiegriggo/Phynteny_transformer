@@ -93,7 +93,7 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         
 
 class VariableSeq2SeqTransformerClassifier(nn.Module):
-    def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, lstm_hidden_dim = 256, dropout=0.1):
+    def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, lstm_hidden_dim = 512, dropout=0.1):
         super(VariableSeq2SeqTransformerClassifier, self).__init__()
         self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
         self.dropout = nn.Dropout(dropout).cuda()
@@ -167,11 +167,10 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
     scaler = GradScaler()
     train_losses = []
     val_losses = []
-    model.train()
-    total_loss = 0
     
     print('Beginning training loop', flush=True)
     for epoch in range(epochs):
+        model.train()  # Ensure model is in training mode
         total_loss = 0
         for embeddings, categories, masks, idx in train_dataloader:
             embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
@@ -180,6 +179,7 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
             with autocast():
                 outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
                 loss = masked_loss(outputs, categories, masks, idx) # need to specify which index to reference in the loss function
+            
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -195,7 +195,7 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
         torch.cuda.empty_cache()
 
         # Validation loss
-        model.eval()
+        model.eval()  # Ensure model is in evaluation mode
         total_val_loss = 0
         with torch.no_grad():
             for embeddings, categories, masks, idx in test_dataloader:
@@ -226,7 +226,7 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
                             'validation losses': val_losses}) 
     output_dir =  f'{save_path}'
     loss_df.to_csv(os.path.join(output_dir, 'metrics.csv'), index=False)
-
+    
 def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, epochs=10, lr=1e-5, save_path='out', num_heads=4, hidden_dim=512, device='cuda', dropout=0.1): 
     
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
