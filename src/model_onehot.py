@@ -91,18 +91,18 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
 
         return np.array(one_hot_encoded)
         
-
 class VariableSeq2SeqTransformerClassifier(nn.Module):
-    def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, lstm_hidden_dim = 512, dropout=0.1):
+    def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, lstm_hidden_dim=512, dropout=0.1):
         super(VariableSeq2SeqTransformerClassifier, self).__init__()
         self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
         self.dropout = nn.Dropout(dropout).cuda()
 
+        
         # LSTM layer 
-        self.lstm = nn.LSTM(hidden_dim, lstm_hidden_dim, batch_first=True).cuda() 
-
+        self.lstm = nn.LSTM(hidden_dim, lstm_hidden_dim, batch_first=True).cuda()  
+        
         # Layer Normalization
-        self.layer_norm = nn.LayerNorm(lstm_hidden_dim).cuda()
+        self.layer_norm = nn.LayerNorm(hidden_dim).cuda()
 
         # Positional Encoding
         self.positional_encoding = self.create_positional_encoding(hidden_dim, max_len=1000).cuda()
@@ -118,9 +118,12 @@ class VariableSeq2SeqTransformerClassifier(nn.Module):
     def forward(self, x, src_key_padding_mask=None):
         x = x.float()  # Ensure input is of type float
         x = self.embedding_layer(x)  # x: [batch_size, seq_len, input_dim]
-        x, _ = self.lstm(x) # Pass through LSTM layer 
-        x = self.layer_norm(x) # Apply Layer Normalisation
-        x = x + self.positional_scale * self.positional_encoding[:, :x.size(1), :]  # Add positional encoding
+        x = self.layer_norm(x)  # Apply Layer Normalisation
+
+        # Adjust positional encoding to match the sequence length of the input
+        pos_enc = self.positional_encoding[:, :x.size(1), :]
+        x = x + self.positional_scale * pos_enc  # Add positional encoding
+        
         x = self.dropout(x)  # Apply dropout after embedding layer 
         x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # x: [batch_size, seq_len, hidden_dim]
         x = self.fc(x)  # x: [batch_size, seq_len, num_classes]
@@ -130,10 +133,58 @@ class VariableSeq2SeqTransformerClassifier(nn.Module):
     def create_positional_encoding(self, dim, max_len=1000): 
         pos_enc = torch.zeros(max_len, dim)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, dim,2).float() * (-np.log(10000) /dim ))
+        div_term = torch.exp(torch.arange(0, dim, 2).float() * (-np.log(10000) / dim))
         pos_enc[:, 0::2] = torch.sin(position * div_term)
         pos_enc[:, 1::2] = torch.cos(position * div_term)
         return pos_enc.unsqueeze(0)
+    
+    
+class ImprovedSeq2SeqTransformerClassifier(nn.Module):
+    def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, lstm_hidden_dim=512, dropout=0.1):
+        super(ImprovedSeq2SeqTransformerClassifier, self).__init__()
+        
+        # Embedding layer
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
+        self.dropout = nn.Dropout(dropout).cuda()
+
+        # Positional Encoding (now learnable)
+        self.positional_encoding = nn.Parameter(torch.zeros(1000, hidden_dim)).cuda()
+
+        # LSTM layer
+        self.lstm = nn.LSTM(hidden_dim, lstm_hidden_dim, batch_first=True).cuda()
+
+        # Transformer Encoder
+        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads, batch_first=True).cuda()
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers).cuda()
+        
+        # Separate Decoder for Masked Categories
+        self.masked_decoder = nn.Linear(hidden_dim, num_classes).cuda()
+        
+        # Final Classification Layer
+        self.fc = nn.Linear(hidden_dim, num_classes).cuda()
+
+    def forward(self, x, src_key_padding_mask=None):
+        x = x.float()
+        x = self.embedding_layer(x)
+        x = x + self.positional_encoding[:x.size(1), :]
+
+        x = self.dropout(x)
+        x, _ = self.lstm(x)  # LSTM layer
+        
+        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
+
+        masked_predictions = self.masked_decoder(x)
+        final_predictions = self.fc(masked_predictions)
+        
+        return final_predictions, masked_predictions
+
+def masked_loss(output, target, mask, idx, ignore_index=-1):
+    # Loss function focused on predicting the specific category
+    target = target.clone()
+    target[mask == 0] = ignore_index
+    loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction='none').cuda()
+    loss = loss_fct(output.view(-1, output.size(-1)), target.view(-1))
+    return loss[idx]
 
 def collate_fn(batch):
     embeddings, categories, masks, idx = zip(*batch)
@@ -150,14 +201,6 @@ def loss(output, target, mask, ignore_index=-1):
     loss = loss_fct(output.view(-1, output.size(-1)), target.view(-1))
     loss = loss * mask.view(-1)
     return loss.sum() / mask.sum()
-
-def masked_loss(output, target, mask, idx, ignore_index=-1):
-    # this loss function returns the loss just for the prediction at hand 
-    target = target.clone()
-    target[mask == 0] = ignore_index
-    loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction='none').cuda()
-    loss = loss_fct(output.view(-1, output.size(-1)), target.view(-1))
-    return loss[idx]
 
 def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path='model', device='cuda'):
     print('Training on ' + str(device), flush=True)
@@ -177,8 +220,17 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
             optimizer.zero_grad()
             src_key_padding_mask = (masks == 0).bool()  # Mask for transformer
             with autocast():
+                # for original model 
+                #outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                #loss = masked_loss(outputs, categories, masks, idx) # need to specify which index to reference in the loss function
+                
+                # for the improved model 
                 outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-                loss = masked_loss(outputs, categories, masks, idx) # need to specify which index to reference in the loss function
+                # Reshape outputs to match loss calculation expectations
+                batch_size, seq_len, _ = outputs.size()
+                outputs_reshaped = outputs.view(-1, outputs.size(-1))
+                loss = masked_loss(outputs_reshaped, categories.view(-1), masks.view(-1), idx)
+                
             
             scaler.scale(loss).backward()
             scaler.step(optimizer)
@@ -260,7 +312,7 @@ def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, ep
         input_dim = dataset[0][0].shape[1] 
         print(dataset[0][0].shape, flush = True) 
         print(input_dim, flush = True)
-        kfold_transformer_model = VariableSeq2SeqTransformerClassifier(input_dim=input_dim, num_classes=9, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout)
+        kfold_transformer_model = ImprovedSeq2SeqTransformerClassifier(input_dim=input_dim, num_classes=9, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout)
         kfold_transformer_model.to(device)
 
         # Train model
