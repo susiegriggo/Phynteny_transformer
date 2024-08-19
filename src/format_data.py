@@ -2,11 +2,13 @@ from esm import FastaBatchedDataset, pretrained
 import torch 
 import binascii
 import gzip 
+import pathlib
 import os 
-from Bio import SeqIO 
+from Bio import SeqIO
+from Bio.Seq import Seq 
+from Bio.SeqRecord import SeqRecord
 import pandas as pd
 from loguru import logger 
-import numpy as np 
 import click 
 import re 
 import pickle
@@ -112,7 +114,7 @@ def phrog_to_integer(phrog_annot, phrog_integer):
 
     return [phrog_integer.get(i) for i in phrog_annot]
 
-def extract_features(this_phage):
+def extract_features(this_phage, key):
     """
     Extract the required features and format as a dictionary
 
@@ -136,13 +138,15 @@ def extract_features(this_phage):
     protein_id = [p[0] if p is not None else None for p in protein_id]
     phrogs = [this_CDS[i].qualifiers.get("phrog") for i in range(len(this_CDS))]
     phrogs = ["No_PHROG" if i is None else i[0] for i in phrogs]
-
+    sequence = [SeqRecord(Seq(this_CDS[i].qualifiers.get('translation')[0]), id=key + '_' + str(i), description = key + '_' + str(i)) for i in range(len(this_CDS))] 
+    
     return {
         "length": phage_length,
         "phrogs": phrogs,
         "protein_id": protein_id,
         "sense": sense,
         "position": position,
+        "sequence": sequence
     }
 
 
@@ -160,16 +164,16 @@ def get_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
     with open(input_data, "r", errors="replace") as file:
         genbank_files = file.readlines()
        
-
         for genbank in genbank_files:
             # convert genbank to a dictionary
             gb_dict = get_genbank(genbank)
             gb_keys = list(gb_dict.keys())
          
+
             for key in gb_keys:
 
                 # extract the relevant features
-                phage_dict = extract_features(gb_dict.get(key))
+                phage_dict = extract_features(gb_dict.get(key), key)
                 
                 # integer encoding of phrog categories
                 integer = phrog_to_integer(phage_dict.get("phrogs"), phrog_integer)
@@ -226,7 +230,8 @@ def extract_embeddings(fasta_file, output_dir, model_name = 'esm2_t33_650M_UR50D
     )
 
     # make output directory 
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_path =  pathlib.Path(output_dir + '/esm') 
+    output_path.mkdir(parents=True, exist_ok=True)
 
     # start processing batches 
     with torch.no_grad():
@@ -236,8 +241,12 @@ def extract_embeddings(fasta_file, output_dir, model_name = 'esm2_t33_650M_UR50D
 
             # move tokens to gpu if available 
             if torch.cuda.is_available():
+                print('USING CUDA')
                 toks = toks.to(device="cuda", non_blocking=True)
-            
+            else: 
+                 print('Not using CUDA :(')
+
+            print(toks)
             # Extract embeddings 
             with torch.no_grad():
                 results = model(toks, repr_layers=repr_layers, return_contacts=False)
@@ -247,13 +256,14 @@ def extract_embeddings(fasta_file, output_dir, model_name = 'esm2_t33_650M_UR50D
             results = dict() 
             for i, label in enumerate(labels):
                 entry_id = label.split()[0]
-                
-                filename = output_dir / f"{entry_id}.pt"
+                #filename = output_dir + '/' + entry_id + '.pt'
                 
                 representation = token_representations[i, 1 : len(strs[i]) - 1].mean(0)
                 results[label] = representation 
                    
-                torch.save(results, filename) 
+            torch.save(results, output_dir + '/esm/embeddings.pt') 
+
+        return results 
 
 @click.command()
 @click.option(
@@ -306,7 +316,6 @@ def main(input_data, gene_categories, maximum_genes, prefix, out):
     phrog_integer_reverse['unknown function'] = -1
     phrog_integer_category = dict(zip([str(k) for k in list(category_dict.keys())], [phrog_integer_reverse.get(k) for k in list(category_dict.values())]))
     phrog_integer_category['No_PHROG'] = -1
-   
 
     # Create the output directory if it doesn't exist
     if not os.path.exists(out):
@@ -315,15 +324,23 @@ def main(input_data, gene_categories, maximum_genes, prefix, out):
     else:
         print(f"Warning: Directory {out} already exists.")
     
-    # extract fasta from the genbank files 
-    get_fasta(input_data, out)
-
     # read in the genbank file/files 
     data = get_data(
         input_data, gene_categories, phrog_integer_category, maximum_genes
     )
 
-    print(data)
+    # extract fasta from the genbank files 
+    data_keys = list(data.keys()) 
+    fasta_out = out + '/' + prefix + '.fasta' 
+    records = [data.get(k).get('sequence') for k in data_keys]
+    with open(fasta_out, 'w') as output_handle: 
+        for r in records:
+            SeqIO.write(r, output_handle, "fasta")
+    output_handle.close()
+
+    # Extract the embeddings from the outputted fasta files 
+    extract_embeddings(fasta_out, out)
+
 
 # Press the green button in the gutter to run the script.
 if __name__ == '__main__':
