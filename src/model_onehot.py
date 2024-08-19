@@ -156,10 +156,7 @@ class ImprovedSeq2SeqTransformerClassifier(nn.Module):
         # Transformer Encoder
         encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads, batch_first=True).cuda()
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers).cuda()
-        
-        # Separate Decoder for Masked Categories
-        self.masked_decoder = nn.Linear(hidden_dim, num_classes).cuda()
-        
+    
         # Final Classification Layer
         self.fc = nn.Linear(hidden_dim, num_classes).cuda()
 
@@ -173,13 +170,16 @@ class ImprovedSeq2SeqTransformerClassifier(nn.Module):
         
         x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
 
-        masked_predictions = self.masked_decoder(x)
-        final_predictions = self.fc(masked_predictions)
-        
-        return final_predictions, masked_predictions
-
+        self.fc(x)
+        return x
+    
 def masked_loss(output, target, mask, idx, ignore_index=-1):
     # Loss function focused on predicting the specific category
+    print('***Loss function***')
+    print('output')
+    print(output)
+    print('target')
+    print(target)
     target = target.clone()
     target[mask == 0] = ignore_index
     loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction='none').cuda()
@@ -202,7 +202,7 @@ def loss(output, target, mask, ignore_index=-1):
     loss = loss * mask.view(-1)
     return loss.sum() / mask.sum()
 
-def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path='model', device='cuda'):
+def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path='model', device='cuda', mask_unknowns = True):
     print('Training on ' + str(device), flush=True)
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
@@ -218,19 +218,16 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
         for embeddings, categories, masks, idx in train_dataloader:
             embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
             optimizer.zero_grad()
-            src_key_padding_mask = (masks == 0).bool()  # Mask for transformer
+            if mask_unknowns: 
+                print('Masking unknowns')
+                src_key_padding_mask = (masks == 0).bool()  # Mask for transformer
+            else: 
+                print('Not masking unknowns')
+                src_key_padding_mask = None 
             with autocast():
                 # for original model 
-                #outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-                #loss = masked_loss(outputs, categories, masks, idx) # need to specify which index to reference in the loss function
-                
-                # for the improved model 
                 outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-                # Reshape outputs to match loss calculation expectations
-                batch_size, seq_len, _ = outputs.size()
-                outputs_reshaped = outputs.view(-1, outputs.size(-1))
-                loss = masked_loss(outputs_reshaped, categories.view(-1), masks.view(-1), idx)
-                
+                loss = masked_loss(outputs, categories, masks, idx) # need to specify which index to reference in the loss function
             
             scaler.scale(loss).backward()
             scaler.step(optimizer)
@@ -279,7 +276,7 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
     output_dir =  f'{save_path}'
     loss_df.to_csv(os.path.join(output_dir, 'metrics.csv'), index=False)
     
-def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, epochs=10, lr=1e-5, save_path='out', num_heads=4, hidden_dim=512, device='cuda', dropout=0.1): 
+def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, epochs=10, lr=1e-5, save_path='out', num_heads=4, hidden_dim=512, device='cuda', dropout=0.1, mask_unknowns=True): 
     
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
     fold = 1
@@ -317,7 +314,7 @@ def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, ep
 
         # Train model
         print('Training the model', flush = True )
-        train(kfold_transformer_model, train_kfold_loader, val_kfold_loader, epochs=epochs, lr=lr, save_path=output_dir, device=device)
+        train(kfold_transformer_model, train_kfold_loader, val_kfold_loader, epochs=epochs, lr=lr, save_path=output_dir, device=device, mask_unknowns=mask_unknowns)
         
         # Clear cache after training each fold
         gc.collect()
@@ -381,8 +378,6 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir='metrics_outpu
         'Category': [phrog_integer[label] for label in labels], 
         'F1': f1, 
         'Precision': precision, 
-        'Recall': recall, 
-        'Optimal Threshold': optimal_thresholds,
-        'Proportion Retained': retained_proportion
+        'Recall': recall
     })
     metrics_df.to_csv(os.path.join(output_dir, 'metrics_with_optimal_thresholds.csv'), index=False)

@@ -52,7 +52,7 @@ def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000, extra
     y = list()
     removed = []
 
-    for g in genomes[:100000]:
+    for g in genomes:
 
         # get the genes in this genome
         this_genes = genome_genes.get(g)
@@ -103,59 +103,14 @@ def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000, extra
     print('Numer of genomes kept: ' + str(len(X)))
     return X,y
 
-def process_data_with_category(plm_vectors, plm_integer, max_genes=1000):
-    """
-    frame as a supervised learning problem
-    """
-    # Organise info
-    df = pd.DataFrame({'key': list(plm_vectors.keys()), 'genome': ['_'.join(re.split('_', i)[:-1]) for i in plm_vectors.keys()]})
-    genome_genes = df.groupby('genome')['key'].apply(list).to_dict()
-    genomes = list(set(['_'.join(re.split('_', i)[:-1]) for i in plm_vectors.keys()]))
 
-    X = list()
-    y = list()
-    removed = []
-
-    for g in genomes[:10000]:
-        # get the genes in this genome
-        this_genes = genome_genes.get(g)
-
-        # get the corresponding vectors
-        this_vectors = [plm_vectors.get(i) for i in this_genes]
-        if len(this_vectors) > max_genes: 
-            print('Number of genes in ' + g + ' is ' + str(len(this_vectors)))
-
-        else: 
-
-            # get the corresponding functions
-            this_categories = [plm_integer.get(i) if plm_integer.get(i) is not None else -1 for i in this_genes]
-
-            # keep the information for the genomes that are not entirely unknown
-            if all(element == -1 for element in this_categories):
-                removed.append(g)
-            else:
-                # store the info in the dataset
-                this_X = np.array(this_vectors) 
-                
-                # Reshape the new column to be a 2D array with one column
-                category_column = np.array(this_categories)[:, np.newaxis]
-
-                # Append the new column as the first column
-                this_X = np.hstack((category_column, this_X))
-                
-                X.append(torch.tensor(this_X))
-                y.append(torch.tensor(np.array(this_categories)))
-                
-    print('Numer of genomes removed: ' + str(len(removed)))
-    print('Numer of genomes kept: ' + str(len(X)))
-    
-    return X,y
 
 @click.command()
 @click.option('--max_genes', default=1000, help='Maximum number of genes per genome included in training - COMING SOON', type=int)
 @click.option('--shuffle', is_flag=True, default = False, help='Shuffle order of the genes. Helpful for determining if gene order increases predictive power')
 @click.option('--inc_category', is_flag=True, default = False, help='Include one-hot encoded category')
 @click.option('--exclude_embedding', is_flag=True, default = False, help='Exclude esm embeddings')
+@click.option('--unmask_unknowns', is_flag=True, default = False, help='Do not mask unknown gene functions from the model')
 @click.option('--extra_features', is_flag=True, default = False, help='Whether to include extra features alongside the embedding including the strand information, orientation and gene length')
 @click.option('--lr', default=1e-6, help='Learning rate for the optimizer.', type=float)
 @click.option('--epochs', default=10, help='Number of training epochs.', type=int)
@@ -165,7 +120,7 @@ def process_data_with_category(plm_vectors, plm_integer, max_genes=1000):
 @click.option('-o', '--out', default='train_out', help='Path to save the output.', type=click.STRING)
 @click.option( "--device", default='cuda', help="specify cuda or cpu.", type=click.STRING)
 
-def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, out, dropout, device, extra_features, exclude_embedding):
+def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, out, unmask_unknowns, dropout, device, extra_features, exclude_embedding):
     
     # Create the output directory if it doesn't exist
     if not os.path.exists(out):
@@ -251,39 +206,16 @@ def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, ou
         train_dataset = model_onehot.VariableSeq2SeqEmbeddingDataset(X,y)
         train_dataset.set_training(True)
         print('Training model...', flush=True)
-        model_onehot.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=1, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device)
 
+        if unmask_unknowns: 
+            mask_unknowns = False
+        else: 
+            mask_unknowns = True
+        
+        model_onehot.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=1, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device, mask_unknowns=mask_unknowns)
 
-    #test_dataset = model.VariableSeq2SeqEmbeddingDataset(X_test, y_test)
-
-    # Return the size of the test dataset to try and find 
-    #print(np.max([len(i) for i in X_train]))
-    #print(np.min([len(i) for i in X_train]))
-    #print(np.max([len(i) for i in y_train]))
-    #print(np.min([len(i) for i in y_train]))
-
-
-    # Create dataloader objects
-    #print('Creating dataloader objects', flush=True)
-    #train_dataloader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=model.collate_fn)
-    #test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=True, collate_fn=model.collate_fn)
-
-    # Create model
-    #print('Creating model', flush=True)
-    #num_classes = len(phrog_integer)
-    #transformer_model = model.VariableSeq2SeqTransformerClassifier(input_dim=1280, num_classes=num_classes, num_heads=num_heads, hidden_dim=hidden_dim)
-
-    # Train the model
-    
-    #model.train(transformer_model, train_dataloader, test_dataloader, epochs=epochs, lr=lr, save_path=out)
-    
-    # Train the model wqith kfold cross validataion 
-    # use batch size = 1 as it makes results easier to analyse with respsect to genomes of different sizes 
-    
-
-    # Evaluate the model
-    #model.evaluate_with_metrics_and_save(transformer_model, test_dataloader, threshold=0.5, output_dir='metrics_output')
-    #model.evaluate_with_optimal_thresholds(transformer_model, test_dataloader,phrog_integer, output_dir=out)
+        
+            
 
     # Evaluate the model
     print('Evaluating the model', flush=True)
