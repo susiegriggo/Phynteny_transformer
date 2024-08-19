@@ -4,13 +4,10 @@ import binascii
 import gzip 
 import numpy as np
 import pathlib
-import os 
 from Bio import SeqIO
 from Bio.Seq import Seq 
 from Bio.SeqRecord import SeqRecord
-import pandas as pd
 from loguru import logger 
-import click 
 import re 
 import pickle
 
@@ -228,7 +225,8 @@ def get_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
                  
                         # update dictionary with this entry
                         g = re.split(",|\.", re.split("/", genbank.strip())[-1])[0]
-                        training_data[g + "_" + key] = phage_dict
+                        #training_data[g + "_" + key] = phage_dict
+                        training_data[key] = phage_dict
 
     return training_data
 
@@ -245,6 +243,9 @@ def extract_embeddings(fasta_file, output_dir, model_name = 'esm2_t33_650M_UR50D
     # move model to gpu if available 
     if torch.cuda.is_available():
         model = model.cuda()
+        print('USING CUDA :)')
+    else: 
+        print('NO CUDA :()')
       
     # batch the fasta file 
     dataset = FastaBatchedDataset.from_file(fasta_file)
@@ -272,10 +273,7 @@ def extract_embeddings(fasta_file, output_dir, model_name = 'esm2_t33_650M_UR50D
 
             # move tokens to gpu if available 
             if torch.cuda.is_available():
-                print('USING CUDA')
                 toks = toks.to(device="cuda", non_blocking=True)
-            else: 
-                 print('Not using CUDA :(')
 
             # Extract embeddings 
             with torch.no_grad():
@@ -285,9 +283,10 @@ def extract_embeddings(fasta_file, output_dir, model_name = 'esm2_t33_650M_UR50D
             # update this to save dictionary for an entire fasta file 
             for i, label in enumerate(labels):
                 representation = token_representations[i, 1 : len(strs[i]) - 1].mean(0)
-                results[label] = representation 
-                #print(label)
-                #print(representation)
+                if torch.cuda.is_available(): 
+                    results[label] = representation.detach().cpu()
+                else: 
+                    results[label] = representation
                    
     torch.save(results, output_dir + '/esm/embeddings.pt') 
 
@@ -297,10 +296,7 @@ def process_data(esm_vectors, genome_details, extra_features = True, exclude_emb
     """
     frame as a supervised learning problem
     """
-    # Organise info
-    #df = pd.DataFrame({'key': list(plm_vectors.keys()), 'genome': ['_'.join(re.split('_', i)[:-1]) for i in plm_vectors.keys()]})
-    #genome_genes = df.groupby('genome')['key'].apply(list).to_dict()
-    # genomes = list(set(['_'.join(re.split('_', i)[:-1]) for i in plm_vectors.keys()]))
+    
     genomes = list(genome_details.keys())
     
     X = list()
@@ -312,8 +308,6 @@ def process_data(esm_vectors, genome_details, extra_features = True, exclude_emb
         # get the genes in this genome
         this_genes = genome_details.get(g)
 
-
-
         # get the corresponding functions - this is included in the object 
         #this_categories = [plm_integer.get(i) if plm_integer.get(i) is not None else -1 for i in this_genes]
         this_categories = genome_details.get(g).get('categories')
@@ -321,13 +315,11 @@ def process_data(esm_vectors, genome_details, extra_features = True, exclude_emb
         # handle if extra features are specified separateley
         if extra_features: 
                 
-            # get the strand information 
-            genome_label  = 'pharokka_phrogs_genomes_' + g 
             #print(genome_details.get(genome_label))
-            strand1, strand2  = encode_strand(genome_details.get(genome_label).get('sense'))
+            strand1, strand2  = encode_strand(genome_details.get(g).get('sense'))
 
             # get the length of each gene 
-            gene_lengths = encode_length(genome_details.get(genome_label).get('position'))
+            gene_lengths = encode_length(genome_details.get(g).get('position'))
 
             # fetch the embeddings for this genome 
             if exclude_embedding: 
@@ -338,111 +330,21 @@ def process_data(esm_vectors, genome_details, extra_features = True, exclude_emb
             # merge these columns into a numpy array 
             embedding = np.hstack((strand1, strand2, gene_lengths, np.array(this_vectors)))
    
-        # keep the information for the genomes that are not entirely unknown
-        if all(element == -1 for element in this_categories):
-            removed.append(g)
-        else:
-            # store the info in the dataset
-            X.append(torch.tensor(np.array(embedding)))
-            y.append(torch.tensor(np.array(this_categories)))
+        else: 
+            
+            # merge vectors into a numpy array 
+            embedding = np.array(this_vectors)
+
+        # store the info in the dataset
+        X.append(torch.tensor(np.array(embedding)))
+        y.append(torch.tensor(np.array(this_categories)))
     
     print('Numer of genomes removed: ' + str(len(removed)))
     print('Numer of genomes kept: ' + str(len(X)))
+
+    # convert to dictionary inc the dictionary names 
+    X = dict(zip(genomes, X))
+    y = dict(zip(genomes, y ))
+
     return X,y
 
-
-@click.command()
-@click.option(
-    "-i",
-    "--input_data",
-    help="Text file containing genbank files to build model",
-    required=True,
-    type=click.Path(exists=True),
-)
-@click.option(
-    "-m",
-    "--maximum_genes",
-    type=int,
-    help="Specify the maximum number of genes in each genome. Default 120.",
-    default=120,
-)
-@click.option(
-    "-g",
-    "--gene_categories",
-    type=int,
-    help="Specify the minimum number of categories in each genome. Default 4.",
-    default=4,
-)
-@click.option(
-    "--prefix",
-    "-p",
-    default="data",
-    type=str,
-    help="Prefix for the output files",
-)
-@click.option(
-    "--out",
-    "-o",
-    default="out",
-    type=str,
-    help="Directory for the output files",
-)
-@click.option('--exclude_embedding', is_flag=True, default = False, help='Exclude esm embeddings')
-@click.option('--extra_features', 
-              is_flag=True, 
-              default = False, 
-              help='Whether to include extra features alongside the embedding including the strand information, orientation and gene length')
-
-def main(input_data, gene_categories, maximum_genes, prefix, out, exclude_embedding, extra_features): 
-
-    # read in information for the phrog annotations 
-    # read in annotation file
-    phrogs = pd.read_csv('/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv', sep='\t')
-    category_dict = dict(zip(phrogs['phrog'], phrogs['category']))
-
-    # read in integer encoding of the categories - #TODO try to automate this weird step 
-    phrog_integer = pickle.load(open('/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl', 'rb'))
-    phrog_integer = dict(zip([i -1 for i in list(phrog_integer.keys())], [i for i in list(phrog_integer.values())])) # shuffling the keys down by one 
-    phrog_integer_reverse = dict(zip(list(phrog_integer.values()), list(phrog_integer.keys()))) 
-    phrog_integer_reverse['unknown function'] = -1
-    phrog_integer_category = dict(zip([str(k) for k in list(category_dict.keys())], [phrog_integer_reverse.get(k) for k in list(category_dict.values())]))
-    phrog_integer_category['No_PHROG'] = -1
-
-    # Create the output directory if it doesn't exist
-    if not os.path.exists(out):
-        os.makedirs(out)
-        print(f"Directory created: {out}")
-    else:
-        print(f"Warning: Directory {out} already exists.")
-    
-    # read in the genbank file/files 
-    print('Extracting info from genbank files', flush=True)
-    data = get_data(
-        input_data, gene_categories, phrog_integer_category, maximum_genes
-    )
-
-    # extract fasta from the genbank files 
-    print('Extract fasta from genbank', flush = True)
-    data_keys = list(data.keys()) 
-    fasta_out = out + '/' + prefix + '.fasta' 
-    records = [data.get(k).get('sequence') for k in data_keys]
-    with open(fasta_out, 'w') as output_handle: 
-        for r in records:
-            SeqIO.write(r, output_handle, "fasta")
-    output_handle.close()
-
-    # Extract the embeddings from the outputted fasta files 
-    print('Computing ESM embeddings', flush = True)
-    print('... if step is being slow consider using GPU!')
-    embeddings = extract_embeddings(fasta_out, out)
-
-    # move on to create training and testing data 
-    if extra_features: 
-        X, y = process_data(embeddings, data, exclude_embedding = exclude_embedding) 
-            
-    else:
-        X, y = process_data(embeddings, data, extra_features = False, exclude_embedding = exclude_embedding) 
-
-# Press the green button in the gutter to run the script.
-if __name__ == '__main__':
-    main() 

@@ -7,7 +7,6 @@ import random
 import torch
 import numpy as np 
 import pandas as pd
-from src import model_masker 
 from src import model_onehot
 import os 
 
@@ -103,15 +102,11 @@ def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000, extra
     print('Numer of genomes kept: ' + str(len(X)))
     return X,y
 
-
-
 @click.command()
-@click.option('--max_genes', default=1000, help='Maximum number of genes per genome included in training - COMING SOON', type=int)
+@click.option("--x_path", "-x", help="File path to X training data")
+@click.option("--y_path", "-y", help="File path to y training data")
 @click.option('--shuffle', is_flag=True, default = False, help='Shuffle order of the genes. Helpful for determining if gene order increases predictive power')
-@click.option('--inc_category', is_flag=True, default = False, help='Include one-hot encoded category')
-@click.option('--exclude_embedding', is_flag=True, default = False, help='Exclude esm embeddings')
 @click.option('--unmask_unknowns', is_flag=True, default = False, help='Do not mask unknown gene functions from the model')
-@click.option('--extra_features', is_flag=True, default = False, help='Whether to include extra features alongside the embedding including the strand information, orientation and gene length')
 @click.option('--lr', default=1e-6, help='Learning rate for the optimizer.', type=float)
 @click.option('--epochs', default=10, help='Number of training epochs.', type=int)
 @click.option('--dropout', default=0.1, help='Dropout value for dropout layer.', type=int)
@@ -120,8 +115,12 @@ def process_data(plm_vectors, plm_integer, contig_details, max_genes=1000, extra
 @click.option('-o', '--out', default='train_out', help='Path to save the output.', type=click.STRING)
 @click.option( "--device", default='cuda', help="specify cuda or cpu.", type=click.STRING)
 
-def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, out, unmask_unknowns, dropout, device, extra_features, exclude_embedding):
+def main(x_path, y_path, shuffle, lr, epochs, hidden_dim, num_heads, out, unmask_unknowns, dropout, device):
     
+    # Input phrog info 
+    phrog_integer = pickle.load(open('/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl', 'rb'))
+    phrog_integer = dict(zip([i -1 for i in list(phrog_integer.keys())], [i for i in list(phrog_integer.values())])) # shuffling the keys down by one 
+
     # Create the output directory if it doesn't exist
     if not os.path.exists(out):
         os.makedirs(out)
@@ -129,97 +128,42 @@ def main(max_genes, shuffle, inc_category, lr, epochs, hidden_dim, num_heads, ou
     else:
         print(f"Warning: Directory {out} already exists.")
     
-    ###########################
+
     print('Reading in data', flush = True)
+    X = pickle.load(open(x_path, 'rb'))
+    y = pickle.load(open(y_path, 'rb'))
 
-    # some scrappy code which needs fixing to get the plm vectors
-    plm_vectors = pickle.load(open('/home/grig0076/scratch/glm_embeddings/LSTM_test_example/data/phrogs_genomes/pLM_embs.pkl', 'rb'))
-    plm_ogg = pickle.load(open('/home/grig0076/scratch/glm_embeddings/LSTM_test_example/data/phrogs_genomes/ogg_assignment.pkl', 'rb'))
-    contig_details = pickle.load(open('/home/grig0076/scratch/poznan_phynteny/phynteny_formatted/poznan_phynteny_all_data.pkl', 'rb')) 
-
-    # read in annotation file
-    phrogs = pd.read_csv('/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv', sep='\t')
-    category_dict = dict(zip(phrogs['phrog'], phrogs['category']))
-
-    # read in integer encoding of the categories
-    phrog_integer = pickle.load(open('/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl', 'rb'))
-    phrog_integer = dict(zip([i -1 for i in list(phrog_integer.keys())], [i for i in list(phrog_integer.values())]))
-    phrog_integer_reverse = dict(zip(list(phrog_integer.values()), list(phrog_integer.keys())))
-    phrog_integer_reverse['unknown function'] = -1
-
-    # plm integer
-    plm_integer = dict(zip(list(plm_ogg.keys()), [phrog_integer_reverse.get(category_dict.get(int(i[0][6:]))) for i in plm_ogg.values()]))
-
-    ##########################
-    # Checks that the GPU is available 
-    #print(torch.cuda.is_available())  # Should return True if GPU is available
-    #print(torch.cuda.current_device())  # Should return the index of the current GPU device
-    #print(torch.cuda.device_count())  # Should return the number of GPU devices
-    #print(torch.cuda.get_device_name(0))  # Should return the name of the GPU device
-
-    ##############################
-
-    # Train and test split
-    #print('Test and train split', flush=True)
-    #X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=test_size, random_state=42)
-    #print('Size of training data: ' + str(len(X_train)) + ' genomes')
-    #print('Size of testing data: ' + str(len(X_test)) + ' genomes')
-
-    # Generate datasets
-    print('Building dataset', flush = True)
-    if inc_category: 
-        X, y = process_data_with_category(plm_vectors, plm_integer, max_genes=1000) 
-    else: 
-        
-        if extra_features: 
-            
-            X, y = process_data(plm_vectors, plm_integer, contig_details, max_genes=1000, exclude_embedding = exclude_embedding) 
-            
-        else:
-            X, y = process_data(plm_vectors, plm_integer, contig_details, max_genes=1000, extra_features = False, exclude_embedding = exclude_embedding) 
-
-    # Shuffle if specified 
+    
+    # Shuffle if specified # TODO adjust this now that X and y are dictionaries 
     if shuffle: 
         print('Shuffling gene orders...', flush=True)
-        for i in range(len(X)): 
+        for  key in list(X.keys()): 
             
             # generate indices for shuffling 
-            indices = list(range(len(X[i])))
+            indices = list(range(len(X.get(key))))
             random.shuffle(indices)
-
-            # Use shuffled indices to reorder X and y 
-            X[i] = X[i][indices]
-            y[i] = y[i][indices]
+            X[key] = X[key][indices]
 
         print('\t Done shuffling gene orders', flush=True)
     else: 
         print('Gene orders not shuffled!', flush=True)
 
-    if inc_category: 
-        train_dataset = model_masker.VariableSeq2SeqEmbeddingDataset(X,y) 
-        train_dataset.set_training(True) # this step allows us to mask 
-        print('Training model...', flush=True)
-        model_masker.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=1, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device)
-        
+
+    # Produce the dataset object 
+    train_dataset = model_onehot.VariableSeq2SeqEmbeddingDataset(list(X.values()),list(y.values()))
+    train_dataset.set_training(True)
+    print('Training model...', flush=True)
+
+    if unmask_unknowns: 
+        mask_unknowns = False
     else: 
-        # Produce the dataset object 
-        train_dataset = model_onehot.VariableSeq2SeqEmbeddingDataset(X,y)
-        train_dataset.set_training(True)
-        print('Training model...', flush=True)
-
-        if unmask_unknowns: 
-            mask_unknowns = False
-        else: 
-            mask_unknowns = True
+        mask_unknowns = True
         
-        model_onehot.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=1, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device, mask_unknowns=mask_unknowns)
-
-        
-            
+    model_onehot.train_crossValidation(train_dataset, phrog_integer, n_splits=10, batch_size=1, epochs=epochs, lr=lr, save_path=out, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout, device=device, mask_unknowns=mask_unknowns)
 
     # Evaluate the model
-    print('Evaluating the model', flush=True)
-    #model.evaluate(transformer_model, test_dataloader)
+    #print('Evaluating the model', flush=True)
+    #model_onehot.evaluate(transformer_model, test_dataloader)
 
     print('FINISHED! :D')
 
