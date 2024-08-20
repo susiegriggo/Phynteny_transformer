@@ -52,7 +52,7 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
     def set_training(self, training=True):
         self.training = training
         
-    def category_mask(self, category): 
+    def category_mask_old(self, category): 
         
         # select a category to randomly mask 
         idx = random.randint(0, len(category) - 1)
@@ -64,6 +64,25 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         masked_category[idx] = self.mask_token
         
         return masked_category, idx
+    
+    def category_mask(self, category, masking_proportion=0.15): 
+
+        # Define a probability distribution over maskable tokens
+        probability_distribution = self.mask.float() / self.mask.sum()
+
+        # Calculate the number of tokens to mask based on input length
+        num_maskable_tokens = self.mask.sum().item()  # Count of maskable tokens
+        num_tokens_to_mask = max(1, int(masking_proportion * num_maskable_tokens))  # Ensure at least 1 token is masked
+
+        # Sample tokens to mask
+        idx = torch.multinomial(probability_distribution, num_samples=num_tokens_to_mask, replacement=False)
+
+        # generate masked versions 
+        masked_category = category.clone()
+        masked_category[idx] = self.mask_token
+
+        return masked_category, idx 
+
 
     def shuffle_rows(self):
         """
@@ -97,7 +116,6 @@ class VariableSeq2SeqTransformerClassifier(nn.Module):
         self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
         self.dropout = nn.Dropout(dropout).cuda()
 
-        
         # LSTM layer 
         self.lstm = nn.LSTM(hidden_dim, lstm_hidden_dim, batch_first=True).cuda()  
         
@@ -142,7 +160,10 @@ class VariableSeq2SeqTransformerClassifier(nn.Module):
 class ImprovedSeq2SeqTransformerClassifier(nn.Module):
     def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, lstm_hidden_dim=512, dropout=0.1):
         super(ImprovedSeq2SeqTransformerClassifier, self).__init__()
-        
+        """
+        Difference is between the position of the LSTM layer and the the type of positional encoding that is used
+        """
+
         # Embedding layer
         self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
         self.dropout = nn.Dropout(dropout).cuda()
@@ -184,7 +205,7 @@ def masked_loss(output, target, mask, idx, ignore_index=-1):
     target[mask == 0] = ignore_index
     loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction='none').cuda()
     loss = loss_fct(output.view(-1, output.size(-1)), target.view(-1))
-    return loss[idx]
+    return loss[idx].sum()/len(idx)
 
 def collate_fn(batch):
     embeddings, categories, masks, idx = zip(*batch)
