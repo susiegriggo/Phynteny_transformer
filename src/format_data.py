@@ -136,7 +136,11 @@ def extract_features(this_phage, key):
     protein_id = [p[0] if p is not None else None for p in protein_id]
     phrogs = [this_CDS[i].qualifiers.get("phrog") for i in range(len(this_CDS))]
     phrogs = ["No_PHROG" if i is None else i[0] for i in phrogs]
-    sequence = [SeqRecord(Seq(this_CDS[i].qualifiers.get('translation')[0]), id=key + '_' + str(i), description = key + '_' + str(i)) for i in range(len(this_CDS))] 
+
+    # get sequence and replace ambiguous amino acid J with X 
+    sequence = [SeqRecord(Seq(this_CDS[i].qualifiers.get('translation')[0].replace('J', 'X')),  
+                          id=key + '_' + str(i), 
+                          description = key + '_' + str(i)) for i in range(len(this_CDS))] 
     
     return {
         "length": phage_length,
@@ -337,7 +341,8 @@ def process_data(esm_vectors, genome_details, extra_features = True, exclude_emb
 
         # store the info in the dataset
         X.append(torch.tensor(np.array(embedding)))
-        y.append(torch.tensor(np.array(this_categories)))
+        #y.append(torch.tensor(np.array(this_categories)))
+        y.append(torch.tensor(this_categories))
     
     print('Numer of genomes removed: ' + str(len(removed)))
     print('Numer of genomes kept: ' + str(len(X)))
