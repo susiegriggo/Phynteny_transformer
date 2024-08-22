@@ -18,7 +18,7 @@ import os
 @click.option('--shuffle', is_flag=True, default = False, help='Shuffle order of the genes. Helpful for determining if gene order increases predictive power')
 @click.option('--unmask_unknowns', is_flag=True, default = False, help='Do not mask unknown gene functions from the model')
 @click.option('--lr', default=1e-6, help='Learning rate for the optimizer.', type=float)
-@click.option('--epochs', default=10, help='Number of training epochs.', type=int)
+@click.option('--epochs', default=15, help='Number of training epochs.', type=int)
 @click.option('--dropout', default=0.1, help='Dropout value for dropout layer.', type=int)
 @click.option('--hidden_dim', default=512, help='Hidden dimension size for the transformer model.', type=int)
 @click.option('--num_heads', default=4, help='Number of attention heads in the transformer model.', type=int)
