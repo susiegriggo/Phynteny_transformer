@@ -19,11 +19,12 @@ import os
 import gc 
 
 class VariableSeq2SeqEmbeddingDataset(Dataset):
-    def __init__(self, embeddings, categories, mask_token=-1):
+    def __init__(self, embeddings, categories, mask_token=-1, mask_portion=0.15):
         self.embeddings = [embedding.float() for embedding in embeddings]
         self.categories = [category.long() for category in categories]
         self.mask_token = mask_token
         self.num_classes = 10 # hard coded in for now 
+        self.mask_portion = mask_portion
     
     def __len__(self):
         return len(self.embeddings)
@@ -35,7 +36,7 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         
         # select a random cateogory to mask if training 
         if self.training: 
-            masked_category, idx = self.category_mask(category)
+            masked_category, idx = self.category_mask(category, mask)
         else: 
             masked_category = category
             
@@ -65,14 +66,14 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         
         return masked_category, idx
     
-    def category_mask(self, category, masking_proportion=0.15): 
+    def category_mask(self, category, mask): 
 
         # Define a probability distribution over maskable tokens
-        probability_distribution = self.mask.float() / self.mask.sum()
+        probability_distribution = mask.float() / mask.sum()
 
         # Calculate the number of tokens to mask based on input length
-        num_maskable_tokens = self.mask.sum().item()  # Count of maskable tokens
-        num_tokens_to_mask = max(1, int(masking_proportion * num_maskable_tokens))  # Ensure at least 1 token is masked
+        num_maskable_tokens = mask.sum().item()  # Count of maskable tokens
+        num_tokens_to_mask = max(1, int(self.mask_portion * num_maskable_tokens))  # Ensure at least 1 token is masked
 
         # Sample tokens to mask
         idx = torch.multinomial(probability_distribution, num_samples=num_tokens_to_mask, replacement=False)
@@ -122,7 +123,7 @@ class VariableSeq2SeqTransformerClassifier(nn.Module):
         # Layer Normalization
         self.layer_norm = nn.LayerNorm(hidden_dim).cuda()
 
-        # Positional Encoding
+        # Positional Encoding # this poisiitonal encoding might be better 
         self.positional_encoding = self.create_positional_encoding(hidden_dim, max_len=1000).cuda()
         
         # Learnable scaling factor for positional encodings 
@@ -142,6 +143,8 @@ class VariableSeq2SeqTransformerClassifier(nn.Module):
         pos_enc = self.positional_encoding[:, :x.size(1), :]
         x = x + self.positional_scale * pos_enc  # Add positional encoding
         
+        # lstm layer doesn't seem to get used here 
+
         x = self.dropout(x)  # Apply dropout after embedding layer 
         x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)  # x: [batch_size, seq_len, hidden_dim]
         x = self.fc(x)  # x: [batch_size, seq_len, num_classes]
@@ -158,7 +161,7 @@ class VariableSeq2SeqTransformerClassifier(nn.Module):
     
     
 class ImprovedSeq2SeqTransformerClassifier(nn.Module):
-    def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, lstm_hidden_dim=512, dropout=0.1):
+    def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, lstm_hidden_dim=512, dropout=0.1, max_len=1000):
         super(ImprovedSeq2SeqTransformerClassifier, self).__init__()
         """
         Difference is between the position of the LSTM layer and the the type of positional encoding that is used
@@ -166,13 +169,18 @@ class ImprovedSeq2SeqTransformerClassifier(nn.Module):
 
         # Embedding layer
         self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
+
+        # could add a normalisation layer here 
         self.dropout = nn.Dropout(dropout).cuda()
 
-        # Positional Encoding (now learnable)
-        self.positional_encoding = nn.Parameter(torch.zeros(1000, hidden_dim)).cuda()
+        # Positional Encoding (now entirely learnable) 
+        #self.positional_encoding = nn.Parameter(torch.zeros(1000, hidden_dim)).cuda()
+
+        # Relative Position Embeddings
+        self.relative_position_bias = nn.Parameter(torch.zeros((2* max_len - 1, num_heads)))
 
         # LSTM layer
-        self.lstm = nn.LSTM(hidden_dim, lstm_hidden_dim, batch_first=True).cuda()
+        self.lstm = nn.LSTM(hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional = True).cuda()
 
         # Transformer Encoder
         encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads, batch_first=True).cuda()
@@ -182,25 +190,66 @@ class ImprovedSeq2SeqTransformerClassifier(nn.Module):
         self.fc = nn.Linear(hidden_dim, num_classes).cuda()
 
     def forward(self, x, src_key_padding_mask=None):
-        x = x.float()
-        x = self.embedding_layer(x)
-        x = x + self.positional_encoding[:x.size(1), :]
+        x = x.float() # Ensure input is of type float 
+        x = self.embedding_layer(x) 
+        # could apply a normalisation layer here 
 
-        x = self.dropout(x)
+        # entirely learnable positional encoding 
+        #x = x + self.positional_encoding[:x.size(1), :]
+
+        x = self.dropout(x) # apply dropout after the embedding layer 
         x, _ = self.lstm(x)  # LSTM layer
         
         x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
 
+        # Apply transformer encoder with relative positional encodings
+        x = self.relative_attention(x, src_key_padding_mask)
+
         self.fc(x)
         return x
     
+    def relative_attention(self, x, src_key_padding_mask=None):
+        batch_size, seq_len, dim = x.size()
+        # Create a relative position matrix
+        relative_position_matrix = self.create_relative_position_matrix(seq_len)
+        
+        # Compute the attention weights with relative position encodings
+        attention_scores = self.compute_attention_scores(x, relative_position_matrix)
+        
+        # Apply mask if provided
+        if src_key_padding_mask is not None:
+            attention_scores = attention_scores.masked_fill(src_key_padding_mask[:, None, None, :], float('-inf'))
+        
+        attention_probs = F.softmax(attention_scores, dim=-1)
+        
+        # Apply attention
+        context_layer = torch.matmul(attention_probs, x)
+        return context_layer
+
+    def create_relative_position_matrix(self, seq_len):
+        range_vec = torch.arange(seq_len)
+        relative_positions = range_vec[:, None] - range_vec[None, :]
+        relative_positions += seq_len - 1  # Shift to ensure all indices are positive
+        return relative_positions
+
+    def compute_attention_scores(self, x, relative_position_matrix):
+        batch_size, seq_len, dim = x.size()
+        num_heads = self.relative_position_bias.size(1)
+
+        # Compute the standard query-key dot product attention
+        queries = x.view(batch_size, seq_len, num_heads, dim // num_heads)
+        keys = x.view(batch_size, seq_len, num_heads, dim // num_heads).transpose(1, 2)
+
+        attention_scores = torch.matmul(queries, keys.transpose(-2, -1))
+        
+        # Add relative position bias
+        relative_position_bias = self.relative_position_bias[relative_position_matrix]
+        attention_scores += relative_position_bias.permute(2, 0, 1)  # Adjust for broadcasting
+
+        return attention_scores
+    
 def masked_loss(output, target, mask, idx, ignore_index=-1):
     # Loss function focused on predicting the specific category
-    print('***Loss function***')
-    print('output')
-    print(output)
-    print('target')
-    print(target)
     target = target.clone()
     target[mask == 0] = ignore_index
     loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction='none').cuda()
@@ -240,10 +289,8 @@ def train(model, train_dataloader, test_dataloader, epochs=5, lr=1e-5, save_path
             embeddings, categories, masks = embeddings.to(device).float(), categories.to(device).long(), masks.to(device).float()
             optimizer.zero_grad()
             if mask_unknowns: 
-                print('Masking unknowns')
                 src_key_padding_mask = (masks == 0).bool()  # Mask for transformer
             else: 
-                print('Not masking unknowns')
                 src_key_padding_mask = None 
             with autocast():
                 # for original model 
@@ -326,10 +373,7 @@ def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, ep
         pickle.dump(val_kfold_loader, open(output_dir + '/val_kfold_loader.pkl', 'wb'))
 
         # Initialize model
-        print('Intialising the model', flush = True)
         input_dim = dataset[0][0].shape[1] 
-        print(dataset[0][0].shape, flush = True) 
-        print(input_dim, flush = True)
         kfold_transformer_model = ImprovedSeq2SeqTransformerClassifier(input_dim=input_dim, num_classes=9, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout)
         kfold_transformer_model.to(device)
 
@@ -347,6 +391,7 @@ def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, ep
         fold += 1
 
 def evaluate(model, dataloader, phrog_integer, device, output_dir='metrics_output'):
+    ## This here needs work. Could be done outside of this function 
     model.to(device)
     model.eval()
     labels = list(phrog_integer.keys())
@@ -372,9 +417,6 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir='metrics_outpu
 
     all_labels = np.array(all_labels)
     all_probs = np.array(all_probs)
-    
-    optimal_thresholds = np.zeros(len(labels))
-    retained_proportion = np.zeros(len(labels))
 
     for ii, label in enumerate(labels):
         roc_probs = all_probs[:, ii]
@@ -394,11 +436,20 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir='metrics_outpu
     precision = precision_score(all_labels, all_preds, average=None, zero_division=1)
     recall = recall_score(all_labels, all_preds, average=None, zero_division=1)
         
+    print('f1')
+    print(f1)
+    print('precision')
+    print(precision)
+    print('recall')
+    print(recall)
+    print('labels')
+    print(labels)
+
     # Save F1, precision, recall to CSV
-    metrics_df = pd.DataFrame({
-        'Category': [phrog_integer[label] for label in labels], 
-        'F1': f1, 
-        'Precision': precision, 
-        'Recall': recall
-    })
-    metrics_df.to_csv(os.path.join(output_dir, 'metrics_with_optimal_thresholds.csv'), index=False)
+    #metrics_df = pd.DataFrame({
+    #    'Category': [phrog_integer.get(i) for i in range(0,10)], 
+    #    'F1': f1, 
+    #    'Precision': precision, 
+    #    'Recall': recall
+    #})
+    #metrics_df.to_csv(os.path.join(output_dir, 'metrics_with_optimal_thresholds.csv'), index=False)
