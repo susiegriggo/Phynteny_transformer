@@ -251,6 +251,111 @@ class ImprovedSeq2SeqTransformerClassifierRelativeAttention(nn.Module):
         x = self.fc(x)
         return x
 
+
+class CircularRelativePositionAttention(nn.Module):
+    def __init__(self, d_model, num_heads, max_len=1000, batch_first=True):
+        super(CircularRelativePositionAttention, self).__init__()
+        self.num_heads = num_heads
+        self.d_model = d_model
+        self.max_len = max_len
+        self.batch_first = batch_first
+
+        # Relative position encodings
+        self.relative_position_k = nn.Parameter(torch.randn(max_len, d_model // num_heads))
+        self.relative_position_v = nn.Parameter(torch.randn(max_len, d_model // num_heads))
+
+    def forward(self, query, key, value, attn_mask=None, is_causal=False):
+        if not self.batch_first:
+            query, key, value = query.transpose(0, 1), key.transpose(0, 1), value.transpose(0, 1)
+        
+        batch_size, seq_len, d_model = query.size()
+
+        # Reshape for multi-head attention
+        q = query.view(batch_size, seq_len, self.num_heads, d_model // self.num_heads).transpose(1, 2)
+        k = key.view(batch_size, seq_len, self.num_heads, d_model // self.num_heads).transpose(1, 2)
+        v = value.view(batch_size, seq_len, self.num_heads, d_model // self.num_heads).transpose(1, 2)
+
+        # Scaled dot-product attention
+        scores = torch.matmul(q, k.transpose(-2, -1)) / np.sqrt(d_model // self.num_heads)
+
+        # Circular relative position
+        circular_indices = torch.arange(seq_len).unsqueeze(1) - torch.arange(seq_len).unsqueeze(0)
+        circular_indices = (circular_indices + seq_len) % seq_len  # Circular difference
+        circular_indices = torch.min(circular_indices, seq_len - circular_indices)  # Min of direct and wrap-around distance
+
+        print('seq_len')
+        print(seq_len)
+        print('rel_positions_k shape')
+        
+
+        # Adjust dimensions for broadcasting
+        rel_positions_k = self.relative_position_k[circular_indices].unsqueeze(0).expand(batch_size, -1, -1, -1, -1)
+        scores += torch.einsum('bhqd,bqkd->bhqk', q, rel_positions_k[0]) # error here 
+
+        if attn_mask is not None:
+            scores = scores.masked_fill(attn_mask == 0, float('-inf'))
+
+        attn_weights = F.softmax(scores, dim=-1)
+        attn_output = torch.matmul(attn_weights, v)
+
+        # Adjust dimensions for broadcasting
+        rel_positions_v = self.relative_position_v[circular_indices].unsqueeze(0).expand(batch_size, -1, -1, -1, -1)
+        attn_output += torch.einsum('bhqk,bqkd->bhqd', attn_weights, rel_positions_v[0])
+
+        # Reshape back to the original shape
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
+
+        if not self.batch_first:
+            attn_output = attn_output.transpose(0, 1)
+
+        return attn_output
+
+class CircularTransformerEncoderLayer(nn.Module):
+    def __init__(self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000):
+        super(CircularTransformerEncoderLayer, self).__init__()
+        self.self_attn = CircularRelativePositionAttention(d_model, num_heads, max_len=max_len, batch_first=True)
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
+    def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False):
+        src2 = self.self_attn(src, src, src, attn_mask=src_mask)
+        src = src + self.dropout1(src2)
+        src = self.norm1(src)
+        src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
+        src = src + self.dropout2(src2)
+        src = self.norm2(src)
+        return src
+
+class ImprovedSeq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
+    def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, lstm_hidden_dim=512, dropout=0.1, max_len=1000):
+        super(ImprovedSeq2SeqTransformerClassifierCircularRelativeAttention, self).__init__()
+
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
+        self.dropout = nn.Dropout(dropout).cuda()
+        self.positional_encoding = nn.Parameter(torch.zeros(max_len, hidden_dim)).cuda()
+        self.lstm = nn.LSTM(hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True).cuda()
+
+        encoder_layers = CircularTransformerEncoderLayer(d_model=hidden_dim*2, num_heads=num_heads, dropout=dropout, max_len=max_len)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers).cuda()
+    
+        self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).cuda()
+
+    def forward(self, x, src_key_padding_mask=None):
+        x = x.float()
+        x = self.embedding_layer(x)
+        x = x + self.positional_encoding[:x.size(1), :]
+
+        x = self.dropout(x)
+        x, _ = self.lstm(x)
+        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
+        x = self.fc(x)
+        return x
+
     
 def masked_loss(output, target, mask, idx, ignore_index=-1):
     # Loss function focused on predicting the specific category
@@ -378,7 +483,7 @@ def train_crossValidation(dataset, phrog_integer, n_splits=10, batch_size=16, ep
 
         # Initialize model
         input_dim = dataset[0][0].shape[1] 
-        kfold_transformer_model = ImprovedSeq2SeqTransformerClassifierRelativeAttention(input_dim=input_dim, num_classes=9, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout)
+        kfold_transformer_model = ImprovedSeq2SeqTransformerClassifierCircularRelativeAttention(input_dim=input_dim, num_classes=9, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout)
         #kfold_transformer_model = ImprovedSeq2SeqTransformerClassifier(input_dim=input_dim, num_classes=9, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout)
         kfold_transformer_model.to(device)
 
