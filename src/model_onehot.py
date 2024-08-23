@@ -123,7 +123,7 @@ class ImprovedSeq2SeqTransformerClassifier(nn.Module):
         self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
         self.dropout = nn.Dropout(dropout).cuda() #think about where this layer goes 
 
-        # Positional Encoding (now learnable)
+        # Positional Encoding (now learnable) -  could try using the fixed sinusoidal embeddings instead 
         self.positional_encoding = nn.Parameter(torch.zeros(1000, hidden_dim)).cuda() # is zeroes good 
         
         # normalisation layer?? 
@@ -152,97 +152,105 @@ class ImprovedSeq2SeqTransformerClassifier(nn.Module):
         x = self.fc(x) # not sure if we need to use this version instead
 
         return x
-
-
-class RelativePositionalEncoding(nn.Module):
-    def __init__(self, max_len, d_model):
-        super(RelativePositionalEncoding, self).__init__()
-        #self.relative_positions = nn.Parameter(torch.randn(max_len, max_len, d_model))
-        #TODO address the division by 2 here - is a bit of a hackjob 
-        self.relative_positions = nn.Parameter(torch.randn(max_len, max_len, int(d_model/2))) # troubleshooting and dividing by 2 
-
-    def forward(self, length):
-        # Return the relative positional encodings for the given length
-        return self.relative_positions[:length, :length, :]
-
-class RelativeAttention(nn.Module):
-    def __init__(self, d_model, num_heads):
-        super(RelativeAttention, self).__init__()
+    
+class RelativePositionAttention(nn.Module):
+    def __init__(self, d_model, num_heads, max_len=1000, batch_first = True):
+        super(RelativePositionAttention, self).__init__()
         self.num_heads = num_heads
-        self.d_k = d_model // num_heads
+        self.d_model = d_model
+        self.max_len = max_len
+        self.batch_first = batch_first
 
-        self.query = nn.Linear(d_model, d_model)
-        self.key = nn.Linear(d_model, d_model)
-        self.value = nn.Linear(d_model, d_model)
-        self.out = nn.Linear(d_model, d_model)
+        # Relative position encodings
+        self.relative_position_k = nn.Parameter(torch.randn(max_len, d_model // num_heads))
+        self.relative_position_v = nn.Parameter(torch.randn(max_len, d_model // num_heads))
 
-    def forward(self, x, rel_pos, mask=None):
-        batch_size, seq_len, d_model = x.size()
+    def forward(self, query, key, value, attn_mask=None):
+        
+        if not self.batch_first:
 
-        # Linear projections
-        q = self.query(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        k = self.key(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
-        v = self.value(x).view(batch_size, seq_len, self.num_heads, self.d_k).transpose(1, 2)
+            # If batch is not first, transpose the batch and sequence dimensions
+            query, key, value = query.transpose(0, 1), key.transpose(0, 1), value.transpose(0, 1)
+        
+        batch_size, seq_len, d_model = query.size()
 
-        # Compute attention scores with relative positional encoding
-        scores = torch.matmul(q, k.transpose(-2, -1)) / self.d_k**0.5
+        # Reshape for multi-head attention
+        q = query.view(batch_size, seq_len, self.num_heads, d_model // self.num_heads).transpose(1, 2)
+        k = key.view(batch_size, seq_len, self.num_heads, d_model // self.num_heads).transpose(1, 2)
+        v = value.view(batch_size, seq_len, self.num_heads, d_model // self.num_heads).transpose(1, 2)
 
-        # Add relative position encodings to scores
-        rel_scores = torch.einsum('bhqd,qkd->bhqk', q, rel_pos)
-        scores = scores + rel_scores
+        # Scaled dot-product attention
+        scores = torch.matmul(q, k.transpose(-2, -1)) / np.sqrt(d_model // self.num_heads)
 
-        if mask is not None:
-            scores = scores.masked_fill(mask.unsqueeze(1).unsqueeze(2) == 0, float('-inf'))
+        # Add relative position biases
+        rel_positions = self.relative_position_k[:seq_len, :]
+        scores = scores + torch.matmul(q, rel_positions.transpose(-2, -1))
 
-        attn = F.softmax(scores, dim=-1)
+        if attn_mask is not None:
+            scores = scores.masked_fill(attn_mask == 0, float('-inf'))
 
-        # Weighted sum of values
-        output = torch.matmul(attn, v).transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
-        output = self.out(output)
+        attn_weights = F.softmax(scores, dim=-1)
+        attn_output = torch.matmul(attn_weights, v)
 
-        return output, attn
+        rel_positions_v = self.relative_position_v[:seq_len, :]
+        attn_output = attn_output + torch.matmul(attn_weights, rel_positions_v)
+
+        # Reshape back to the original shape
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
+
+        if not self.batch_first:
+            # If batch is not first, transpose back the batch and sequence dimensions
+            attn_output = attn_output.transpose(0, 1)
+
+        return attn_output
+
+class CustomTransformerEncoderLayer(nn.Module):
+    def __init__(self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000):
+        super(CustomTransformerEncoderLayer, self).__init__()
+        self.self_attn = RelativePositionAttention(d_model, num_heads, max_len=max_len, batch_first=True)
+        self.linear1 = nn.Linear(d_model, dim_feedforward)
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(dim_feedforward, d_model)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout1 = nn.Dropout(dropout)
+        self.dropout2 = nn.Dropout(dropout)
+
+    def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False):
+        # Ensure src is in batch-first format (batch_size, seq_len, d_model)
+        src2 = self.self_attn(src, src, src, attn_mask=src_mask)
+        src = src + self.dropout1(src2)
+        src = self.norm1(src)
+        src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
+        src = src + self.dropout2(src2)
+        src = self.norm2(src)
+        return src
 
 class ImprovedSeq2SeqTransformerClassifierRelativeAttention(nn.Module):
-    def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, lstm_hidden_dim=512, max_len=1000, dropout=0.1):
+    def __init__(self, input_dim, num_classes, num_heads=4, num_layers=2, hidden_dim=512, lstm_hidden_dim=512, dropout=0.1, max_len=1000):
         super(ImprovedSeq2SeqTransformerClassifierRelativeAttention, self).__init__()
 
-        # Embedding layer
         self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
-        self.dropout = nn.Dropout(dropout).cuda()
-
-        # Relative Positional Encoding 
-        self.relative_positional_encoding = RelativePositionalEncoding(max_len, hidden_dim).cuda()
-
-        # LSTM layer
+        self.dropout = nn.Dropout(dropout).cuda() #not sure if this is best spot and is a normalisation layer might be helpful
+        self.positional_encoding = nn.Parameter(torch.zeros(max_len, hidden_dim)).cuda()
         self.lstm = nn.LSTM(hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True).cuda()
 
-        # Transformer Encoder with Relative Attention
-        self.layers = nn.ModuleList([
-            RelativeAttention(d_model=2 * lstm_hidden_dim, num_heads=num_heads).cuda()
-            for _ in range(num_layers)
-        ])
-
-        # Final Classification Layer
+        encoder_layers = CustomTransformerEncoderLayer(d_model=hidden_dim*2, num_heads=num_heads, dropout=dropout, max_len=max_len)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers).cuda()
+    
         self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).cuda()
 
     def forward(self, x, src_key_padding_mask=None):
         x = x.float()
         x = self.embedding_layer(x)
+        x = x + self.positional_encoding[:x.size(1), :]
+
         x = self.dropout(x)
-
-        # Get relative positional encodings for the current sequence length
-        rel_pos = self.relative_positional_encoding(x.size(1))
-
-        # LSTM layer
         x, _ = self.lstm(x)
-
-        # Apply Transformer Encoder with relative attention
-        for layer in self.layers:
-            x, _ = layer(x, rel_pos, mask=src_key_padding_mask)
-
+        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
         x = self.fc(x)
-
         return x
+
     
 def masked_loss(output, target, mask, idx, ignore_index=-1):
     # Loss function focused on predicting the specific category
