@@ -326,11 +326,19 @@ class CircularRelativePositionAttention(nn.Module):
         self.batch_first = batch_first
 
         # Relative position encodings
+        #self.relative_position_k = nn.Parameter(
+        #    torch.randn(max_len, d_model // num_heads)
+        #)
+        #self.relative_position_v = nn.Parameter(
+        #    torch.randn(max_len, d_model // num_heads)
+        #)
+
+        # Relative position encodings - intialise at zero 
         self.relative_position_k = nn.Parameter(
-            torch.randn(max_len, d_model // num_heads)
+            torch.zeros(max_len, d_model // num_heads)
         )
         self.relative_position_v = nn.Parameter(
-            torch.randn(max_len, d_model // num_heads)
+            torch.zeros(max_len, d_model // num_heads)
         )
 
     def forward(self, query, key, value, attn_mask=None, is_causal=False):
