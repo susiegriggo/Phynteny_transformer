@@ -58,6 +58,7 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         self.training = training
 
     def category_mask_old(self, category):
+
         # select a category to randomly mask
         idx = random.randint(0, len(category) - 1)
         while category[idx] == -1:
@@ -325,7 +326,7 @@ class CircularRelativePositionAttention(nn.Module):
         self.max_len = max_len
         self.batch_first = batch_first
 
-        # Relative position encodings
+        # Relative position encodings # this to intialise with random numbers 
         #self.relative_position_k = nn.Parameter(
         #    torch.randn(max_len, d_model // num_heads)
         #)
@@ -333,7 +334,7 @@ class CircularRelativePositionAttention(nn.Module):
         #    torch.randn(max_len, d_model // num_heads)
         #)
 
-        # Relative position encodings - intialise at zero 
+        # Relative position encodings - intialise at zero - better to zero inialise or one intialise 
         self.relative_position_k = nn.Parameter(
             torch.zeros(max_len, d_model // num_heads)
         )
@@ -451,7 +452,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
 
         self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
         self.dropout = nn.Dropout(dropout).cuda()
-        self.positional_encoding = nn.Parameter(torch.zeros(max_len, hidden_dim)).cuda()
+        self.positional_encoding = nn.Parameter(torch.zeros(max_len, hidden_dim)).cuda() # I think this here is an abosolution position 
         self.lstm = nn.LSTM(
             hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True
         ).cuda()
@@ -663,7 +664,13 @@ def train_crossValidation(
             collate_fn=collate_fn,
             pin_memory=True,
         )
+
+        # save the validation data object as well as the keys used in validtaiokn 
         pickle.dump(val_kfold_loader, open(output_dir + "/val_kfold_loader.pkl", "wb"))
+        validation_keys = list(dataset.keys())[val_index]
+        with open(output_dir + "/val_kfold_keys.txt", "w") as file: 
+            for k in validation_keys: 
+                file.write(f"{item}\n")
 
         # Initialize model
         input_dim = dataset[0][0].shape[1]
