@@ -144,7 +144,7 @@ def extract_features(this_phage, key):
     # get sequence and replace ambiguous amino acid J with X
     sequence = [
         SeqRecord(
-            Seq(this_CDS[i].qualifiers.get("translation")[0].replace("J", "X")),
+            Seq(this_CDS[i].qualifiers.get("translation")[0].replace("J", "X").rstrip('*')),
             id=key + "_" + str(i),
             description=key + "_" + str(i),
         )
