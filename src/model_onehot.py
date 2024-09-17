@@ -473,30 +473,50 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         x = x.float()
         x = self.embedding_layer(x)
         x = x + self.positional_encoding[: x.size(1), :]
-
         x = self.dropout(x)
         x, _ = self.lstm(x)
         x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
         x = self.fc(x)
         return x
 
-
 def masked_loss(output, target, mask, idx, ignore_index=-1):
     # Loss function focused on predicting the specific category
+    # Temp that doesn't work with batched data. Come back to this later 
     target = target.clone()
-    target[mask == 0] = ignore_index
     loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").cuda()
     loss = loss_fct(output.view(-1, output.size(-1)), target.view(-1))
-    return loss[idx].sum() / len(idx)
+    return loss[idx].sum() / len(idx[0])
+
+
+def masked_loss(output, target, mask, idx, ignore_index=-1):
+    # Assuming `output` is of shape [batch_size, seq_len, num_classes]
+    batch_size, seq_len, num_classes = output.shape
+
+    # Flatten the batch and sequence dimensions
+    output_flat = output.view(-1, num_classes)  # [batch_size * seq_len, num_classes]
+    target_flat = target.view(-1)  # [batch_size * seq_len]
+    mask_flat = mask.view(-1)  # [batch_size * seq_len]
+
+    # Only consider the elements at the specific `idx` positions
+    idx_flat = idx[0].view(-1)  # Adjust `idx` for batched inputs
+
+    # Apply the mask (where mask == 0, set ignore_index in target)
+    target_flat[mask_flat == 0] = ignore_index
+
+    # Calculate loss using CrossEntropyLoss (ignoring masked positions)
+    loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").cuda()
+    loss = loss_fct(output_flat, target_flat)
+
+    # Return the loss only for the specific indices
+    return loss[idx_flat].sum() / len(idx_flat)
 
 
 def collate_fn(batch):
     embeddings, categories, masks, idx = zip(*batch)
     embeddings_padded = pad_sequence(embeddings, batch_first=True)
     categories_padded = pad_sequence(categories, batch_first=True, padding_value=-1)
-    masks_padded = pad_sequence(masks, batch_first=True, padding_value=0)
+    masks_padded = pad_sequence(masks, batch_first=True, padding_value=-2)
     return embeddings_padded, categories_padded, masks_padded, idx
-
 
 def loss(output, target, mask, ignore_index=-1):
     # this loss function should be looking at the predicting gene not everything
@@ -507,22 +527,23 @@ def loss(output, target, mask, ignore_index=-1):
     loss = loss * mask.view(-1)
     return loss.sum() / mask.sum()
 
-
 def train(
     model,
     train_dataloader,
     test_dataloader,
     epochs=10,
+    step_size=10, 
+    gamma=0.1,
     lr=1e-5,
     save_path="model",
-    
     device="cuda",
     mask_unknowns=True,
+    checkpoint_interval=1
 ):
     logger.info("Training on " + str(device))
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=10, gamma=0.1)
+    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
     scaler = GradScaler()
     train_losses = []
     val_losses = []
@@ -539,7 +560,7 @@ def train(
             )
             optimizer.zero_grad()
             if mask_unknowns:
-                src_key_padding_mask = (masks == 0).bool()  # Mask for transformer
+                src_key_padding_mask = (masks == -2).bool()  # Mask the padding from the transformer 
             else:
                 src_key_padding_mask = None
             with autocast():
@@ -572,7 +593,10 @@ def train(
                     categories.to(device).long(),
                     masks.to(device).float(),
                 )
-                src_key_padding_mask = (masks == 0).bool()  # Mask for transformer
+                if mask_unknowns:
+                    src_key_padding_mask = (masks == -2).bool()  # Mask the padding from the transformer 
+                else:
+                    src_key_padding_mask = None
                 with autocast():
                     outputs = model(
                         embeddings, src_key_padding_mask=src_key_padding_mask
@@ -592,6 +616,12 @@ def train(
 
         # Update scheduler
         scheduler.step()
+
+        # save checkpoint every 'checkpoint interval' epochs 
+        if (epoch + 1) % checkpoint_interval == 0:
+            checkpoint_path = os.path.join(save_path, f"checkpoint_epoch_{epoch + 1}.pt")
+            torch.save(model.state_dict(), checkpoint_path)
+            logger.info(f"Checkpoint saved: {checkpoint_path}")
 
     # Save the model
     torch.save(model.state_dict(), save_path + "transformer.model")
@@ -615,12 +645,15 @@ def train_crossValidation(
     batch_size=16,
     epochs=10,
     lr=1e-5,
+    step_size=10, 
+    gamma=0.1,
     save_path="out",
     num_heads=4,
     hidden_dim=512,
     device="cuda",
     dropout=0.1,
     mask_unknowns=True,
+    checkpoint_interval=1
 ):
     # access the logger object
     logger.add(save_path + "trainer.log", level="DEBUG")
@@ -667,10 +700,9 @@ def train_crossValidation(
 
         # save the validation data object as well as the keys used in validtaiokn 
         pickle.dump(val_kfold_loader, open(output_dir + "/val_kfold_loader.pkl", "wb"))
-        validation_keys = list(dataset.keys())[val_index]
         with open(output_dir + "/val_kfold_keys.txt", "w") as file: 
-            for k in validation_keys: 
-                file.write(f"{item}\n")
+            for k in val_index: 
+                file.write(f"{k}\n")
 
         # Initialize model
         input_dim = dataset[0][0].shape[1]
@@ -714,6 +746,8 @@ def train_crossValidation(
             val_kfold_loader,
             epochs=epochs,
             lr=lr,
+            step_size=step_size, 
+            gamma=gamma, 
             save_path=output_dir,
             device=device,
             mask_unknowns=mask_unknowns,
@@ -722,9 +756,6 @@ def train_crossValidation(
         # Clear cache after training each fold
         gc.collect()
         torch.cuda.empty_cache()
-
-        # Evaluate performance for this kfold #TODO move this out of this function as a separate script as this changes
-        # evaluate(kfold_transformer_model, val_kfold_loader, phrog_integer, device, output_dir=output_dir)
 
         fold += 1
 

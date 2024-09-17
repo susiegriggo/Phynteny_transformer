@@ -132,7 +132,7 @@ def main(
         train_dataset,
         attention,
         n_splits=10,
-        batch_size=1,
+        batch_size=1, # have changed this batch size to 16 
         epochs=epochs,
         lr=lr,
         save_path=out,
