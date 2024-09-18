@@ -24,12 +24,6 @@ import os
     default=False,
     help="Shuffle order of the genes. Helpful for determining if gene order increases predictive power",
 )
-@click.option(
-    "--unmask_unknowns",
-    is_flag=True,
-    default=False,
-    help="Do not mask unknown gene functions from the model",
-)
 @click.option("--lr", default=1e-6, help="Learning rate for the optimizer.", type=float)
 @click.option("--epochs", default=15, help="Number of training epochs.", type=int)
 @click.option(
@@ -39,6 +33,12 @@ import os
     "--hidden_dim",
     default=512,
     help="Hidden dimension size for the transformer model.",
+    type=int,
+)
+@click.option(
+    "--batch_size",
+    default=1,
+    help="Batch size used to train the model.",
     type=int,
 )
 @click.option(
@@ -67,8 +67,8 @@ def main(
     epochs,
     hidden_dim,
     num_heads,
+    batch_size, 
     out,
-    unmask_unknowns,
     dropout,
     device,
 ):
@@ -123,16 +123,13 @@ def main(
     train_dataset.set_training(True)
     logger.info("\nTraining model...")
 
-    if unmask_unknowns:
-        mask_unknowns = False
-    else:
-        mask_unknowns = True
 
+    #TODO add step size as another parameter 
     model_onehot.train_crossValidation(
         train_dataset,
         attention,
         n_splits=10,
-        batch_size=1, # have changed this batch size to 16 
+        batch_size=batch_size, # have changed this batch size to 16 
         epochs=epochs,
         lr=lr,
         save_path=out,
@@ -140,7 +137,6 @@ def main(
         hidden_dim=hidden_dim,
         dropout=dropout,
         device=device,
-        mask_unknowns=mask_unknowns,
     )
 
     # Evaluate the model

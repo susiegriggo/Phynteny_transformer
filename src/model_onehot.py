@@ -538,13 +538,19 @@ def train(
     lr=1e-5,
     save_path="model",
     device="cuda",
-    mask_unknowns=True,
     checkpoint_interval=1
 ):
     logger.info("Training on " + str(device))
     model.to(device)
     optimizer = optim.Adam(model.parameters(), lr=lr)
-    scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma)
+    #scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma) # original scheduler 
+    scheduler = optim.lr_scheduler.OneCycleLR( # this scheudler uses a warmup - might be a good comparison 
+        optimizer, 
+        max_lr=lr, 
+        total_steps=len(train_dataloader)*epochs,
+        epochs=epochs, 
+        pct_start=0.3
+    )
     scaler = GradScaler()
     train_losses = []
     val_losses = []
@@ -560,10 +566,10 @@ def train(
                 masks.to(device).float(),
             )
             optimizer.zero_grad()
-            if mask_unknowns:
-                src_key_padding_mask = (masks == -2).bool()  # Mask the padding from the transformer 
-            else:
-                src_key_padding_mask = None
+            
+            # Mask the padding from the transformer 
+            src_key_padding_mask = (masks == -2).bool()
+           
             with autocast():
                 outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
                 loss = masked_loss(
@@ -594,10 +600,9 @@ def train(
                     categories.to(device).long(),
                     masks.to(device).float(),
                 )
-                if mask_unknowns:
-                    src_key_padding_mask = (masks == -2).bool()  # Mask the padding from the transformer 
-                else:
-                    src_key_padding_mask = None
+               
+                src_key_padding_mask = (masks == -2).bool()  # Mask the padding from the transformer 
+                
                 with autocast():
                     outputs = model(
                         embeddings, src_key_padding_mask=src_key_padding_mask
@@ -653,7 +658,6 @@ def train_crossValidation(
     hidden_dim=512,
     device="cuda",
     dropout=0.1,
-    mask_unknowns=True,
     checkpoint_interval=1
 ):
     # access the logger object
@@ -751,7 +755,6 @@ def train_crossValidation(
             gamma=gamma, 
             save_path=output_dir,
             device=device,
-            mask_unknowns=mask_unknowns,
         )
 
         # Clear cache after training each fold
