@@ -498,7 +498,8 @@ def masked_loss(output, target, mask, idx, ignore_index=-1):
     mask_flat = mask.view(-1)  # [batch_size * seq_len]
 
     # Only consider the elements at the specific `idx` positions
-    idx_flat = idx[0].view(-1)  # Adjust `idx` for batched inputs
+    idx_overall = [ii + val * seq_len for val, ii in enumerate(idx)] # adjust index for the flatten batch
+    idx_flat = torch.cat([t.flatten() for t in idx_overall]) # flatten indexes 
 
     # Apply the mask (where mask == 0, set ignore_index in target)
     target_flat[mask_flat == 0] = ignore_index
