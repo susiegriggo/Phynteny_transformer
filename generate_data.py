@@ -22,6 +22,12 @@ from Bio import SeqIO
     required=False,
 )
 @click.option(
+    "--model",
+    type=str,
+    help="Specify path to model if not the default",
+    required=False,
+)
+@click.option(
     "-m",
     "--maximum_genes",
     type=int,
@@ -65,13 +71,14 @@ def main(
     maximum_genes,
     prefix,
     out,
+    model,
     exclude_embedding,
     extra_features,
 ):
     # read in information for the phrog annotations
     # read in annotation file
     phrogs = pd.read_csv(
-        "/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv",
+        "~/susie_scratch/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv",
         sep="\t",
     )
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
@@ -79,7 +86,7 @@ def main(
     # read in integer encoding of the categories - #TODO try to automate this weird step
     phrog_integer = pickle.load(
         open(
-            "/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl",
+            "/scratch/pawsey1018/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl",
             "rb",
         )
     )
@@ -134,7 +141,7 @@ def main(
     # Extract the embeddings from the outputted fasta files
     print("Computing ESM embeddings", flush=True)
     print("... if step is being slow consider using GPU!")
-    embeddings = format_data.extract_embeddings(fasta_out, out)
+    embeddings = format_data.extract_embeddings(fasta_out, out, model_name=model)
 
     # move on to create training and testing data
     if extra_features:
