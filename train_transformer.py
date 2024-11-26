@@ -24,10 +24,12 @@ import os
     default=False,
     help="Shuffle order of the genes. Helpful for determining if gene order increases predictive power",
 )
+@click.option("--gamma", default=0.1, help="Gamma for the learning rate scheduler.", type=float)
+@click.option("--step_size", default=5, help="Step size for the learning rate scheduler.", type=int)
 @click.option("--lr", default=1e-6, help="Learning rate for the optimizer.", type=float)
 @click.option("--epochs", default=15, help="Number of training epochs.", type=int)
 @click.option(
-    "--dropout", default=0.1, help="Dropout value for dropout layer.", type=int
+    "--dropout", default=0.1, help="Dropout value for dropout layer.", type=float
 )
 @click.option(
     "--hidden_dim",
@@ -64,6 +66,8 @@ def main(
     attention,
     shuffle,
     lr,
+    gamma, 
+    step_size,
     epochs,
     hidden_dim,
     num_heads,
@@ -134,6 +138,8 @@ def main(
         lr=lr,
         save_path=out,
         num_heads=num_heads,
+        gamma=gamma, 
+        step_size=step_size,
         hidden_dim=hidden_dim,
         dropout=dropout,
         device=device,

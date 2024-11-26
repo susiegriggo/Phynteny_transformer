@@ -57,19 +57,6 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
     def set_training(self, training=True):
         self.training = training
 
-    def category_mask_old(self, category):
-
-        # select a category to randomly mask
-        idx = random.randint(0, len(category) - 1)
-        while category[idx] == -1:
-            idx = random.randint(0, len(category) - 1)
-
-        # generate masked versions
-        masked_category = category.clone()
-        masked_category[idx] = self.mask_token
-
-        return masked_category, idx
-
     def category_mask(self, category, mask):
         # Define a probability distribution over maskable tokens
         probability_distribution = mask.float() / mask.sum()
@@ -528,6 +515,19 @@ def loss(output, target, mask, ignore_index=-1):
     loss = loss * mask.view(-1)
     return loss.sum() / mask.sum()
 
+
+def cosine_lr_scheduler(optimizer, num_warmup_steps, num_training_steps, min_lr_ratio=0.1, last_epoch=-1):
+    """ 
+    From glm2 paper - thanks George for sharing! 
+    """
+    def lr_lambda(current_step: int):
+        if current_step < num_warmup_steps:
+            logger.info('warmup step')
+            return float(current_step) / float(max(1, num_warmup_steps))
+        return max(min_lr_ratio, 0.5 * (1.0 + np.cos(np.pi * (current_step - num_warmup_steps) / (num_training_steps - num_warmup_steps))))
+    return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
+
+
 def train(
     model,
     train_dataloader,
@@ -542,16 +542,35 @@ def train(
 ):
     logger.info("Training on " + str(device))
     model.to(device)
-    optimizer = optim.Adam(model.parameters(), lr=lr)
+
+    #optimizer = optim.Adam(model.parameters(), lr=lr) 
+    optimizer = optim.AdamW(model.parameters(), lr=lr, betas=(0.9,0.95), weight_decay=0.1) #adamW optimizer from the glm2 paper 
+
+    # original scheduler 
+    #print(f'Using Step LR', flush=True)
+    #print(f'Learning rate: {lr}', flush=True)
+    #print(f'Step size: {step_size}', flush=True)
+    #print(f'Gamma: {gamma}', flush=True)
     #scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma) # original scheduler 
-    scheduler = optim.lr_scheduler.OneCycleLR( # this scheudler uses a warmup - might be a good comparison 
-        optimizer, 
-        max_lr=lr, 
-        total_steps=len(train_dataloader)*epochs,
-        epochs=epochs, 
-        pct_start=0.3
-    )
+
+
+    #scheduler = optim.lr_scheduler.OneCycleLR( # this scheudler uses a warmup - might be a good comparison 
+    #    optimizer, 
+    #    max_lr=lr, 
+    #    total_steps=len(train_dataloader)*epochs,
+    #    epochs=epochs, 
+    #    pct_start=0.3
+    #)
+
+    # alternative scheduler - from glm2 
+    num_training_steps = len(train_dataloader)*epochs,
+    num_training_steps = epochs 
+    num_warmup_steps = 15 
+    print(f'num_training_steps {num_training_steps}', flush=True )
+    scheduler = cosine_lr_scheduler(optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps)
+
     scaler = GradScaler()
+    
     train_losses = []
     val_losses = []
 
@@ -622,6 +641,7 @@ def train(
 
         # Update scheduler
         scheduler.step()
+        logger.info(f'learning rate {scheduler.get_last_lr()}', flush=True)
 
         # save checkpoint every 'checkpoint interval' epochs 
         if (epoch + 1) % checkpoint_interval == 0:
