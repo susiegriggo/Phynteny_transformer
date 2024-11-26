@@ -120,33 +120,37 @@ class Seq2SeqTransformerClassifier(nn.Module):
         Difference is between the position of the LSTM layer and the the type of positional encoding that is used
         """
 
+        # check if cuda is available 
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
         # Embedding layer
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
-        self.dropout = nn.Dropout(dropout).cuda()  # think about where this layer goes
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim).to(device)
+        self.dropout = nn.Dropout(dropout).to(device)  # think about where this layer goes
 
         # Positional Encoding (now learnable) -  could try using the fixed sinusoidal embeddings instead
         self.positional_encoding = nn.Parameter(
             torch.zeros(1000, hidden_dim)
-        ).cuda()  # is zeroes good
+        ).to(device)  # is zeroes good
 
         # normalisation layer??
 
         # LSTM layer
         self.lstm = nn.LSTM(
             hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True
-        ).cuda()
+        ).to(device)
 
         # Transformer Encoder
         # encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads, batch_first=True).cuda()
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden_dim * 2, nhead=num_heads, batch_first=True
-        ).cuda()
+        ).to(device)
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer, num_layers=num_layers
-        ).cuda()
+        ).to(device)
 
         # Final Classification Layer
-        self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).cuda()
+        self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).to(device)
 
     def forward(self, x, src_key_padding_mask=None):
         x = x.float()
@@ -272,14 +276,19 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
     ):
         super(Seq2SeqTransformerClassifierRelativeAttention, self).__init__()
 
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
+
+        # Check if CUDA is available
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim).to(device)
         self.dropout = nn.Dropout(
             dropout
-        ).cuda()  # not sure if this is best spot and is a normalisation layer might be helpful
-        self.positional_encoding = nn.Parameter(torch.zeros(max_len, hidden_dim)).cuda()
+        ).to(device)  # not sure if this is best spot and is a normalisation layer might be helpful
+        self.positional_encoding = nn.Parameter(torch.zeros(max_len, hidden_dim)).to(device)
         self.lstm = nn.LSTM(
             hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True
-        ).cuda()
+        ).to(device)
 
         encoder_layers = CustomTransformerEncoderLayer(
             d_model=hidden_dim * 2,
@@ -289,9 +298,9 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         )
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layers, num_layers=num_layers
-        ).cuda()
+        ).to(device)
 
-        self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).cuda()
+        self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).to(device)
 
     def forward(self, x, src_key_padding_mask=None):
         x = x.float()
@@ -437,12 +446,16 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
     ):
         super(Seq2SeqTransformerClassifierCircularRelativeAttention, self).__init__()
 
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim).cuda()
-        self.dropout = nn.Dropout(dropout).cuda()
-        self.positional_encoding = nn.Parameter(torch.zeros(max_len, hidden_dim)).cuda() # I think this here is an abosolution position 
+        # Check if CUDA is available
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim).to(device)
+        self.dropout = nn.Dropout(dropout).to(device)
+        self.positional_encoding = nn.Parameter(torch.zeros(max_len, hidden_dim, device=device)).to(device) # I think this here is an abosolution position 
         self.lstm = nn.LSTM(
             hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True
-        ).cuda()
+        ).to(device)
 
         encoder_layers = CircularTransformerEncoderLayer(
             d_model=hidden_dim * 2,
@@ -452,9 +465,9 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         )
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layers, num_layers=num_layers
-        ).cuda()
+        ).to(device)
 
-        self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).cuda()
+        self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).to(device)
 
     def forward(self, x, src_key_padding_mask=None):
         x = x.float()
@@ -469,8 +482,12 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
 def masked_loss(output, target, mask, idx, ignore_index=-1):
     # Loss function focused on predicting the specific category
     # Temp that doesn't work with batched data. Come back to this later 
+
+    # Check if CUDA is available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     target = target.clone()
-    loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").cuda()
+    loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").to(device)
     loss = loss_fct(output.view(-1, output.size(-1)), target.view(-1))
     return loss[idx].sum() / len(idx[0])
 
@@ -478,6 +495,10 @@ def masked_loss(output, target, mask, idx, ignore_index=-1):
 def masked_loss(output, target, mask, idx, ignore_index=-1):
     # Assuming `output` is of shape [batch_size, seq_len, num_classes]
     batch_size, seq_len, num_classes = output.shape
+
+    # Check if CUDA is available
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
     # Flatten the batch and sequence dimensions
     output_flat = output.view(-1, num_classes)  # [batch_size * seq_len, num_classes]
@@ -492,7 +513,7 @@ def masked_loss(output, target, mask, idx, ignore_index=-1):
     target_flat[mask_flat == 0] = ignore_index
 
     # Calculate loss using CrossEntropyLoss (ignoring masked positions)
-    loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").cuda()
+    loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").to(device)
     loss = loss_fct(output_flat, target_flat)
 
     # Return the loss only for the specific indices
@@ -510,7 +531,7 @@ def loss(output, target, mask, ignore_index=-1):
     # this loss function should be looking at the predicting gene not everything
     target = target.clone()
     target[mask == 0] = ignore_index
-    loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").cuda()
+    loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").to(device)
     loss = loss_fct(output.view(-1, output.size(-1)), target.view(-1))
     loss = loss * mask.view(-1)
     return loss.sum() / mask.sum()
@@ -565,7 +586,7 @@ def train(
     # alternative scheduler - from glm2 
     num_training_steps = len(train_dataloader)*epochs,
     num_training_steps = epochs 
-    num_warmup_steps = 15 
+    num_warmup_steps = epochs/4
     print(f'num_training_steps {num_training_steps}', flush=True )
     scheduler = cosine_lr_scheduler(optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps)
 
