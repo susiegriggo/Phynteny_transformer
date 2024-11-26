@@ -10,7 +10,10 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from loguru import logger
 import re
+import shutil
 import pickle
+import os
+import sys
 
 
 def get_dict(dict_path):
@@ -31,6 +34,32 @@ def get_dict(dict_path):
             )
     handle.close()
     return dictionary
+
+def instantiate_dir(output_dir, force):
+    """
+    Generate output directory releative to whether force has been specififed
+    """
+
+    # remove the existing outdir on force
+    if force == True:
+        if os.path.isdir(output_dir) == True:
+            shutil.rmtree(output_dir)
+
+        else:
+            print(
+                "\n--force was specficied even though the output directory does not exist \n"
+            )
+
+    # make directory if force is not specified
+    else:
+        if os.path.isdir(output_dir) == True:
+            sys.exit(
+                "\nOutput directory already exists and force was not specified. Please specify -f or --force to overwrite the output directory. \n"
+            )
+
+    # instantiate the output directory
+    os.mkdir(output_dir)
+
 
 
 def is_gzip_file(f):
