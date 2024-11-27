@@ -22,61 +22,75 @@ import gc
 
 class VariableSeq2SeqEmbeddingDataset(Dataset):
     def __init__(self, embeddings, categories, mask_token=-1, mask_portion=0.15):
-        self.embeddings = [embedding.float() for embedding in embeddings]
-        self.categories = [category.long() for category in categories]
-        self.mask_token = mask_token
-        self.num_classes = 10  # hard coded in for now
-        self.mask_portion = mask_portion
+        try:
+            self.embeddings = [embedding.float() for embedding in embeddings]
+            self.categories = [category.long() for category in categories]
+            self.mask_token = mask_token
+            self.num_classes = 10  # hard coded in for now
+            self.mask_portion = mask_portion
+        except Exception as e:
+            logger.error(f"Error initializing VariableSeq2SeqEmbeddingDataset: {e}")
+            raise
 
     def __len__(self):
-        return len(self.embeddings)
+        try:
+            return len(self.embeddings)
+        except Exception as e:
+            logger.error(f"Error getting length of dataset: {e}")
+            raise
 
     def __getitem__(self, idx):
-        embedding = self.embeddings[idx]
-        category = self.categories[idx]
-        mask = (
-            category != self.mask_token
-        ).float()  # 1 for valid, 0 for missing - this indicates which rows to consider when training
+        try:
+            embedding = self.embeddings[idx]
+            category = self.categories[idx]
+            mask = (
+                category != self.mask_token
+            ).float()  # 1 for valid, 0 for missing - this indicates which rows to consider when training
 
-        # select a random cateogory to mask if training
-        if self.training:
-            masked_category, idx = self.category_mask(category, mask)
-        else:
-            masked_category = category
+            # select a random category to mask if training
+            if self.training:
+                masked_category, idx = self.category_mask(category, mask)
+            else:
+                masked_category = category
 
-        # use the masked category to generate a one-hot encoding
-        one_hot = self.custom_one_hot_encode(masked_category)
+            # use the masked category to generate a one-hot encoding
+            one_hot = self.custom_one_hot_encode(masked_category)
 
-        # append the one_hot encoding to the front of the embedding
-        embedding_one_hot = torch.tensor(np.hstack((one_hot, embedding)))
+            # append the one_hot encoding to the front of the embedding
+            embedding_one_hot = torch.tensor(np.hstack((one_hot, embedding)))
 
-        self.embedding = embedding_one_hot
-
-        return embedding_one_hot, category, mask, idx
+            return embedding_one_hot, category
+        except Exception as e:
+            logger.error(f"Error getting item from dataset at index {idx}: {e}")
+            raise
 
     def set_training(self, training=True):
         self.training = training
 
     def category_mask(self, category, mask):
-        # Define a probability distribution over maskable tokens
-        probability_distribution = mask.float() / mask.sum()
+        try:
+            # Define a probability distribution over maskable tokens
+            probability_distribution = mask.float() / mask.sum()
 
-        # Calculate the number of tokens to mask based on input length
-        num_maskable_tokens = mask.sum().item()  # Count of maskable tokens
-        num_tokens_to_mask = max(
-            1, int(self.mask_portion * num_maskable_tokens)
-        )  # Ensure at least 1 token is masked
+            # Calculate the number of tokens to mask based on input length
+            num_maskable_tokens = mask.sum().item()  # Count of maskable tokens
+            num_tokens_to_mask = max(
+                1, int(self.mask_portion * num_maskable_tokens)
+            )  # Ensure at least 1 token is masked
 
-        # Sample tokens to mask
-        idx = torch.multinomial(
-            probability_distribution, num_samples=num_tokens_to_mask, replacement=False
-        )
+            # Sample tokens to mask
+            idx = torch.multinomial(
+                probability_distribution, num_samples=num_tokens_to_mask, replacement=False
+            )
 
-        # generate masked versions
-        masked_category = category.clone()
-        masked_category[idx] = self.mask_token
+            # generate masked versions
+            masked_category = category.clone()
+            masked_category[idx] = self.mask_token
 
-        return masked_category, idx
+            return masked_category, idx
+        except Exception as e:
+            logger.error(f"Error in category_mask: {e}")
+            raise
 
     def shuffle_rows(self):
         """
@@ -91,17 +105,21 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         self.categories = list(self.categories)
 
     def custom_one_hot_encode(self, data):
-        # Create the one-hot encoded array
-        one_hot_encoded = []
-        for value in data:
-            if value == -1:
-                one_hot_encoded.append([0] * self.num_classes)
-            else:
-                one_hot_row = [0] * self.num_classes
-                one_hot_row[value] = 1
-                one_hot_encoded.append(one_hot_row)
+        try:
+            # Create the one-hot encoded array
+            one_hot_encoded = []
+            for value in data:
+                if value == -1:
+                    one_hot_encoded.append([0] * self.num_classes)
+                else:
+                    one_hot_row = [0] * self.num_classes
+                    one_hot_row[value] = 1
+                    one_hot_encoded.append(one_hot_row)
 
-        return np.array(one_hot_encoded)
+            return np.array(one_hot_encoded)
+        except Exception as e:
+            logger.error(f"Error in custom_one_hot_encode: {e}")
+            raise
 
 
 class Seq2SeqTransformerClassifier(nn.Module):
@@ -338,7 +356,7 @@ class CircularRelativePositionAttention(nn.Module):
             torch.zeros(max_len, d_model // num_heads)
         )
 
-    def forward(self, query, key, value, attn_mask=None, is_causal=False):
+    def forward(self, query, key, value, attn_mask=None, is_causal=False, output_dir=None):
         if not self.batch_first:
             query, key, value = (
                 query.transpose(0, 1),
@@ -379,7 +397,7 @@ class CircularRelativePositionAttention(nn.Module):
             .unsqueeze(0)
             .expand(batch_size, -1, -1, -1, -1)
         )
-        scores += torch.einsum("bhqd,bqkd->bhqk", q, rel_positions_k[0])  # error here
+        scores += torch.einsum("bhqd,bqkd->bhqk", q, rel_positions_k[0])
 
         if attn_mask is not None:
             scores = scores.masked_fill(attn_mask == 0, float("-inf"))
@@ -395,15 +413,17 @@ class CircularRelativePositionAttention(nn.Module):
         )
         attn_output += torch.einsum("bhqk,bqkd->bhqd", attn_weights, rel_positions_v[0])
 
-        # Reshape back to the original shape
-        attn_output = (
-            attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
-        )
+        attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
 
         if not self.batch_first:
             attn_output = attn_output.transpose(0, 1)
 
-        return attn_output
+        # Save attention weights to a file if output_dir is provided
+        if output_dir is not None:
+            with open(os.path.join(output_dir, "attention_weights.pkl"), "wb") as f:
+                pickle.dump(attn_weights.cpu().detach().numpy(), f)
+
+        return attn_output, attn_weights
 
 
 class CircularTransformerEncoderLayer(nn.Module):
@@ -867,11 +887,4 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_outpu
     print("labels")
     print(labels)
 
-    # Save F1, precision, recall to CSV
-    # metrics_df = pd.DataFrame({
-    #    'Category': [phrog_integer.get(i) for i in range(0,10)],
-    #    'F1': f1,
-    #    'Precision': precision,
-    #    'Recall': recall
-    # })
-    # metrics_df.to_csv(os.path.join(output_dir, 'metrics_with_optimal_thresholds.csv'), index=False)
+

@@ -6,6 +6,12 @@ from src import model_onehot
 import os
 
 
+def validate_num_heads(ctx, param, value):
+    if value % 4 != 0:
+        raise click.BadParameter("Number of attention heads must be divisible by 4.")
+    return value
+ 
+
 @click.command()
 @click.option("--x_path", "-x", help="File path to X training data")
 @click.option("--y_path", "-y", help="File path to y training data")
@@ -48,6 +54,7 @@ import os
     default=4,
     help="Number of attention heads in the transformer model.",
     type=int,
+    callback=validate_num_heads,
 )
 @click.option(
     "-o",
