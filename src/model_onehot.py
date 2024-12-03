@@ -170,19 +170,21 @@ class Seq2SeqTransformerClassifier(nn.Module):
         # Final Classification Layer
         self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).to(device)
 
-    def forward(self, x, src_key_padding_mask=None):
+    def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         x = x.float()
         x = self.embedding_layer(x)
         x = x + self.positional_encoding[: x.size(1), :]
 
         x = self.dropout(x)
         x, _ = self.lstm(x)  # LSTM layer
-        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
-
-        # self.fc(x)
-        x = self.fc(x)  # not sure if we need to use this version instead
-
-        return x
+        if return_attn_weights:
+            x, attn_weights = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+            x = self.fc(x)
+            return x, attn_weights
+        else:
+            x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
+            x = self.fc(x)
+            return x
 
 
 class RelativePositionAttention(nn.Module):
@@ -269,15 +271,23 @@ class CustomTransformerEncoderLayer(nn.Module):
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
 
-    def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False):
-        # Ensure src is in batch-first format (batch_size, seq_len, d_model)
-        src2 = self.self_attn(src, src, src, attn_mask=src_mask)
-        src = src + self.dropout1(src2)
-        src = self.norm1(src)
-        src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
-        src = src + self.dropout2(src2)
-        src = self.norm2(src)
-        return src
+    def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False, return_attn_weights=False):
+        if return_attn_weights:
+            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask)
+            src = src + self.dropout1(src2)
+            src = self.norm1(src)
+            src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
+            src = src + self.dropout2(src2)
+            src = self.norm2(src)
+            return src, attn_weights
+        else:
+            src2 = self.self_attn(src, src, src, attn_mask=src_mask)
+            src = src + self.dropout1(src2)
+            src = self.norm1(src)
+            src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
+            src = src + self.dropout2(src2)
+            src = self.norm2(src)
+            return src
 
 
 class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
@@ -320,16 +330,23 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
 
         self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).to(device)
 
-    def forward(self, x, src_key_padding_mask=None):
+    def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         x = x.float()
         x = self.embedding_layer(x)
         x = x + self.positional_encoding[: x.size(1), :]
 
         x = self.dropout(x)
         x, _ = self.lstm(x)
-        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
-        x = self.fc(x)
-        return x
+        if return_attn_weights:
+            x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+            for layer in self.transformer_encoder.layers[1:]:
+                x = layer(x, src_key_padding_mask=src_key_padding_mask)
+            x = self.fc(x)
+            return x, attn_weights
+        else:
+            x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
+            x = self.fc(x)
+            return x
 
 
 class CircularRelativePositionAttention(nn.Module):
@@ -356,7 +373,11 @@ class CircularRelativePositionAttention(nn.Module):
             torch.zeros(max_len, d_model // num_heads)
         )
 
+<<<<<<< HEAD
     def forward(self, query, key, value, attn_mask=None, is_causal=False, output_dir=None):
+=======
+    def forward(self, query, key, value, attn_mask=None, is_causal=False, output_dir=None, batch_idx=None, return_attn_weights=False):
+>>>>>>> 37b13a8
         if not self.batch_first:
             query, key, value = (
                 query.transpose(0, 1),
@@ -419,11 +440,23 @@ class CircularRelativePositionAttention(nn.Module):
             attn_output = attn_output.transpose(0, 1)
 
         # Save attention weights to a file if output_dir is provided
+<<<<<<< HEAD
         if output_dir is not None:
             with open(os.path.join(output_dir, "attention_weights.pkl"), "wb") as f:
                 pickle.dump(attn_weights.cpu().detach().numpy(), f)
 
         return attn_output, attn_weights
+=======
+        if output_dir is not None and batch_idx is not None:
+            attn_weights_path = os.path.join(output_dir, f"attention_weights_batch_{batch_idx}.pkl")
+            with open(attn_weights_path, "wb") as f:
+                pickle.dump(attn_weights.cpu().detach().numpy(), f)
+
+        if return_attn_weights:
+            return attn_output, attn_weights
+        else:
+            return attn_output
+>>>>>>> 37b13a8
 
 
 class CircularTransformerEncoderLayer(nn.Module):
@@ -431,7 +464,7 @@ class CircularTransformerEncoderLayer(nn.Module):
         self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000
     ):
         super(CircularTransformerEncoderLayer, self).__init__()
-        self.self_attn = CircularRelativePositionAttention(
+        self.self_attn= CircularRelativePositionAttention(
             d_model, num_heads, max_len=max_len, batch_first=True
         )
         self.linear1 = nn.Linear(d_model, dim_feedforward)
@@ -442,15 +475,24 @@ class CircularTransformerEncoderLayer(nn.Module):
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
 
-    def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False):
-        src2 = self.self_attn(src, src, src, attn_mask=src_mask)
-        src = src + self.dropout1(src2)
-        src = self.norm1(src)
-        src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
-        src = src + self.dropout2(src2)
-        src = self.norm2(src)
-        return src
-
+    def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False, return_attn_weights=False):
+        if return_attn_weights: 
+            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, is_causal=is_causal, return_attn_weights=return_attn_weights)
+            src = src + self.dropout1(src2)
+            src = self.norm1(src)
+            src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
+            src = src + self.dropout2(src2)
+            src = self.norm2(src)
+            return src, attn_weights
+        else: 
+            src2 = self.self_attn(src, src, src, attn_mask=src_mask, is_causal=is_causal)
+            src = src + self.dropout1(src2)
+            src = self.norm1(src)
+            src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
+            src = src + self.dropout2(src2)
+            src = self.norm2(src)
+            return src
+            
 
 class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
     def __init__(
@@ -489,15 +531,22 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
 
         self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).to(device)
 
-    def forward(self, x, src_key_padding_mask=None):
+    def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         x = x.float()
         x = self.embedding_layer(x)
         x = x + self.positional_encoding[: x.size(1), :]
         x = self.dropout(x)
         x, _ = self.lstm(x)
-        x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
-        x = self.fc(x)
-        return x
+        if return_attn_weights:
+            x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+            for layer in self.transformer_encoder.layers[1:]:
+                x = layer(x, src_key_padding_mask=src_key_padding_mask)
+            x = self.fc(x)
+            return x, attn_weights
+        else:
+            x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
+            x = self.fc(x)
+            return x
 
 def masked_loss(output, target, mask, idx, ignore_index=-1):
     # Loss function focused on predicting the specific category
@@ -614,6 +663,8 @@ def train(
     
     train_losses = []
     val_losses = []
+    final_validation_weights = []
+    final_validation_attention = [] 
 
     logger.info("Beginning training loop")
     for epoch in range(epochs):
@@ -664,13 +715,22 @@ def train(
                 src_key_padding_mask = (masks == -2).bool()  # Mask the padding from the transformer 
                 
                 with autocast():
-                    outputs = model(
-                        embeddings, src_key_padding_mask=src_key_padding_mask
-                    )
+                    if epoch == epochs - 1:
+                        outputs, attn_weights = model(
+                            embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True
+                        )
+                        final_validation_weights.append(outputs.cpu().detach().numpy())
+                        final_validation_attention.append(attn_weights.cpu().detach().numpy())
+                    else:
+                        outputs = model(
+                            embeddings, src_key_padding_mask=src_key_padding_mask
+                        )
                     val_loss = masked_loss(
                         outputs, categories, masks, idx
                     )  # need to include idx in the loss function
                 total_val_loss += val_loss.item()
+
+
 
         avg_val_loss = total_val_loss / len(test_dataloader)
         val_losses.append(avg_val_loss)
@@ -704,6 +764,12 @@ def train(
     output_dir = f"{save_path}"
     loss_df.to_csv(os.path.join(output_dir, "metrics.csv"), index=False)
 
+    # Save the final validation weights and attention weights
+    with open(os.path.join(save_path, "final_validation_weights.pkl"), "wb") as f:
+        pickle.dump(final_validation_weights, f)
+
+    with open(os.path.join(save_path, "final_validation_attention.pkl"), "wb") as f:
+        pickle.dump(final_validation_attention, f)
 
 def train_crossValidation(
     dataset,
@@ -879,12 +945,9 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_outpu
     recall = recall_score(all_labels, all_preds, average=None, zero_division=1)
 
     print("f1")
-    print(f1)
-    print("precision")
-    print(precision)
-    print("recall")
-    print(recall)
-    print("labels")
-    print(labels)
+    print
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> 37b13a8
