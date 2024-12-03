@@ -59,7 +59,7 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
             # append the one_hot encoding to the front of the embedding
             embedding_one_hot = torch.tensor(np.hstack((one_hot, embedding)))
 
-            return embedding_one_hot, category
+            return embedding_one_hot, category, mask, idx
         except Exception as e:
             logger.error(f"Error getting item from dataset at index {idx}: {e}")
             raise
@@ -717,7 +717,6 @@ def train(
                         outputs, categories, masks, idx
                     )  # need to include idx in the loss function
                 total_val_loss += val_loss.item()
-
 
 
         avg_val_loss = total_val_loss / len(test_dataloader)
