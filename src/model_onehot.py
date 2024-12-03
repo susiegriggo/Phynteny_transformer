@@ -373,11 +373,7 @@ class CircularRelativePositionAttention(nn.Module):
             torch.zeros(max_len, d_model // num_heads)
         )
 
-<<<<<<< HEAD
-    def forward(self, query, key, value, attn_mask=None, is_causal=False, output_dir=None):
-=======
     def forward(self, query, key, value, attn_mask=None, is_causal=False, output_dir=None, batch_idx=None, return_attn_weights=False):
->>>>>>> 37b13a8
         if not self.batch_first:
             query, key, value = (
                 query.transpose(0, 1),
@@ -440,13 +436,6 @@ class CircularRelativePositionAttention(nn.Module):
             attn_output = attn_output.transpose(0, 1)
 
         # Save attention weights to a file if output_dir is provided
-<<<<<<< HEAD
-        if output_dir is not None:
-            with open(os.path.join(output_dir, "attention_weights.pkl"), "wb") as f:
-                pickle.dump(attn_weights.cpu().detach().numpy(), f)
-
-        return attn_output, attn_weights
-=======
         if output_dir is not None and batch_idx is not None:
             attn_weights_path = os.path.join(output_dir, f"attention_weights_batch_{batch_idx}.pkl")
             with open(attn_weights_path, "wb") as f:
@@ -456,7 +445,6 @@ class CircularRelativePositionAttention(nn.Module):
             return attn_output, attn_weights
         else:
             return attn_output
->>>>>>> 37b13a8
 
 
 class CircularTransformerEncoderLayer(nn.Module):
@@ -947,7 +935,3 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_outpu
     print("f1")
     print
 
-<<<<<<< HEAD
-
-=======
->>>>>>> 37b13a8
