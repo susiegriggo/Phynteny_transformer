@@ -252,10 +252,7 @@ class RelativePositionAttention(nn.Module):
             # If batch is not first, transpose back the batch and sequence dimensions
             attn_output = attn_output.transpose(0, 1)
 
-        if return_attn_weights:
-            return attn_output, attn_weights
-        else:
-            return attn_output
+        return attn_output
 
 
 class CustomTransformerEncoderLayer(nn.Module):
@@ -502,8 +499,14 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         # Check if CUDA is available
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # try adding some embedding layers 
+        self.func_embedding = nn.Embedding(10, 16).to(device)
+        self.strand_embedding = nn.Embedding(2, 4).to(device)
+        self.length_embedding = nn.Linear(1,8).to(device) # linear embedding for the protein embedding
 
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim).to(device)
+        # linear embedding for the protein embedding
+        self.embedding_layer = nn.Linear(1280, hidden_dim -28).to(device)
+
         self.dropout = nn.Dropout(dropout).to(device)
         self.positional_encoding = nn.Parameter(torch.zeros(max_len, hidden_dim, device=device)).to(device) # I think this here is an abosolution position 
         self.lstm = nn.LSTM(
@@ -524,10 +527,17 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         x = x.float()
-        x = self.embedding_layer(x)
+        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
+        func_embeds = self.func_embedding(func_ids.argmax(-1))
+        strand_embeds = self.strand_embedding(strand_ids.argmax(-1))
+        length_embeds = self.length_embedding(gene_length)
+        protein_embeds = self.embedding_layer(protein_embeds)
+
+        x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
         x = x + self.positional_encoding[: x.size(1), :]
         x = self.dropout(x)
         x, _ = self.lstm(x)
+
         if return_attn_weights:
             x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
             for layer in self.transformer_encoder.layers[1:]:
