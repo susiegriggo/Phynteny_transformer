@@ -203,7 +203,7 @@ class RelativePositionAttention(nn.Module):
             torch.randn(max_len, d_model // num_heads)
         )
 
-    def forward(self, query, key, value, attn_mask=None):
+    def forward(self, query, key, value, attn_mask=None, return_attn_weights=False):
         if not self.batch_first:
             # If batch is not first, transpose the batch and sequence dimensions
             query, key, value = (
@@ -252,7 +252,10 @@ class RelativePositionAttention(nn.Module):
             # If batch is not first, transpose back the batch and sequence dimensions
             attn_output = attn_output.transpose(0, 1)
 
-        return attn_output
+        if return_attn_weights:
+            return attn_output, attn_weights
+        else:
+            return attn_output
 
 
 class CustomTransformerEncoderLayer(nn.Module):
@@ -260,7 +263,7 @@ class CustomTransformerEncoderLayer(nn.Module):
         self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000
     ):
         super(CustomTransformerEncoderLayer, self).__init__()
-        self.self_attn = RelativePositionAttention(
+        self.self_attn = RelativePositionAttention( # is this called by other methods? 
             d_model, num_heads, max_len=max_len, batch_first=True
         )
         self.linear1 = nn.Linear(d_model, dim_feedforward)
@@ -273,7 +276,7 @@ class CustomTransformerEncoderLayer(nn.Module):
 
     def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False, return_attn_weights=False):
         if return_attn_weights:
-            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask)
+            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, return_attn_weights=return_attn_weights) # this is a change here that I made 
             src = src + self.dropout1(src2)
             src = self.norm1(src)
             src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
