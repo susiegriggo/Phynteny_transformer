@@ -64,6 +64,24 @@ def validate_num_heads(ctx, param, value):
     type=click.STRING,
 )
 @click.option(
+    "--intialisation",
+    default="random",
+    help="Specify whether to initialise attention mechanism with zeros or random values.",
+    type=click.Choice(['random', 'zeros'], case_sensitive=False),
+)
+@click.option(
+    "--diagonal_loss",
+    is_flag=True,
+    help="Specify whether to use the diagonal loss function.",
+)
+@click.option(
+    "--lambda_penalty",
+    default=0.1,
+    help="Specify the lambda penalty for the diagonal loss function.",
+    type=float,
+)
+
+@click.option(
     "--device", default="cuda", help="specify cuda or cpu.", type=click.STRING
 )
 def main(
@@ -82,6 +100,9 @@ def main(
     out,
     dropout,
     device,
+    intialisation, 
+    diagonal_loss,
+    lambda_penalty,
 ):
     # Create the output directory if it doesn't exist
     if not os.path.exists(out):
@@ -150,6 +171,9 @@ def main(
         hidden_dim=hidden_dim,
         dropout=dropout,
         device=device,
+        intialisation=intialisation, 
+        diagonal_loss=diagonal_loss,
+        lambda_penalty=lambda_penalty,
     )
 
     # Evaluate the model

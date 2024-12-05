@@ -132,6 +132,7 @@ class Seq2SeqTransformerClassifier(nn.Module):
         hidden_dim=512,
         lstm_hidden_dim=512,
         dropout=0.1,
+        intialisation='random'
     ):
         super(Seq2SeqTransformerClassifier, self).__init__()
         """
@@ -141,17 +142,25 @@ class Seq2SeqTransformerClassifier(nn.Module):
         # check if cuda is available 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # Embedding layers
+        self.func_embedding = nn.Embedding(10, 16).to(device)
+        self.strand_embedding = nn.Embedding(2, 4).to(device)
+        self.length_embedding = nn.Linear(1, 8).to(device)
+        self.embedding_layer = nn.Linear(1280, hidden_dim - 28).to(device)
 
-        # Embedding layer
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim).to(device)
-        self.dropout = nn.Dropout(dropout).to(device)  # think about where this layer goes
+        self.dropout = nn.Dropout(dropout).to(device)  
 
         # Positional Encoding (now learnable) -  could try using the fixed sinusoidal embeddings instead
-        self.positional_encoding = nn.Parameter(
-            torch.zeros(1000, hidden_dim)
-        ).to(device)  # is zeroes good
-
-        # normalisation layer??
+        if intialisation == 'random':
+            self.positional_encoding = nn.Parameter(
+                torch.randn(1000, hidden_dim)
+            ).to(device)
+        elif intialisation == 'zero':
+            self.positional_encoding = nn.Parameter(
+                torch.zeros(1000, hidden_dim) 
+            ).to(device)
+        else: 
+            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zero'.")
 
         # LSTM layer
         self.lstm = nn.LSTM(
@@ -159,7 +168,6 @@ class Seq2SeqTransformerClassifier(nn.Module):
         ).to(device)
 
         # Transformer Encoder
-        # encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=num_heads, batch_first=True).cuda()
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=hidden_dim * 2, nhead=num_heads, batch_first=True
         ).to(device)
@@ -172,7 +180,13 @@ class Seq2SeqTransformerClassifier(nn.Module):
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         x = x.float()
-        x = self.embedding_layer(x)
+        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
+        func_embeds = self.func_embedding(func_ids.argmax(-1))
+        strand_embeds = self.strand_embedding(strand_ids.argmax(-1))
+        length_embeds = self.length_embedding(gene_length)
+        protein_embeds = self.embedding_layer(protein_embeds)
+
+        x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
         x = x + self.positional_encoding[: x.size(1), :]
 
         x = self.dropout(x)
@@ -188,7 +202,7 @@ class Seq2SeqTransformerClassifier(nn.Module):
 
 
 class RelativePositionAttention(nn.Module):
-    def __init__(self, d_model, num_heads, max_len=1000, batch_first=True):
+    def __init__(self, d_model, num_heads, max_len=1000, batch_first=True, intialisation = 'random'):
         super(RelativePositionAttention, self).__init__()
         self.num_heads = num_heads
         self.d_model = d_model
@@ -196,12 +210,22 @@ class RelativePositionAttention(nn.Module):
         self.batch_first = batch_first
 
         # Relative position encodings
-        self.relative_position_k = nn.Parameter(
-            torch.randn(max_len, d_model // num_heads)
-        )
-        self.relative_position_v = nn.Parameter(
-            torch.randn(max_len, d_model // num_heads)
-        )
+        if intialisation == 'random':
+            self.relative_position_k = nn.Parameter(
+                torch.randn(max_len, d_model // num_heads)
+            )
+            self.relative_position_v = nn.Parameter(
+                torch.randn(max_len, d_model // num_heads)
+            )
+        elif intialisation == 'zero':
+            self.relative_position_k = nn.Parameter(
+                torch.zeros(max_len, d_model // num_heads)
+            )               
+            self.relative_position_v = nn.Parameter(
+                torch.zeros(max_len, d_model // num_heads)
+            )           
+        else:       
+            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zero'.")
 
     def forward(self, query, key, value, attn_mask=None, return_attn_weights=False):
         if not self.batch_first:
@@ -257,11 +281,11 @@ class RelativePositionAttention(nn.Module):
 
 class CustomTransformerEncoderLayer(nn.Module):
     def __init__(
-        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000
+        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000, intialisation='random'
     ):
         super(CustomTransformerEncoderLayer, self).__init__()
         self.self_attn = RelativePositionAttention( # is this called by other methods? 
-            d_model, num_heads, max_len=max_len, batch_first=True
+            d_model, num_heads, max_len=max_len, batch_first=True, intialisation=intialisation
         )
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
@@ -301,19 +325,21 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         lstm_hidden_dim=512,
         dropout=0.1,
         max_len=1000,
+        intialisation='random'
     ):
         super(Seq2SeqTransformerClassifierRelativeAttention, self).__init__()
-
 
         # Check if CUDA is available
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # Embedding layers
+        self.func_embedding = nn.Embedding(10, 16).to(device)
+        self.strand_embedding = nn.Embedding(2, 4).to(device)
+        self.length_embedding = nn.Linear(1, 8).to(device)
+        self.embedding_layer = nn.Linear(1280, hidden_dim - 28).to(device)
 
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim).to(device)
-        self.dropout = nn.Dropout(
-            dropout
-        ).to(device)  # not sure if this is best spot and is a normalisation layer might be helpful
-        self.positional_encoding = nn.Parameter(torch.zeros(max_len, hidden_dim)).to(device)
+        self.dropout = nn.Dropout(dropout).to(device)
+        self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
         self.lstm = nn.LSTM(
             hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True
         ).to(device)
@@ -323,6 +349,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
             num_heads=num_heads,
             dropout=dropout,
             max_len=max_len,
+            intialisation=intialisation
         )
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layers, num_layers=num_layers
@@ -332,7 +359,13 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         x = x.float()
-        x = self.embedding_layer(x)
+        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
+        func_embeds = self.func_embedding(func_ids.argmax(-1))
+        strand_embeds = self.strand_embedding(strand_ids.argmax(-1))
+        length_embeds = self.length_embedding(gene_length)
+        protein_embeds = self.embedding_layer(protein_embeds)
+
+        x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
         x = x + self.positional_encoding[: x.size(1), :]
 
         x = self.dropout(x)
@@ -350,7 +383,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
 
 
 class CircularRelativePositionAttention(nn.Module):
-    def __init__(self, d_model, num_heads, max_len=1000, batch_first=True):
+    def __init__(self, d_model, num_heads, max_len=1000, batch_first=True, intialisation = 'random'):
         super(CircularRelativePositionAttention, self).__init__()
         self.num_heads = num_heads
         self.d_model = d_model
@@ -358,21 +391,24 @@ class CircularRelativePositionAttention(nn.Module):
         self.batch_first = batch_first
 
         # Relative position encodings # this to intialise with random numbers 
-        #self.relative_position_k = nn.Parameter(
-        #    torch.randn(max_len, d_model // num_heads)
-        #)
-        #self.relative_position_v = nn.Parameter(
-        #    torch.randn(max_len, d_model // num_heads)
-        #)
+        if intialisation == 'random':
+            self.relative_position_k = nn.Parameter(
+                torch.randn(max_len, d_model // num_heads)
+            ) 
+            self.relative_position_v = nn.Parameter(
+                torch.randn(max_len, d_model // num_heads)
+            )  
 
-        # Relative position encodings - intialise at zero - better to zero inialise or one intialise 
-        self.relative_position_k = nn.Parameter(
-            torch.zeros(max_len, d_model // num_heads)
-        )
-        self.relative_position_v = nn.Parameter(
-            torch.zeros(max_len, d_model // num_heads)
-        )
-
+        elif intialisation == 'zero':
+            self.relative_position_k = nn.Parameter(
+                torch.zeros(max_len, d_model // num_heads)
+            ) 
+            self.relative_position_v = nn.Parameter(
+                torch.zeros(max_len, d_model // num_heads)
+            )
+        else:
+            raise ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zero'.")
+            
     def forward(self, query, key, value, attn_mask=None, is_causal=False, output_dir=None, batch_idx=None, return_attn_weights=False):
         if not self.batch_first:
             query, key, value = (
@@ -449,11 +485,11 @@ class CircularRelativePositionAttention(nn.Module):
 
 class CircularTransformerEncoderLayer(nn.Module):
     def __init__(
-        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000
+        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000, initialisation='random'
     ):
         super(CircularTransformerEncoderLayer, self).__init__()
         self.self_attn= CircularRelativePositionAttention(
-            d_model, num_heads, max_len=max_len, batch_first=True
+            d_model, num_heads, max_len=max_len, batch_first=True,intialisation=initialisation
         )
         self.linear1 = nn.Linear(d_model, dim_feedforward)
         self.dropout = nn.Dropout(dropout)
@@ -493,6 +529,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         lstm_hidden_dim=512,
         dropout=0.1,
         max_len=1000,
+        intialisation='random'
     ):
         super(Seq2SeqTransformerClassifierCircularRelativeAttention, self).__init__()
 
@@ -508,7 +545,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         self.embedding_layer = nn.Linear(1280, hidden_dim -28).to(device)
 
         self.dropout = nn.Dropout(dropout).to(device)
-        self.positional_encoding = nn.Parameter(torch.zeros(max_len, hidden_dim, device=device)).to(device) # I think this here is an abosolution position 
+        self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
         self.lstm = nn.LSTM(
             hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True
         ).to(device)
@@ -518,6 +555,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
             num_heads=num_heads,
             dropout=dropout,
             max_len=max_len,
+            initialisation=intialisation
         )
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layers, num_layers=num_layers
@@ -548,18 +586,6 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
             x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
             return x
-
-def masked_loss(output, target, mask, idx, ignore_index=-1):
-    # Loss function focused on predicting the specific category
-    # Temp that doesn't work with batched data. Come back to this later 
-
-    # Check if CUDA is available
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    target = target.clone()
-    loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").to(device)
-    loss = loss_fct(output.view(-1, output.size(-1)), target.view(-1))
-    return loss[idx].sum() / len(idx[0])
 
 
 def masked_loss(output, target, mask, idx, ignore_index=-1):
@@ -597,14 +623,51 @@ def collate_fn(batch):
     masks_padded = pad_sequence(masks, batch_first=True, padding_value=-2)
     return embeddings_padded, categories_padded, masks_padded, idx
 
-def loss(output, target, mask, ignore_index=-1):
-    # this loss function should be looking at the predicting gene not everything
-    target = target.clone()
-    target[mask == 0] = ignore_index
+def combined_loss(output, target, mask, attn_weights, idx, lambda_penalty=0.1, ignore_index=-1):
+    """
+    Combines classification loss with a diagonal attention penalty.
+    """
+    # Standard masked loss
+    batch_size, seq_len, num_classes = output.shape
+    device = output.device
+
+    output_flat = output.view(-1, num_classes)
+    target_flat = target.view(-1)
+    mask_flat = mask.view(-1)
+
+    # Adjust indices for flattened batch and sequence
+    idx_overall = [ii + val * seq_len for val, ii in enumerate(idx)]
+    idx_flat = torch.cat([t.flatten() for t in idx_overall])
+
+    # Apply the mask
+    target_flat[mask_flat == 0] = ignore_index
+
+    # Compute classification loss
     loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").to(device)
-    loss = loss_fct(output.view(-1, output.size(-1)), target.view(-1))
-    loss = loss * mask.view(-1)
-    return loss.sum() / mask.sum()
+    classification_loss = loss_fct(output_flat, target_flat)
+    classification_loss = classification_loss[idx_flat].sum() / len(idx_flat)
+
+    # Compute diagonal penalty
+    diagonal_penalty = diagonal_attention_penalty(attn_weights)
+
+    # Combined loss
+    total_loss = classification_loss + lambda_penalty * diagonal_penalty
+    return total_loss
+
+def diagonal_attention_penalty(attn_weights):
+    # attn_weights: [batch_size, num_heads, seq_len, seq_len]
+    batch_size, num_heads, seq_len, _ = attn_weights.size()
+    device = attn_weights.device
+
+    # Create a diagonal mask
+    diag_mask = torch.eye(seq_len, device=device).unsqueeze(0).unsqueeze(0)  # Shape: [1, 1, seq_len, seq_len]
+
+    # Extract diagonal attention weights
+    diag_values = attn_weights * diag_mask  # Retain only diagonal values
+
+    # Penalize the diagonal attention weights
+    penalty = diag_values.sum(dim=(-2, -1))  # Sum over seq_len dimensions
+    return penalty.mean()  # Return average penalty over batch and heads
 
 
 def cosine_lr_scheduler(optimizer, num_warmup_steps, num_training_steps, min_lr_ratio=0.1, last_epoch=-1):
@@ -618,6 +681,13 @@ def cosine_lr_scheduler(optimizer, num_warmup_steps, num_training_steps, min_lr_
         return max(min_lr_ratio, 0.5 * (1.0 + np.cos(np.pi * (current_step - num_warmup_steps) / (num_training_steps - num_warmup_steps))))
     return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
 
+def sinusoidal_positional_encoding(seq_len, d_model, device):
+    position = torch.arange(seq_len, dtype=torch.float, device=device).unsqueeze(1)
+    div_term = torch.exp(torch.arange(0, d_model, 2, device=device) * -(np.log(10000.0) / d_model))
+    pe = torch.zeros(seq_len, d_model, device=device)
+    pe[:, 0::2] = torch.sin(position * div_term)
+    pe[:, 1::2] = torch.cos(position * div_term)
+    return pe
 
 def train(
     model,
@@ -629,15 +699,18 @@ def train(
     lr=1e-5,
     save_path="model",
     device="cuda",
-    checkpoint_interval=1
+    checkpoint_interval=1, 
+    diagonal_loss=True, 
+    lambda_penalty=0.1
 ):
     logger.info("Training on " + str(device))
     model.to(device)
 
-    #optimizer = optim.Adam(model.parameters(), lr=lr) 
-    optimizer = optim.AdamW(model.parameters(), lr=lr, betas=(0.9,0.95), weight_decay=0.1) #adamW optimizer from the glm2 paper 
+    # Initialize optimizer
+    optimizer = optim.AdamW(model.parameters(), lr=lr, betas=(0.9,0.95), weight_decay=0.1)
 
-    # original scheduler 
+    # Initialize learning rate scheduler
+       # original scheduler 
     #print(f'Using Step LR', flush=True)
     #print(f'Learning rate: {lr}', flush=True)
     #print(f'Step size: {step_size}', flush=True)
@@ -654,12 +727,11 @@ def train(
     #)
 
     # alternative scheduler - from glm2 
-    num_training_steps = len(train_dataloader)*epochs,
-    num_training_steps = epochs 
-    num_warmup_steps = epochs/4
-    print(f'num_training_steps {num_training_steps}', flush=True )
+    num_training_steps = len(train_dataloader) * epochs
+    num_warmup_steps = epochs / 4
     scheduler = cosine_lr_scheduler(optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps)
 
+    # Initialize gradient scaler for mixed precision training
     scaler = GradScaler()
     
     train_losses = []
@@ -683,11 +755,19 @@ def train(
             src_key_padding_mask = (masks == -2).bool()
            
             with autocast():
-                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-                loss = masked_loss(
-                    outputs, categories, masks, idx
-                )  # need to specify which index to reference in the loss function
+                # Use the diagonal loss function if specified
+                if diagonal_loss: 
+                    outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                    loss = combined_loss(
+                        outputs, categories, masks, attn_weights, idx, lambda_penalty=lambda_penalty
+                    ) 
+                else:  
+                    outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                    loss = masked_loss(
+                        outputs, categories, masks, idx
+                    )
 
+            # Backpropagation and optimization
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
@@ -723,14 +803,21 @@ def train(
                         final_validation_weights.append(outputs.cpu().detach().numpy())
                         final_validation_attention.append(attn_weights.cpu().detach().numpy())
                     else:
-                        outputs = model(
-                            embeddings, src_key_padding_mask=src_key_padding_mask
-                        )
-                    val_loss = masked_loss(
-                        outputs, categories, masks, idx
-                    )  # need to include idx in the loss function
+                        if diagonal_loss:
+                            outputs, attn_weights = model(
+                                embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True
+                            )
+                            val_loss = combined_loss(
+                                outputs, categories, masks, attn_weights, idx, lambda_penalty=lambda_penalty
+                            )
+                        else:
+                            outputs = model(
+                                embeddings, src_key_padding_mask=src_key_padding_mask
+                            )
+                            val_loss = masked_loss(
+                                outputs, categories, masks, idx
+                            )
                 total_val_loss += val_loss.item()
-
 
         avg_val_loss = total_val_loss / len(test_dataloader)
         val_losses.append(avg_val_loss)
@@ -744,7 +831,7 @@ def train(
         scheduler.step()
         logger.info(f'learning rate {scheduler.get_last_lr()}', flush=True)
 
-        # save checkpoint every 'checkpoint interval' epochs 
+        # Save checkpoint every 'checkpoint_interval' epochs 
         if (epoch + 1) % checkpoint_interval == 0:
             checkpoint_path = os.path.join(save_path, f"checkpoint_epoch_{epoch + 1}.pt")
             torch.save(model.state_dict(), checkpoint_path)
@@ -785,7 +872,10 @@ def train_crossValidation(
     hidden_dim=512,
     device="cuda",
     dropout=0.1,
-    checkpoint_interval=1
+    checkpoint_interval=1, 
+    intialisation = 'random',
+    diagonal_loss=True,
+    lambda_penalty=0.1  
 ):
     # access the logger object
     logger.add(save_path + "trainer.log", level="DEBUG")
@@ -846,6 +936,7 @@ def train_crossValidation(
                     num_heads=num_heads,
                     hidden_dim=hidden_dim,
                     dropout=dropout,
+                    intialisation=intialisation
                 )
             )
         elif attention == "relative":
@@ -855,6 +946,7 @@ def train_crossValidation(
                 num_heads=num_heads,
                 hidden_dim=hidden_dim,
                 dropout=dropout,
+                intialisation=intialisation
             )
         elif attention == "absolute":
             kfold_transformer_model = Seq2SeqTransformerClassifier(
@@ -863,6 +955,7 @@ def train_crossValidation(
                 num_heads=num_heads,
                 hidden_dim=hidden_dim,
                 dropout=dropout,
+                intialisation=intialisation
             )
         else:
             logger.error("invalid attention type specified")
@@ -882,6 +975,9 @@ def train_crossValidation(
             gamma=gamma, 
             save_path=output_dir,
             device=device,
+            checkpoint_interval=checkpoint_interval,
+            diagonal_loss=diagonal_loss,
+            lambda_penalty=lambda_penalty
         )
 
         # Clear cache after training each fold
