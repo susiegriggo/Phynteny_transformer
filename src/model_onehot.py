@@ -22,6 +22,15 @@ import gc
 
 class VariableSeq2SeqEmbeddingDataset(Dataset):
     def __init__(self, embeddings, categories, mask_token=-1, mask_portion=0.15):
+        """
+        Initialize the dataset with embeddings and categories.
+
+        Parameters:
+        embeddings (list of torch.Tensor): List of embedding tensors.
+        categories (list of torch.Tensor): List of category tensors.
+        mask_token (int): Token used for masking.
+        mask_portion (float): Portion of tokens to mask during training.
+        """
         try:
             self.embeddings = [embedding.float() for embedding in embeddings]
             self.categories = [category.long() for category in categories]
@@ -33,6 +42,12 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
             raise
 
     def __len__(self):
+        """
+        Return the length of the dataset.
+
+        Returns:
+        int: Number of samples.
+        """
         try:
             return len(self.embeddings)
         except Exception as e:
@@ -40,6 +55,15 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
             raise
 
     def __getitem__(self, idx):
+        """
+        Get a single viruses from the dataset at the specified index.
+
+        Parameters:
+        idx (int): Index of the sample to retrieve.
+
+        Returns:
+        tuple: Tuple containing the embedding, category, mask, and masked indices.
+        """
         try:
             embedding = self.embeddings[idx]
             category = self.categories[idx]
@@ -65,11 +89,33 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
             raise
 
     def set_training(self, training=True):
+        """
+        Set the training mode for the dataset.
+
+        Parameters:
+        training (bool): If True, the dataset is in training mode.
+        """
         self.training = training
 
     def category_mask(self, category, mask):
+        """
+        Mask a portion of the category tokens.
+
+        Parameters:
+        category (torch.Tensor): Category tensor.
+        mask (torch.Tensor): Mask tensor.
+
+        Returns:
+        tuple: Tuple containing the masked category and masked indices.
+        """
         try:
+            # Check for NaN or infinite values in the mask tensor
+            if torch.isnan(mask).any() or torch.isinf(mask).any():
+                logger.error(f"NaN or infinite values found in mask tensor at index: {idx}")
+
             # Define a probability distribution over maskable tokens
+            logger.info(f'mask.sum: {mask.sum()}')
+            logger.info(f'mask.float: {mask.float()}')
             probability_distribution = mask.float() / mask.sum()
 
             # Calculate the number of tokens to mask based on input length
@@ -105,6 +151,15 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         self.categories = list(self.categories)
 
     def custom_one_hot_encode(self, data):
+        """
+        Generate a one-hot encoding for the given data.
+
+        Parameters:
+        data (torch.Tensor): Data tensor to encode.
+
+        Returns:
+        np.array: One-hot encoded array.
+        """
         try:
             # Create the one-hot encoded array
             one_hot_encoded = []
@@ -134,6 +189,19 @@ class Seq2SeqTransformerClassifier(nn.Module):
         dropout=0.1,
         intialisation='random'
     ):
+        """
+        Initialize the Seq2Seq Transformer Classifier.
+
+        Parameters:
+        input_dim (int): Input dimension size.
+        num_classes (int): Number of output classes.
+        num_heads (int): Number of attention heads.
+        num_layers (int): Number of transformer layers.
+        hidden_dim (int): Hidden dimension size.
+        lstm_hidden_dim (int): LSTM hidden dimension size.
+        dropout (float): Dropout rate.
+        intialisation (str): Initialization method for positional encoding ('random' or 'zero').
+        """
         super(Seq2SeqTransformerClassifier, self).__init__()
         """
         Difference is between the position of the LSTM layer and the the type of positional encoding that is used
@@ -179,6 +247,17 @@ class Seq2SeqTransformerClassifier(nn.Module):
         self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).to(device)
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
+        """
+        Forward pass of the model.
+
+        Parameters:
+        x (torch.Tensor): Input tensor.
+        src_key_padding_mask (torch.Tensor, optional): Mask tensor for padding.
+        return_attn_weights (bool, optional): If True, return attention weights.
+
+        Returns:
+        torch.Tensor: Output tensor.
+        """
         x = x.float()
         func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
@@ -203,6 +282,16 @@ class Seq2SeqTransformerClassifier(nn.Module):
 
 class RelativePositionAttention(nn.Module):
     def __init__(self, d_model, num_heads, max_len=1000, batch_first=True, intialisation = 'random'):
+        """
+        Initialize the Relative Position Attention module.
+
+        Parameters:
+        d_model (int): Dimension of the model.
+        num_heads (int): Number of attention heads.
+        max_len (int): Maximum sequence length.
+        batch_first (bool): If True, the batch dimension is the first dimension.
+        intialisation (str): Initialization method for relative position encodings ('random' or 'zero').
+        """
         super(RelativePositionAttention, self).__init__()
         self.num_heads = num_heads
         self.d_model = d_model
@@ -228,6 +317,19 @@ class RelativePositionAttention(nn.Module):
             ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zero'.")
 
     def forward(self, query, key, value, attn_mask=None, return_attn_weights=False):
+        """
+        Forward pass of the relative position attention.
+
+        Parameters:
+        query (torch.Tensor): Query tensor.
+        key (torch.Tensor): Key tensor.
+        value (torch.Tensor): Value tensor.
+        attn_mask (torch.Tensor, optional): Attention mask tensor.
+        return_attn_weights (bool, optional): If True, return attention weights.
+
+        Returns:
+        torch.Tensor: Output tensor.
+        """
         if not self.batch_first:
             # If batch is not first, transpose the batch and sequence dimensions
             query, key, value = (
@@ -283,6 +385,17 @@ class CustomTransformerEncoderLayer(nn.Module):
     def __init__(
         self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000, intialisation='random'
     ):
+        """
+        Initialize the Custom Transformer Encoder Layer.
+
+        Parameters:
+        d_model (int): Dimension of the model.
+        num_heads (int): Number of attention heads.
+        dim_feedforward (int): Dimension of the feedforward network.
+        dropout (float): Dropout rate.
+        max_len (int): Maximum sequence length.
+        intialisation (str): Initialization method for relative position encodings ('random' or 'zero').
+        """
         super(CustomTransformerEncoderLayer, self).__init__()
         self.self_attn = RelativePositionAttention( # is this called by other methods? 
             d_model, num_heads, max_len=max_len, batch_first=True, intialisation=intialisation
@@ -296,6 +409,19 @@ class CustomTransformerEncoderLayer(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False, return_attn_weights=False):
+        """
+        Forward pass of the custom transformer encoder layer.
+
+        Parameters:
+        src (torch.Tensor): Source tensor.
+        src_mask (torch.Tensor, optional): Source mask tensor.
+        src_key_padding_mask (torch.Tensor, optional): Source key padding mask tensor.
+        is_causal (bool, optional): If True, use causal masking.
+        return_attn_weights (bool, optional): If True, return attention weights.
+
+        Returns:
+        torch.Tensor: Output tensor.
+        """
         if return_attn_weights:
             src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, return_attn_weights=return_attn_weights) # this is a change here that I made 
             src = src + self.dropout1(src2)
@@ -327,6 +453,20 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         max_len=1000,
         intialisation='random'
     ):
+        """
+        Initialize the Seq2Seq Transformer Classifier with Relative Attention.
+
+        Parameters:
+        input_dim (int): Input dimension size.
+        num_classes (int): Number of output classes.
+        num_heads (int): Number of attention heads.
+        num_layers (int): Number of transformer layers.
+        hidden_dim (int): Hidden dimension size.
+        lstm_hidden_dim (int): LSTM hidden dimension size.
+        dropout (float): Dropout rate.
+        max_len (int): Maximum sequence length.
+        intialisation (str): Initialization method for positional encoding ('random' or 'zero').
+        """
         super(Seq2SeqTransformerClassifierRelativeAttention, self).__init__()
 
         # Check if CUDA is available
@@ -358,6 +498,17 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).to(device)
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
+        """
+        Forward pass of the model.
+
+        Parameters:
+        x (torch.Tensor): Input tensor.
+        src_key_padding_mask (torch.Tensor, optional): Mask tensor for padding.
+        return_attn_weights (bool, optional): If True, return attention weights.
+
+        Returns:
+        torch.Tensor: Output tensor.
+        """
         x = x.float()
         func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
@@ -384,6 +535,16 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
 
 class CircularRelativePositionAttention(nn.Module):
     def __init__(self, d_model, num_heads, max_len=1000, batch_first=True, intialisation = 'random'):
+        """
+        Initialize the Circular Relative Position Attention module.
+
+        Parameters:
+        d_model (int): Dimension of the model.
+        num_heads (int): Number of attention heads.
+        max_len (int): Maximum sequence length.
+        batch_first (bool): If True, the batch dimension is the first dimension.
+        intialisation (str): Initialization method for relative position encodings ('random' or 'zero').
+        """
         super(CircularRelativePositionAttention, self).__init__()
         self.num_heads = num_heads
         self.d_model = d_model
@@ -410,6 +571,22 @@ class CircularRelativePositionAttention(nn.Module):
             raise ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zero'.")
             
     def forward(self, query, key, value, attn_mask=None, is_causal=False, output_dir=None, batch_idx=None, return_attn_weights=False):
+        """
+        Forward pass of the circular relative position attention.
+
+        Parameters:
+        query (torch.Tensor): Query tensor.
+        key (torch.Tensor): Key tensor.
+        value (torch.Tensor): Value tensor.
+        attn_mask (torch.Tensor, optional): Attention mask tensor.
+        is_causal (bool, optional): If True, use causal masking.
+        output_dir (str, optional): Directory to save attention weights.
+        batch_idx (int, optional): Batch index for saving attention weights.
+        return_attn_weights (bool, optional): If True, return attention weights.
+
+        Returns:
+        torch.Tensor: Output tensor.
+        """
         if not self.batch_first:
             query, key, value = (
                 query.transpose(0, 1),
@@ -487,6 +664,17 @@ class CircularTransformerEncoderLayer(nn.Module):
     def __init__(
         self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000, initialisation='random'
     ):
+        """
+        Initialize the Circular Transformer Encoder Layer.
+
+        Parameters:
+        d_model (int): Dimension of the model.
+        num_heads (int): Number of attention heads.
+        dim_feedforward (int): Dimension of the feedforward network.
+        dropout (float): Dropout rate.
+        max_len (int): Maximum sequence length.
+        initialisation (str): Initialization method for relative position encodings ('random' or 'zero').
+        """
         super(CircularTransformerEncoderLayer, self).__init__()
         self.self_attn= CircularRelativePositionAttention(
             d_model, num_heads, max_len=max_len, batch_first=True,intialisation=initialisation
@@ -500,6 +688,19 @@ class CircularTransformerEncoderLayer(nn.Module):
         self.dropout2 = nn.Dropout(dropout)
 
     def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False, return_attn_weights=False):
+        """
+        Forward pass of the circular transformer encoder layer.
+
+        Parameters:
+        src (torch.Tensor): Source tensor.
+        src_mask (torch.Tensor, optional): Source mask tensor.
+        src_key_padding_mask (torch.Tensor, optional): Source key padding mask tensor.
+        is_causal (bool, optional): If True, use causal masking.
+        return_attn_weights (bool, optional): If True, return attention weights.
+
+        Returns:
+        torch.Tensor: Output tensor.
+        """
         if return_attn_weights: 
             src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, is_causal=is_causal, return_attn_weights=return_attn_weights)
             src = src + self.dropout1(src2)
@@ -531,6 +732,20 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         max_len=1000,
         intialisation='random'
     ):
+        """
+        Initialize the Seq2Seq Transformer Classifier with Circular Relative Attention.
+
+        Parameters:
+        input_dim (int): Input dimension size.
+        num_classes (int): Number of output classes.
+        num_heads (int): Number of attention heads.
+        num_layers (int): Number of transformer layers.
+        hidden_dim (int): Hidden dimension size.
+        lstm_hidden_dim (int): LSTM hidden dimension size.
+        dropout (float): Dropout rate.
+        max_len (int): Maximum sequence length.
+        intialisation (str): Initialization method for positional encoding ('random' or 'zero').
+        """
         super(Seq2SeqTransformerClassifierCircularRelativeAttention, self).__init__()
 
         # Check if CUDA is available
@@ -564,6 +779,17 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).to(device)
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
+        """
+        Forward pass of the model.
+
+        Parameters:
+        x (torch.Tensor): Input tensor.
+        src_key_padding_mask (torch.Tensor, optional): Mask tensor for padding.
+        return_attn_weights (bool, optional): If True, return attention weights.
+
+        Returns:
+        torch.Tensor: Output tensor.
+        """
         x = x.float()
         func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
@@ -589,6 +815,19 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
 
 
 def masked_loss(output, target, mask, idx, ignore_index=-1):
+    """
+    Calculate the masked loss.
+
+    Parameters:
+    output (torch.Tensor): Output tensor from the model.
+    target (torch.Tensor): Target tensor.
+    mask (torch.Tensor): Mask tensor.
+    idx (list of torch.Tensor): Indices of masked tokens.
+    ignore_index (int, optional): Index to ignore in the loss calculation.
+
+    Returns:
+    torch.Tensor: Calculated loss.
+    """
     # Assuming `output` is of shape [batch_size, seq_len, num_classes]
     batch_size, seq_len, num_classes = output.shape
 
@@ -617,6 +856,15 @@ def masked_loss(output, target, mask, idx, ignore_index=-1):
 
 
 def collate_fn(batch):
+    """
+    Collate function for the DataLoader.
+
+    Parameters:
+    batch (list of tuples): Batch of data.
+
+    Returns:
+    tuple: Padded embeddings, categories, masks, and indices.
+    """
     embeddings, categories, masks, idx = zip(*batch)
     embeddings_padded = pad_sequence(embeddings, batch_first=True)
     categories_padded = pad_sequence(categories, batch_first=True, padding_value=-1)
@@ -625,7 +873,19 @@ def collate_fn(batch):
 
 def combined_loss(output, target, mask, attn_weights, idx, lambda_penalty=0.1, ignore_index=-1):
     """
-    Combines classification loss with a diagonal attention penalty.
+    Combine classification loss with a diagonal attention penalty.
+
+    Parameters:
+    output (torch.Tensor): Output tensor from the model.
+    target (torch.Tensor): Target tensor.
+    mask (torch.Tensor): Mask tensor.
+    attn_weights (torch.Tensor): Attention weights tensor.
+    idx (list of torch.Tensor): Indices of masked tokens.
+    lambda_penalty (float, optional): Penalty for diagonal attention.
+    ignore_index (int, optional): Index to ignore in the loss calculation.
+
+    Returns:
+    torch.Tensor: Combined loss.
     """
     # Standard masked loss
     batch_size, seq_len, num_classes = output.shape
@@ -655,6 +915,15 @@ def combined_loss(output, target, mask, attn_weights, idx, lambda_penalty=0.1, i
     return total_loss
 
 def diagonal_attention_penalty(attn_weights):
+    """
+    Calculate the diagonal attention penalty.
+
+    Parameters:
+    attn_weights (torch.Tensor): Attention weights tensor.
+
+    Returns:
+    torch.Tensor: Calculated penalty.
+    """
     # attn_weights: [batch_size, num_heads, seq_len, seq_len]
     batch_size, num_heads, seq_len, _ = attn_weights.size()
     device = attn_weights.device
@@ -671,9 +940,19 @@ def diagonal_attention_penalty(attn_weights):
 
 
 def cosine_lr_scheduler(optimizer, num_warmup_steps, num_training_steps, min_lr_ratio=0.1, last_epoch=-1):
-    """ 
-    From glm2 paper - thanks George for sharing! 
     """
+    Create a cosine learning rate scheduler with warmup.
+
+    Parameters:
+    optimizer (torch.optim.Optimizer): Optimizer.
+    num_warmup_steps (int): Number of warmup steps.
+    num_training_steps (int): Total number of training steps.
+    min_lr_ratio (float, optional): Minimum learning rate ratio.
+    last_epoch (int, optional): The index of the last epoch.
+
+    Returns:
+    torch.optim.lr_scheduler.LambdaLR: Learning rate scheduler.
+    """ 
     def lr_lambda(current_step: int):
         if current_step < num_warmup_steps:
             logger.info('warmup step')
@@ -682,6 +961,17 @@ def cosine_lr_scheduler(optimizer, num_warmup_steps, num_training_steps, min_lr_
     return optim.lr_scheduler.LambdaLR(optimizer, lr_lambda, last_epoch)
 
 def sinusoidal_positional_encoding(seq_len, d_model, device):
+    """
+    Generate sinusoidal positional encoding.
+
+    Parameters:
+    seq_len (int): Sequence length.
+    d_model (int): Dimension of the model.
+    device (torch.device): Device to create the tensor on.
+
+    Returns:
+    torch.Tensor: Sinusoidal positional encoding tensor.
+    """
     position = torch.arange(seq_len, dtype=torch.float, device=device).unsqueeze(1)
     div_term = torch.exp(torch.arange(0, d_model, 2, device=device) * -(np.log(10000.0) / d_model))
     pe = torch.zeros(seq_len, d_model, device=device)
@@ -703,6 +993,26 @@ def train(
     diagonal_loss=True, 
     lambda_penalty=0.1
 ):
+    """
+    Train the model.
+
+    Parameters:
+    model (nn.Module): Model to train.
+    train_dataloader (DataLoader): DataLoader for training data.
+    test_dataloader (DataLoader): DataLoader for test data.
+    epochs (int, optional): Number of training epochs.
+    step_size (int, optional): Step size for the learning rate scheduler.
+    gamma (float, optional): Gamma for the learning rate scheduler.
+    lr (float, optional): Learning rate.
+    save_path (str, optional): Path to save the model.
+    device (str, optional): Device to train on ('cuda' or 'cpu').
+    checkpoint_interval (int, optional): Interval for saving checkpoints.
+    diagonal_loss (bool, optional): If True, use diagonal loss function.
+    lambda_penalty (float, optional): Penalty for diagonal attention.
+
+    Returns:
+    None
+    """
     logger.info("Training on " + str(device))
     model.to(device)
 
@@ -877,6 +1187,31 @@ def train_crossValidation(
     diagonal_loss=True,
     lambda_penalty=0.1  
 ):
+    """
+    Train the model using K-Fold cross-validation.
+
+    Parameters:
+    dataset (Dataset): Dataset to train on.
+    attention (str): Type of attention ('absolute', 'relative', 'circular').
+    n_splits (int, optional): Number of folds for cross-validation.
+    batch_size (int, optional): Batch size.
+    epochs (int, optional): Number of training epochs.
+    lr (float, optional): Learning rate.
+    step_size (int, optional): Step size for the learning rate scheduler.
+    gamma (float, optional): Gamma for the learning rate scheduler.
+    save_path (str, optional): Path to save the model.
+    num_heads (int, optional): Number of attention heads.
+    hidden_dim (int, optional): Hidden dimension size.
+    device (str, optional): Device to train on ('cuda' or 'cpu').
+    dropout (float, optional): Dropout rate.
+    checkpoint_interval (int, optional): Interval for saving checkpoints.
+    intialisation (str, optional): Initialization method for positional encoding ('random' or 'zero').
+    diagonal_loss (bool, optional): If True, use diagonal loss function.
+    lambda_penalty (float, optional): Penalty for diagonal attention.
+
+    Returns:
+    None
+    """
     # access the logger object
     logger.add(save_path + "trainer.log", level="DEBUG")
 
@@ -988,6 +1323,19 @@ def train_crossValidation(
 
 
 def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_output"):
+    """
+    Evaluate the model.
+
+    Parameters:
+    model (nn.Module): Model to evaluate.
+    dataloader (DataLoader): DataLoader for evaluation data.
+    phrog_integer (dict): Dictionary mapping integer labels to categories.
+    device (str): Device to evaluate on ('cuda' or 'cpu').
+    output_dir (str, optional): Directory to save evaluation metrics.
+
+    Returns:
+    None
+    """
     ## This here needs work. Could be done outside of this function
     model.to(device)
     model.eval()

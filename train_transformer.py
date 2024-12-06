@@ -117,7 +117,7 @@ def main(
     # Input phrog info
     phrog_integer = pickle.load(
         open(
-            "/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl",
+            "/home/grig0076/GitHubs/Phynteny_transformer/phynteny_utils/integer_category.pkl",
             "rb",
         )
     )
