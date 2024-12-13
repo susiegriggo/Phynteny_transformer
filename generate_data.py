@@ -64,6 +64,12 @@ from Bio import SeqIO
     default=False,
     help="Whether to include extra features alongside the embedding including the strand information, orientation and gene length",
 )
+@click.option(
+    "--data_only", 
+    is_flag=True,
+    default=False,
+    help="Only generate the data and not the embeddings. Does not output X a y files"
+)
 def main(
     input_data,
     dereplicate,
@@ -74,6 +80,7 @@ def main(
     model,
     exclude_embedding,
     extra_features,
+    data_only,
 ):
     # read in information for the phrog annotations
     # read in annotation file
@@ -128,37 +135,42 @@ def main(
         data = format_data.derep_data(data)
         pickle.dump(data, open(out + "/" + prefix + ".data.pkl", "wb"))
 
-    # extract fasta from the genbank files
-    print("Extract fasta from genbank", flush=True)
-    data_keys = list(data.keys())
-    fasta_out = out + "/" + prefix + ".fasta"
-    records = [data.get(k).get("sequence") for k in data_keys]
-    with open(fasta_out, "w") as output_handle:
-        for r in records:
-            SeqIO.write(r, output_handle, "fasta")
-    output_handle.close()
+    if data_only:
+        print("Data only flag set. Exiting now", flush=True)
+        return
 
-    # Extract the embeddings from the outputted fasta files
-    print("Computing ESM embeddings", flush=True)
-    print("... if step is being slow consider using GPU!")
-    embeddings = format_data.extract_embeddings(fasta_out, out, model_name=model)
+    else: 
+        # extract fasta from the genbank files
+        print("Extract fasta from genbank", flush=True)
+        data_keys = list(data.keys())
+        fasta_out = out + "/" + prefix + ".fasta"
+        records = [data.get(k).get("sequence") for k in data_keys]
+        with open(fasta_out, "w") as output_handle:
+            for r in records:
+                SeqIO.write(r, output_handle, "fasta")
+        output_handle.close()
 
-    # move on to create training and testing data
-    if extra_features:
-        X, y = format_data.process_data(
-            embeddings, data, exclude_embedding=exclude_embedding
-        )
+        # Extract the embeddings from the outputted fasta files
+        print("Computing ESM embeddings", flush=True)
+        print("... if step is being slow consider using GPU!")
+        embeddings = format_data.extract_embeddings(fasta_out, out, model_name=model)
 
-    else:
-        X, y = format_data.process_data(
-            embeddings, data, extra_features=False, exclude_embedding=exclude_embedding
-        )
+        # move on to create training and testing data
+        if extra_features:
+            X, y = format_data.process_data(
+                embeddings, data, exclude_embedding=exclude_embedding
+            )
 
-    # save the generated data to file
-    print(X)
-    print(y)
-    pickle.dump(X, open(out + "/" + prefix + ".X.pkl", "wb"))
-    pickle.dump(y, open(out + "/" + prefix + ".y.pkl", "wb"))
+        else:
+            X, y = format_data.process_data(
+                embeddings, data, extra_features=False, exclude_embedding=exclude_embedding
+            )
+
+        # save the generated data to file
+        print(X)
+        print(y)
+        pickle.dump(X, open(out + "/" + prefix + ".X.pkl", "wb"))
+        pickle.dump(y, open(out + "/" + prefix + ".y.pkl", "wb"))
 
 
 # Press the green button in the gutter to run the script.
