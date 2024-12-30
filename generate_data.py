@@ -18,7 +18,12 @@ from Bio import SeqIO
     "-d",
     "--dereplicate",
     is_flag=True,
-    help="Specify whethre to dedeuplicate phages whether there is duplicated gene orders",
+    help="Specify whether to dedeuplicate phages whether there is duplicated gene orders",
+    required=False,
+)
+@click.option(
+    "--include_genomes", 
+    help="Specify a text file of genes to only include from the input data",
     required=False,
 )
 @click.option(
@@ -32,14 +37,14 @@ from Bio import SeqIO
     "--maximum_genes",
     type=int,
     help="Specify the maximum number of genes in each genome. Default 120.",
-    default=120,
+    default=10000,
 )
 @click.option(
     "-g",
     "--gene_categories",
     type=int,
-    help="Specify the minimum number of categories in each genome. Default 4.",
-    default=4,
+    help="Specify the minimum number of categories in each genome",
+    default=0,
 )
 @click.option(
     "--prefix",
@@ -72,6 +77,7 @@ from Bio import SeqIO
 )
 def main(
     input_data,
+    include_genomes,
     dereplicate,
     gene_categories,
     maximum_genes,
@@ -129,10 +135,18 @@ def main(
     )
     pickle.dump(data, open(out + "/" + prefix + ".data.pkl", "wb"))
 
-    # filter duplicate orders
-    if dereplicate:
-        print("Deduplicating repeated gene orders", flush=True)
-        data = format_data.derep_data(data)
+    # filter duplicate orders and include specific genomes if specified
+    if dereplicate or include_genomes:
+        if dereplicate:
+            print("Deduplicating repeated gene orders", flush=True)
+            data = format_data.derep_data(data)
+        
+        if include_genomes:
+            print("Filtering genomes", flush=True)
+            with open(include_genomes, "r") as f:
+                genomes = f.read().splitlines()
+            data = {k: v for k, v in data.items() if k in genomes}
+        
         pickle.dump(data, open(out + "/" + prefix + ".data.pkl", "wb"))
 
     if data_only:

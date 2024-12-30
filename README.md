@@ -58,3 +58,31 @@ To train the model, follow these steps:
 
 ```bash
 python train_transformer.py --x_path data/X_train.pkl --y_path data/y_train.pkl --attention circular --epochs 20 --batch_size 16 --num_heads 8 --hidden_dim 1024 --out results/
+```
+
+### Generating Data
+
+To generate the data required for training the model, follow these steps:
+
+1. **Prepare the Input Data**: Ensure you have a text file containing the paths to the GenBank files.
+
+2. **Run the Data Generation Script**: Use the `generate_data.py` script to generate the data. The script accepts various command-line options to customize the data generation process.
+
+    ```bash
+    python generate_data.py --input_data <path_to_input_data> [OPTIONS]
+    ```
+
+    **Options**:
+    - `--input_data`, `-i`: Text file containing GenBank files to build the model.
+    - `--dereplicate`, `-d`: Specify whether to deduplicate phages with duplicated gene orders.
+    - `--include_genomes`: Specify a text file of genomes to only include from the input data.
+    - `--model`: Specify path to model if not the default.
+    - `--maximum_genes`, `-m`: Specify the maximum number of genes in each genome (default: 10000).
+    - `--gene_categories`, `-g`: Specify the minimum number of categories in each genome (default: 0).
+    - `--prefix`, `-p`: Prefix for the output files (default: `data`).
+    - `--out`, `-o`: Directory for the output files (default: `out`).
+    - `--exclude_embedding`: Exclude ESM embeddings.
+    - `--extra_features`: Include extra features alongside the embedding, including strand information, orientation, and gene length.
+    - `--data_only`: Only generate the data and not the embeddings. Does not output X and y files.
+
+### Example Command
