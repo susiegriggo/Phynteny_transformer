@@ -114,8 +114,8 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
                 logger.error(f"NaN or infinite values found in mask tensor at index: {idx}")
 
             # Define a probability distribution over maskable tokens
-            logger.info(f'mask.sum: {mask.sum()}')
-            logger.info(f'mask.float: {mask.float()}')
+            #logger.info(f'mask.sum: {mask.sum()}')
+            #logger.info(f'mask.float: {mask.float()}')
             probability_distribution = mask.float() / mask.sum()
 
             # Calculate the number of tokens to mask based on input length
@@ -185,7 +185,6 @@ class Seq2SeqTransformerClassifier(nn.Module):
         num_heads=4,
         num_layers=2,
         hidden_dim=512,
-        lstm_hidden_dim=512,
         dropout=0.1,
         intialisation='random'
     ):
@@ -198,7 +197,6 @@ class Seq2SeqTransformerClassifier(nn.Module):
         num_heads (int): Number of attention heads.
         num_layers (int): Number of transformer layers.
         hidden_dim (int): Hidden dimension size.
-        lstm_hidden_dim (int): LSTM hidden dimension size.
         dropout (float): Dropout rate.
         intialisation (str): Initialization method for positional encoding ('random' or 'zero').
         """
@@ -232,7 +230,7 @@ class Seq2SeqTransformerClassifier(nn.Module):
 
         # LSTM layer
         self.lstm = nn.LSTM(
-            hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True
+            hidden_dim, hidden_dim, batch_first=True, bidirectional=True
         ).to(device)
 
         # Transformer Encoder
@@ -244,7 +242,7 @@ class Seq2SeqTransformerClassifier(nn.Module):
         ).to(device)
 
         # Final Classification Layer
-        self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).to(device)
+        self.fc = nn.Linear(2 * hidden_dim, num_classes).to(device)
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
@@ -448,7 +446,6 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         num_heads=4,
         num_layers=2,
         hidden_dim=512,
-        lstm_hidden_dim=512,
         dropout=0.1,
         max_len=1000,
         intialisation='random'
@@ -462,7 +459,6 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         num_heads (int): Number of attention heads.
         num_layers (int): Number of transformer layers.
         hidden_dim (int): Hidden dimension size.
-        lstm_hidden_dim (int): LSTM hidden dimension size.
         dropout (float): Dropout rate.
         max_len (int): Maximum sequence length.
         intialisation (str): Initialization method for positional encoding ('random' or 'zero').
@@ -476,12 +472,12 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         self.func_embedding = nn.Embedding(10, 16).to(device)
         self.strand_embedding = nn.Embedding(2, 4).to(device)
         self.length_embedding = nn.Linear(1, 8).to(device)
-        self.embedding_layer = nn.Linear(1280, hidden_dim - 28).to(device)
+        self.embedding_layer = nn.Linear(1280, hidden_dim - 28).to(device) #maybe this minus 28 is causing problems 
 
         self.dropout = nn.Dropout(dropout).to(device)
         self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
         self.lstm = nn.LSTM(
-            hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True
+            hidden_dim, hidden_dim, batch_first=True, bidirectional=True
         ).to(device)
 
         encoder_layers = CustomTransformerEncoderLayer(
@@ -495,7 +491,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
             encoder_layers, num_layers=num_layers
         ).to(device)
 
-        self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).to(device)
+        self.fc = nn.Linear(2 * hidden_dim, num_classes).to(device)
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
@@ -727,7 +723,6 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         num_heads=4,
         num_layers=2,
         hidden_dim=512,
-        lstm_hidden_dim=512,
         dropout=0.1,
         max_len=1000,
         intialisation='random'
@@ -741,7 +736,6 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         num_heads (int): Number of attention heads.
         num_layers (int): Number of transformer layers.
         hidden_dim (int): Hidden dimension size.
-        lstm_hidden_dim (int): LSTM hidden dimension size.
         dropout (float): Dropout rate.
         max_len (int): Maximum sequence length.
         intialisation (str): Initialization method for positional encoding ('random' or 'zero').
@@ -762,7 +756,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         self.dropout = nn.Dropout(dropout).to(device)
         self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
         self.lstm = nn.LSTM(
-            hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True
+            hidden_dim, hidden_dim, batch_first=True, bidirectional=True
         ).to(device)
 
         encoder_layers = CircularTransformerEncoderLayer(
@@ -776,7 +770,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
             encoder_layers, num_layers=num_layers
         ).to(device)
 
-        self.fc = nn.Linear(2 * lstm_hidden_dim, num_classes).to(device)
+        self.fc = nn.Linear(2 * hidden_dim, num_classes).to(device)
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
