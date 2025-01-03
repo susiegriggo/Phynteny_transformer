@@ -114,8 +114,8 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
                 logger.error(f"NaN or infinite values found in mask tensor at index: {idx}")
 
             # Define a probability distribution over maskable tokens
-            logger.info(f'mask.sum: {mask.sum()}')
-            logger.info(f'mask.float: {mask.float()}')
+            #logger.info(f'mask.sum: {mask.sum()}')
+            #logger.info(f'mask.float: {mask.float()}')
             probability_distribution = mask.float() / mask.sum()
 
             # Calculate the number of tokens to mask based on input length
@@ -357,8 +357,8 @@ class RelativePositionAttention(nn.Module):
         )
 
         # Add relative position biases
-        rel_positions = self.relative_position_k[:seq_len, :]
-        scores = scores + torch.matmul(q, rel_positions.transpose(-2, -1))
+        rel_positions = self.relative_position_k[:seq_len, :].unsqueeze(0).expand(batch_size, -1, -1)
+        scores = scores + torch.einsum("bhqd,bqd->bhq", q, rel_positions)
 
         if attn_mask is not None:
             scores = scores.masked_fill(attn_mask == 0, float("-inf"))
@@ -366,8 +366,8 @@ class RelativePositionAttention(nn.Module):
         attn_weights = F.softmax(scores, dim=-1)
         attn_output = torch.matmul(attn_weights, v)
 
-        rel_positions_v = self.relative_position_v[:seq_len, :]
-        attn_output = attn_output + torch.matmul(attn_weights, rel_positions_v)
+        rel_positions_v = self.relative_position_v[:seq_len, :].unsqueeze(0).expand(batch_size, -1, -1)
+        attn_output = attn_output + torch.einsum("bhqk,bkd->bhqd", attn_weights, rel_positions_v)
 
         # Reshape back to the original shape
         attn_output = (
@@ -625,9 +625,9 @@ class CircularRelativePositionAttention(nn.Module):
         rel_positions_k = (
             self.relative_position_k[circular_indices]
             .unsqueeze(0)
-            .expand(batch_size, -1, -1, -1, -1)
+            .expand(batch_size, -1, -1, -1)
         )
-        scores += torch.einsum("bhqd,bqkd->bhqk", q, rel_positions_k[0])
+        scores += torch.einsum("bhqd,bqkd->bhqk", q, rel_positions_k)
 
         if attn_mask is not None:
             scores = scores.masked_fill(attn_mask == 0, float("-inf"))
@@ -639,9 +639,9 @@ class CircularRelativePositionAttention(nn.Module):
         rel_positions_v = (
             self.relative_position_v[circular_indices]
             .unsqueeze(0)
-            .expand(batch_size, -1, -1, -1, -1)
+            .expand(batch_size, -1, -1, -1)
         )
-        attn_output += torch.einsum("bhqk,bqkd->bhqd", attn_weights, rel_positions_v[0])
+        attn_output += torch.einsum("bhqk,bqkd->bhqd", attn_weights, rel_positions_v)
 
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
 
