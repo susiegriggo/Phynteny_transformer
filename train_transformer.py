@@ -149,8 +149,9 @@ def main(
 
     # Produce the dataset object
     # note that this is a very small training size
+    
     train_dataset = model_onehot.VariableSeq2SeqEmbeddingDataset(
-        list(X.values()), list(y.values()), mask_portion=mask_portion
+        list(X[0].values()), list(y[0].values()), mask_portion=mask_portion
     )
     train_dataset.set_training(True)
     logger.info("\nTraining model...")

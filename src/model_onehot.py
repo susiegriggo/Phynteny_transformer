@@ -18,6 +18,15 @@ import pandas as pd
 import random
 import os
 import gc
+import torch.multiprocessing as mp
+import resource
+
+# Increase the limit of open files
+soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+resource.setrlimit(resource.RLIMIT_NOFILE, (min(soft * 2, hard), hard))
+
+# Set the sharing strategy to file_system
+torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 class VariableSeq2SeqEmbeddingDataset(Dataset):
@@ -264,7 +273,7 @@ class Seq2SeqTransformerClassifier(nn.Module):
         protein_embeds = self.embedding_layer(protein_embeds)
 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
-        x = x + self.positional_encoding[: x.size(1), :]
+        x = x + self.positional_encoding[: x.size(1), :].to(x.device)
 
         x = self.dropout(x)
         x, _ = self.lstm(x)  # LSTM layer
@@ -277,6 +286,16 @@ class Seq2SeqTransformerClassifier(nn.Module):
             x = self.fc(x)
             return x
 
+# Add logging to check the device of various components
+def log_model_devices(model):
+    logger.info(f"func_embedding is on device: {model.func_embedding.weight.device}")
+    logger.info(f"strand_embedding is on device: {model.strand_embedding.weight.device}")
+    logger.info(f"length_embedding is on device: {model.length_embedding.weight.device}")
+    logger.info(f"embedding_layer is on device: {model.embedding_layer.weight.device}")
+    logger.info(f"positional_encoding is on device: {model.positional_encoding.device}")
+    logger.info(f"lstm is on device: {next(model.lstm.parameters()).device}")
+    logger.info(f"transformer_encoder is on device: {next(model.transformer_encoder.parameters()).device}")
+    logger.info(f"fc is on device: {model.fc.weight.device}")
 
 class RelativePositionAttention(nn.Module):
     def __init__(self, d_model, num_heads, max_len=1000, batch_first=True, intialisation = 'random'):
@@ -513,7 +532,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         protein_embeds = self.embedding_layer(protein_embeds)
 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
-        x = x + self.positional_encoding[: x.size(1), :]
+        x = x + self.positional_encoding[: x.size(1), :].to(x.device)
 
         x = self.dropout(x)
         x, _ = self.lstm(x)
@@ -792,7 +811,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         protein_embeds = self.embedding_layer(protein_embeds)
 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
-        x = x + self.positional_encoding[: x.size(1), :]
+        x = x + self.positional_encoding[: x.size(1), :].to(x.device)
         x = self.dropout(x)
         x, _ = self.lstm(x)
 
@@ -828,6 +847,9 @@ def masked_loss(output, target, mask, idx, ignore_index=-1):
     # Check if CUDA is available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    #logger.info(f"Output is on device: {output.device}")
+    #logger.info(f"Target is on device: {target.device}")
+    #logger.info(f"Mask is on device: {mask.device}")
 
     # Flatten the batch and sequence dimensions
     output_flat = output.view(-1, num_classes)  # [batch_size * seq_len, num_classes]
@@ -884,6 +906,11 @@ def combined_loss(output, target, mask, attn_weights, idx, lambda_penalty=0.1, i
     # Standard masked loss
     batch_size, seq_len, num_classes = output.shape
     device = output.device
+
+    #logger.info(f"Output is on device: {output.device}")
+    #logger.info(f"Target is on device: {target.device}")
+    #logger.info(f"Mask is on device: {mask.device}")
+    #logger.info(f"Attention weights are on device: {attn_weights.device}")
 
     output_flat = output.view(-1, num_classes)
     target_flat = target.view(-1)
@@ -1007,30 +1034,14 @@ def train(
     Returns:
     None
     """
-    logger.info("Training on " + str(device))
+    logger.info("Training on " + str(device)) 
     model.to(device)
+    logger.info(f"Model is on device: {next(model.parameters()).device}")
 
     # Initialize optimizer
     optimizer = optim.AdamW(model.parameters(), lr=lr, betas=(0.9,0.95), weight_decay=0.1)
 
     # Initialize learning rate scheduler
-       # original scheduler 
-    #print(f'Using Step LR', flush=True)
-    #print(f'Learning rate: {lr}', flush=True)
-    #print(f'Step size: {step_size}', flush=True)
-    #print(f'Gamma: {gamma}', flush=True)
-    #scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=step_size, gamma=gamma) # original scheduler 
-
-
-    #scheduler = optim.lr_scheduler.OneCycleLR( # this scheudler uses a warmup - might be a good comparison 
-    #    optimizer, 
-    #    max_lr=lr, 
-    #    total_steps=len(train_dataloader)*epochs,
-    #    epochs=epochs, 
-    #    pct_start=0.3
-    #)
-
-    # alternative scheduler - from glm2 
     num_training_steps = len(train_dataloader) * epochs
     num_warmup_steps = epochs / 4
     scheduler = cosine_lr_scheduler(optimizer, num_warmup_steps=num_warmup_steps, num_training_steps=num_training_steps)
@@ -1053,23 +1064,36 @@ def train(
                 categories.to(device).long(),
                 masks.to(device).float(),
             )
+            #logger.info(f"Embeddings are on device: {embeddings.device}")
+            #logger.info(f"Categories are on device: {categories.device}")
+            #logger.info(f"Masks are on device: {masks.device}")
+
             optimizer.zero_grad()
             
             # Mask the padding from the transformer 
-            src_key_padding_mask = (masks == -2).bool()
+            src_key_padding_mask = (masks == -2).bool().to(device)
+            #logger.info(f"src_key_padding_mask is on device: {src_key_padding_mask.device}")
            
             with autocast():
                 # Use the diagonal loss function if specified
                 if diagonal_loss: 
+                    #logger.info(f"Using diagonal loss with lambda_penalty: {lambda_penalty}")
+                    #logger.info(F"Model is on device: {next(model.parameters()).device}")
+                    logger.info(f"Getting outputs and attention weights")
                     outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                    #logger.info(f"Outputs are on device: {outputs.device}")
+                    #logger.info(f"Attention weights are on device: {attn_weights.device}")
+                    logger.info(f"Computing combined loss")
                     loss = combined_loss(
                         outputs, categories, masks, attn_weights, idx, lambda_penalty=lambda_penalty
                     ) 
                 else:  
                     outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                    #logger.info(f"Outputs are on device: {outputs.device}")
                     loss = masked_loss(
                         outputs, categories, masks, idx
                     )
+                #logger.info(f"Loss is on device: {loss.device}")
 
             # Backpropagation and optimization
             scaler.scale(loss).backward()
@@ -1096,14 +1120,20 @@ def train(
                     categories.to(device).long(),
                     masks.to(device).float(),
                 )
+                #logger.info(f"Validation Embeddings are on device: {embeddings.device}")
+                #logger.info(f"Validation Categories are on device: {categories.device}")
+                #logger.info(f"Validation Masks are on device: {masks.device}")
                
-                src_key_padding_mask = (masks == -2).bool()  # Mask the padding from the transformer 
+                src_key_padding_mask = (masks == -2).bool().to(device)  # Mask the padding from the transformer 
+                #logger.info(f"Validation src_key_padding_mask is on device: {src_key_padding_mask.device}")
                 
                 with autocast():
                     if epoch == epochs - 1:
                         outputs, attn_weights = model(
                             embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True
                         )
+                        #logger.info(f"Validation Outputs are on device: {outputs.device}")
+                        #logger.info(f"Validation Attention weights are on device: {attn_weights.device}")
                         final_validation_weights.append(outputs.cpu().detach().numpy())
                         final_validation_attention.append(attn_weights.cpu().detach().numpy())
                     else:
@@ -1111,6 +1141,8 @@ def train(
                             outputs, attn_weights = model(
                                 embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True
                             )
+                            #logger.info(f"Validation Outputs are on device: {outputs.device}")
+                            #logger.info(f"Validation Attention weights are on device: {attn_weights.device}")
                             val_loss = combined_loss(
                                 outputs, categories, masks, attn_weights, idx, lambda_penalty=lambda_penalty
                             )
@@ -1118,9 +1150,11 @@ def train(
                             outputs = model(
                                 embeddings, src_key_padding_mask=src_key_padding_mask
                             )
+                            #logger.info(f"Validation Outputs are on device: {outputs.device}")
                             val_loss = masked_loss(
                                 outputs, categories, masks, idx
                             )
+                        #logger.info(f"Validation Loss is on device: {val_loss.device}")
                 total_val_loss += val_loss.item()
 
         avg_val_loss = total_val_loss / len(test_dataloader)
@@ -1161,6 +1195,116 @@ def train(
 
     with open(os.path.join(save_path, "final_validation_attention.pkl"), "wb") as f:
         pickle.dump(final_validation_attention, f)
+
+
+def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty):
+    try:
+        device = torch.device(f"cuda:{device_id}")
+        output_dir = f"{save_path}/fold_{fold}"
+        
+        # Set up a new logger for each fold
+        fold_logger = logger.bind(fold=fold)
+        fold_logger.add(os.path.join(output_dir, "trainer.log"), level="DEBUG")
+
+        fold_logger.info(f"FOLD: {fold}")
+
+        # Create output directory for the current fold
+        fold_logger.info("Creating output directory")
+        if not os.path.exists(output_dir):
+            os.makedirs(output_dir)
+            fold_logger.info(f"Directory created: {output_dir}")
+        else:
+            fold_logger.info(f"Warning: Directory {output_dir} already exists.")
+
+        # Use SubsetRandomSampler for efficient subsetting
+        fold_logger.info("generating subsamples")
+        train_sampler = SubsetRandomSampler(train_index)
+        val_sampler = SubsetRandomSampler(val_index)
+
+        # Create data loaders with samplers
+        fold_logger.info("Saving datasets")
+        train_kfold_loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            sampler=train_sampler,
+            collate_fn=collate_fn,
+            pin_memory=True,
+        )
+        val_kfold_loader = DataLoader(
+            dataset,
+            batch_size=batch_size,
+            sampler=val_sampler,
+            collate_fn=collate_fn,
+            pin_memory=True,
+        )
+
+        # save the validation data object as well as the keys used in validation 
+        pickle.dump(val_kfold_loader, open(output_dir + "/val_kfold_loader.pkl", "wb"))
+        with open(output_dir + "/val_kfold_keys.txt", "w") as file: 
+            for k in val_index: 
+                file.write(f"{k}\n")
+
+        # Initialize model
+        fold_logger.info("Initializing model")
+        input_dim = dataset[0][0].shape[1]
+        if attention == "circular":
+            kfold_transformer_model = (
+                Seq2SeqTransformerClassifierCircularRelativeAttention(
+                    input_dim=input_dim,
+                    num_classes=9,
+                    num_heads=num_heads,
+                    hidden_dim=hidden_dim,
+                    dropout=dropout,
+                    intialisation=intialisation
+                ).to(device)
+            )
+        elif attention == "relative":
+            kfold_transformer_model = Seq2SeqTransformerClassifierRelativeAttention(
+                input_dim=input_dim,
+                num_classes=9,
+                num_heads=num_heads,
+                hidden_dim=hidden_dim,
+                dropout=dropout,
+                intialisation=intialisation
+            ).to(device)
+        elif attention == "absolute":
+            kfold_transformer_model = Seq2SeqTransformerClassifier(
+                input_dim=input_dim,
+                num_classes=9,
+                num_heads=num_heads,
+                hidden_dim=hidden_dim,
+                dropout=dropout,
+                intialisation=intialisation
+            ).to(device)
+        else:
+            fold_logger.error("invalid attention type specified")
+
+        
+        # Log the devices of various components of the model
+        log_model_devices(kfold_transformer_model)
+
+        # Train model
+        fold_logger.info("Training the model")
+        train(
+            kfold_transformer_model,
+            train_kfold_loader,
+            val_kfold_loader,
+            epochs=epochs,
+            lr=lr,
+            step_size=step_size, 
+            gamma=gamma, 
+            save_path=output_dir,
+            device=device,
+            checkpoint_interval=checkpoint_interval,
+            diagonal_loss=diagonal_loss,
+            lambda_penalty=lambda_penalty
+        )
+
+        # Clear cache after training each fold
+        gc.collect()
+        torch.cuda.empty_cache()
+    except Exception as e:
+        fold_logger.error(f"Error in fold {fold}: {e}")
 
 def train_crossValidation(
     dataset,
@@ -1215,106 +1359,28 @@ def train_crossValidation(
         "Training with K-Fold crossvalidation with " + str(n_splits) + " folds..."
     )
 
-    for train_index, val_index in kf.split(dataset):
-        logger.info(f"FOLD: {fold}")
+    # Set start method for multiprocessing
+    mp.set_start_method('spawn', force=True)
 
-        # Create output directory for the current fold
-        logger.info("Creating output directory")
-        output_dir = f"{save_path}/fold_{fold}"
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-            logger.info(f"Directory created: {output_dir}")
-        else:
-            logger.info(f"Warning: Directory {output_dir} already exists.")
+    # Create a process for each fold
+    processes = []
+    for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
+        device_id = (fold - 1) % torch.cuda.device_count()
+        logger.info(f"Training fold {fold} on device {device_id}")
+        p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty))
+        p.start()
+        processes.append(p)
 
-        # Use SubsetRandomSampler for efficient subsetting
-        logger.info("generating subsamples")
-        train_sampler = SubsetRandomSampler(train_index)
-        val_sampler = SubsetRandomSampler(val_index)
+    # Wait for all processes to finish
+    for p in processes:
+        p.join(timeout=600)  # Add a timeout to prevent hanging indefinitely
 
-        # Create data loaders with samplers
-        logger.info("Saving datasets")
-        train_kfold_loader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            sampler=train_sampler,
-            collate_fn=collate_fn,
-            pin_memory=True,
-        )
-        val_kfold_loader = DataLoader(
-            dataset,
-            batch_size=batch_size,
-            sampler=val_sampler,
-            collate_fn=collate_fn,
-            pin_memory=True,
-        )
-
-        # save the validation data object as well as the keys used in validtaiokn 
-        pickle.dump(val_kfold_loader, open(output_dir + "/val_kfold_loader.pkl", "wb"))
-        with open(output_dir + "/val_kfold_keys.txt", "w") as file: 
-            for k in val_index: 
-                file.write(f"{k}\n")
-
-        # Initialize model
-        input_dim = dataset[0][0].shape[1]
-        if attention == "circular":
-            kfold_transformer_model = (
-                Seq2SeqTransformerClassifierCircularRelativeAttention(
-                    input_dim=input_dim,
-                    num_classes=9,
-                    num_heads=num_heads,
-                    hidden_dim=hidden_dim,
-                    dropout=dropout,
-                    intialisation=intialisation
-                )
-            )
-        elif attention == "relative":
-            kfold_transformer_model = Seq2SeqTransformerClassifierRelativeAttention(
-                input_dim=input_dim,
-                num_classes=9,
-                num_heads=num_heads,
-                hidden_dim=hidden_dim,
-                dropout=dropout,
-                intialisation=intialisation
-            )
-        elif attention == "absolute":
-            kfold_transformer_model = Seq2SeqTransformerClassifier(
-                input_dim=input_dim,
-                num_classes=9,
-                num_heads=num_heads,
-                hidden_dim=hidden_dim,
-                dropout=dropout,
-                intialisation=intialisation
-            )
-        else:
-            logger.error("invalid attention type specified")
-
-        # kfold_transformer_model = ImprovedSeq2SeqTransformerClassifier(input_dim=input_dim, num_classes=9, num_heads=num_heads, hidden_dim=hidden_dim, dropout=dropout)
-        kfold_transformer_model.to(device)
-
-        # Train model
-        logger.info("Training the model")
-        train(
-            kfold_transformer_model,
-            train_kfold_loader,
-            val_kfold_loader,
-            epochs=epochs,
-            lr=lr,
-            step_size=step_size, 
-            gamma=gamma, 
-            save_path=output_dir,
-            device=device,
-            checkpoint_interval=checkpoint_interval,
-            diagonal_loss=diagonal_loss,
-            lambda_penalty=lambda_penalty
-        )
-
-        # Clear cache after training each fold
-        gc.collect()
-        torch.cuda.empty_cache()
-
-        fold += 1
-
+    # Check if any process is still alive
+    for p in processes:
+        if p.is_alive():
+            logger.error(f"Process {p.pid} is still alive. Terminating...")
+            p.terminate()
+            p.join()
 
 def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_output"):
     """
@@ -1368,7 +1434,7 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_outpu
         roc_auc = auc(fpr, tpr)
         print("AUC for category " + phrog_integer[label] + ": " + str(roc_auc))
 
-        roc_df = pd.DataFrame({"FPR": fpr, "TPR": tpr, "Thresholds": thresholds})
+        roc_df = pd.DataFrame({"FPR": fpr, "TPR": thresholds})
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
         roc_df.to_csv(
