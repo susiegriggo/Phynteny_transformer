@@ -1079,11 +1079,11 @@ def train(
                 if diagonal_loss: 
                     #logger.info(f"Using diagonal loss with lambda_penalty: {lambda_penalty}")
                     #logger.info(F"Model is on device: {next(model.parameters()).device}")
-                    logger.info(f"Getting outputs and attention weights")
+                    #logger.info(f"Getting outputs and attention weights")
                     outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
                     #logger.info(f"Outputs are on device: {outputs.device}")
                     #logger.info(f"Attention weights are on device: {attn_weights.device}")
-                    logger.info(f"Computing combined loss")
+                    #logger.info(f"Computing combined loss")
                     loss = combined_loss(
                         outputs, categories, masks, attn_weights, idx, lambda_penalty=lambda_penalty
                     ) 
@@ -1323,7 +1323,8 @@ def train_crossValidation(
     checkpoint_interval=1, 
     intialisation = 'random',
     diagonal_loss=True,
-    lambda_penalty=0.1  
+    lambda_penalty=0.1,
+    parallel_kfolds=True,
 ):
     """
     Train the model using K-Fold cross-validation.
@@ -1346,6 +1347,7 @@ def train_crossValidation(
     intialisation (str, optional): Initialization method for positional encoding ('random' or 'zero').
     diagonal_loss (bool, optional): If True, use diagonal loss function.
     lambda_penalty (float, optional): Penalty for diagonal attention.
+    parallel_kfolds (bool, optional): If True, train kfolds in parallel.
 
     Returns:
     None
@@ -1359,28 +1361,34 @@ def train_crossValidation(
         "Training with K-Fold crossvalidation with " + str(n_splits) + " folds..."
     )
 
-    # Set start method for multiprocessing
-    mp.set_start_method('spawn', force=True)
+    if parallel_kfolds:
+        # Set start method for multiprocessing
+        mp.set_start_method('spawn', force=True)
 
-    # Create a process for each fold
-    processes = []
-    for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
-        device_id = (fold - 1) % torch.cuda.device_count()
-        logger.info(f"Training fold {fold} on device {device_id}")
-        p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty))
-        p.start()
-        processes.append(p)
+        # Create a process for each fold
+        processes = []
+        for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
+            device_id = (fold - 1) % torch.cuda.device_count()
+            logger.info(f"Training fold {fold} on device {device_id}")
+            p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty))
+            p.start()
+            processes.append(p)
 
-    # Wait for all processes to finish
-    for p in processes:
-        p.join(timeout=600)  # Add a timeout to prevent hanging indefinitely
-
-    # Check if any process is still alive
-    for p in processes:
-        if p.is_alive():
-            logger.error(f"Process {p.pid} is still alive. Terminating...")
-            p.terminate()
+        # Wait for all processes to finish
+        for p in processes:
             p.join()
+
+        # Check if any process is still alive
+        for p in processes:
+            if p.is_alive():
+                logger.error(f"Process {p.pid} is still alive. Terminating...")
+                p.terminate()
+                p.join()
+    else:
+        for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
+            device_id = (fold - 1) % torch.cuda.device_count()
+            logger.info(f"Training fold {fold} on device {device_id}")
+            train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty)
 
 def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_output"):
     """

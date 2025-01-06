@@ -80,9 +80,20 @@ def validate_num_heads(ctx, param, value):
     help="Specify the lambda penalty for the diagonal loss function.",
     type=float,
 )
-
+@click.option(
+    "--parallel_kfolds",
+    is_flag=True,
+    default=False,
+    help="Distribute kfolds across available GPUs or train sequentially.",
+)
 @click.option(
     "--device", default="cuda", help="specify cuda or cpu.", type=click.STRING
+)
+@click.option(
+    "--num_layers",
+    default=2,
+    help="Number of transformer layers.",
+    type=int,
 )
 def main(
     x_path,
@@ -103,6 +114,8 @@ def main(
     intialisation, 
     diagonal_loss,
     lambda_penalty,
+    parallel_kfolds,
+    num_layers,
 ):
     # Create the output directory if it doesn't exist
     if not os.path.exists(out):
@@ -175,6 +188,8 @@ def main(
         intialisation=intialisation, 
         diagonal_loss=diagonal_loss,
         lambda_penalty=lambda_penalty,
+        parallel_kfolds=parallel_kfolds,
+        num_layers=num_layers,
     )
 
     # Evaluate the model
