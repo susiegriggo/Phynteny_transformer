@@ -1110,6 +1110,7 @@ def train(
         # Validation loss
         model.eval()  # Ensure model is in evaluation mode
         total_val_loss = 0
+        final_validation_categories = []  # List to store categories for each validation instance
         with torch.no_grad():
             for embeddings, categories, masks, idx in test_dataloader:
                 embeddings, categories, masks = (
@@ -1121,32 +1122,31 @@ def train(
                 src_key_padding_mask = (masks == -2).bool().to(device)  # Mask the padding from the transformer 
                 
                 with autocast():
-                    if epoch == epochs - 1:
-                        outputs, attn_weights = model( # I think this line here is the problem 
-                            embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True
+                    outputs, attn_weights = model(
+                        embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True
+                    )
+                    if diagonal_loss:
+                        val_loss = combined_loss(
+                            outputs, categories, masks, attn_weights, idx, lambda_penalty=lambda_penalty
                         )
-                        final_validation_weights.append(outputs.cpu().detach().numpy())
-                        final_validation_attention.append(attn_weights.cpu().detach().numpy())
                     else:
-                        if diagonal_loss:
-                            outputs, attn_weights = model(
-                                embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True
-                            )
-                            val_loss = combined_loss(
-                                outputs, categories, masks, attn_weights, idx, lambda_penalty=lambda_penalty
-                            )
-                        else:
-                            outputs = model(
-                                embeddings, src_key_padding_mask=src_key_padding_mask
-                            )
-                            val_loss = masked_loss(
-                                outputs, categories, masks, idx
-                            )
+                        val_loss = masked_loss(
+                            outputs, categories, masks, idx
+                        )
                 total_val_loss += val_loss.item()
+
+                if epoch == epochs - 1:
+                    final_validation_weights.append(outputs.cpu().detach().numpy())
+                    final_validation_attention.append(attn_weights.cpu().detach().numpy())
+                    final_validation_categories.append(categories.cpu().detach().numpy())  # Store categories
 
         avg_val_loss = total_val_loss / len(test_dataloader)
         val_losses.append(avg_val_loss)
         logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {avg_val_loss}")
+
+        # Save the final validation categories
+        with open(os.path.join(save_path, "final_validation_categories.pkl"), "wb") as f:
+            pickle.dump(final_validation_categories, f)
 
         # Clear cache after validation epoch
         gc.collect()
@@ -1227,6 +1227,10 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             collate_fn=collate_fn,
             pin_memory=True,
         )
+
+        # Log the size of training and validation data
+        fold_logger.info(f"Training data size: {len(train_sampler)} samples")
+        fold_logger.info(f"Validation data size: {len(val_sampler)} samples")
 
         # save the validation data object as well as the keys used in validation 
         pickle.dump(val_kfold_loader, open(output_dir + "/val_kfold_loader.pkl", "wb"))
