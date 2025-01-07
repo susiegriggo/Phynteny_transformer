@@ -33,6 +33,7 @@ def validate_num_heads(ctx, param, value):
 @click.option("--gamma", default=0.1, help="Gamma for the learning rate scheduler.", type=float)
 @click.option("--step_size", default=5, help="Step size for the learning rate scheduler.", type=int)
 @click.option("--lr", default=1e-6, help="Learning rate for the optimizer.", type=float)
+@click.option("--min_lr_ratio", default=0.1, help="Minimum learning rate ratio for the cosine scheduler.", type=float)
 @click.option("--epochs", default=15, help="Number of training epochs.", type=int)
 @click.option(
     "--dropout", default=0.1, help="Dropout value for dropout layer.", type=float
@@ -104,6 +105,7 @@ def main(
     lr,
     gamma, 
     step_size,
+    min_lr_ratio,
     epochs,
     hidden_dim,
     num_heads,
@@ -182,6 +184,7 @@ def main(
         num_heads=num_heads,
         gamma=gamma, 
         step_size=step_size,
+        min_lr_ratio=min_lr_ratio,
         hidden_dim=hidden_dim,
         dropout=dropout,
         device=device,
