@@ -1058,6 +1058,7 @@ def train(
     val_losses = []
     final_validation_weights = []
     final_validation_attention = [] 
+    final_validation_masks = []  # Add this line
 
     logger.info("Beginning training loop")
     for epoch in range(epochs):
@@ -1139,14 +1140,17 @@ def train(
                     final_validation_weights.append(outputs.cpu().detach().numpy())
                     final_validation_attention.append(attn_weights.cpu().detach().numpy())
                     final_validation_categories.append(categories.cpu().detach().numpy())  # Store categories
+                    final_validation_masks.append(masks.cpu().detach().numpy())  # Store masks
 
         avg_val_loss = total_val_loss / len(test_dataloader)
         val_losses.append(avg_val_loss)
         logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {avg_val_loss}")
 
-        # Save the final validation categories
+        # Save the final validation categories and masks
         with open(os.path.join(save_path, "final_validation_categories.pkl"), "wb") as f:
             pickle.dump(final_validation_categories, f)
+        with open(os.path.join(save_path, "final_validation_masks.pkl"), "wb") as f:  # Add this block
+            pickle.dump(final_validation_masks, f)
 
         # Clear cache after validation epoch
         gc.collect()
@@ -1196,18 +1200,22 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
         fold_logger = logger.bind(fold=fold)
         fold_logger.add(os.path.join(output_dir, "trainer.log"), level="DEBUG")
 
-        fold_logger.info(f"FOLD: {fold}")
+        fold_logger.info(f"FOLD: {fold} - Starting training")
 
         # Create output directory for the current fold
-        fold_logger.info("Creating output directory")
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-            fold_logger.info(f"Directory created: {output_dir}")
-        else:
-            fold_logger.info(f"Warning: Directory {output_dir} already exists.")
+        try:
+            fold_logger.info("Creating output directory")
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+                fold_logger.info(f"Directory created: {output_dir}")
+            else:
+                fold_logger.info(f"Warning: Directory {output_dir} already exists.")
+        except Exception as e:
+            fold_logger.error(f"Error creating output directory: {e}")
+            raise
 
         # Use SubsetRandomSampler for efficient subsetting
-        fold_logger.info("generating subsamples")
+        fold_logger.info("Generating subsamples")
         train_sampler = SubsetRandomSampler(train_index)
         val_sampler = SubsetRandomSampler(val_index)
 
@@ -1239,44 +1247,50 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                 file.write(f"{k}\n")
 
         # Initialize model
-        fold_logger.info("Initializing model")
-        input_dim = dataset[0][0].shape[1]
-        if attention == "circular":
-            kfold_transformer_model = (
-                Seq2SeqTransformerClassifierCircularRelativeAttention(
+        try:
+            fold_logger.info("Initializing model")
+            input_dim = dataset[0][0].shape[1]
+            num_classes = 9
+            fold_logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}")  # Log input_dim and num_classes
+            if attention == "circular":
+                kfold_transformer_model = (
+                    Seq2SeqTransformerClassifierCircularRelativeAttention(
+                        input_dim=input_dim,
+                        num_classes=num_classes,
+                        num_heads=num_heads,
+                        hidden_dim=hidden_dim,
+                        dropout=dropout,
+                        intialisation=intialisation,
+                        num_layers=num_layers,
+                    ).to(device)
+                )
+            elif attention == "relative":
+                kfold_transformer_model = Seq2SeqTransformerClassifierRelativeAttention(
                     input_dim=input_dim,
-                    num_classes=9,
+                    num_classes=num_classes,
                     num_heads=num_heads,
                     hidden_dim=hidden_dim,
                     dropout=dropout,
                     intialisation=intialisation,
                     num_layers=num_layers,
                 ).to(device)
-            )
-        elif attention == "relative":
-            kfold_transformer_model = Seq2SeqTransformerClassifierRelativeAttention(
-                input_dim=input_dim,
-                num_classes=9,
-                num_heads=num_heads,
-                hidden_dim=hidden_dim,
-                dropout=dropout,
-                intialisation=intialisation,
-                num_layers=num_layers,
-            ).to(device)
-        elif attention == "absolute":
-            kfold_transformer_model = Seq2SeqTransformerClassifier(
-                input_dim=input_dim,
-                num_classes=9,
-                num_heads=num_heads,
-                hidden_dim=hidden_dim,
-                dropout=dropout,
-                intialisation=intialisation,
-                num_layers=num_layers,
-            ).to(device)
-        else:
-            fold_logger.error("invalid attention type specified")
+            elif attention == "absolute":
+                kfold_transformer_model = Seq2SeqTransformerClassifier(
+                    input_dim=input_dim,
+                    num_classes=num_classes,
+                    num_heads=num_heads,
+                    hidden_dim=hidden_dim,
+                    dropout=dropout,
+                    intialisation=intialisation,
+                    num_layers=num_layers,
+                ).to(device)
+            else:
+                fold_logger.error("Invalid attention type specified")
+                raise ValueError("Invalid attention type specified")
+        except Exception as e:
+            fold_logger.error(f"Error initializing model: {e}")
+            raise
 
-        
         # Log the devices of various components of the model
         log_model_devices(kfold_transformer_model)
 
@@ -1297,6 +1311,8 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             diagonal_loss=diagonal_loss,
             lambda_penalty=lambda_penalty
         )
+
+        fold_logger.info(f"FOLD: {fold} - Training completed")
 
         # Clear cache after training each fold
         gc.collect()
@@ -1320,11 +1336,13 @@ def train_crossValidation(
     device="cuda",
     dropout=0.1,
     checkpoint_interval=1, 
-    intialisation = 'random',
+    intialisation='random',
     diagonal_loss=True,
     lambda_penalty=0.1,
-    parallel_kfolds=True,
+    parallel_kfolds=False,
     num_layers=2, 
+    random_seed=42,
+    single_fold=None,
 ):
     """
     Train the model using K-Fold cross-validation.
@@ -1349,6 +1367,9 @@ def train_crossValidation(
     diagonal_loss (bool, optional): If True, use diagonal loss function.
     lambda_penalty (float, optional): Penalty for diagonal attention.
     parallel_kfolds (bool, optional): If True, train kfolds in parallel.
+    num_layers (int, optional): Number of transformer layers.
+    random_seed (int, optional): Random seed for reproducibility.
+    single_fold (int, optional): If specified, train only the specified fold.
 
     Returns:
     None
@@ -1356,50 +1377,64 @@ def train_crossValidation(
     # access the logger object
     logger.add(save_path + "trainer.log", level="DEBUG")
 
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    # Log the parameters being used to train the model
+    logger.info(f"Training parameters: attention={attention}, n_splits={n_splits}, batch_size={batch_size}, epochs={epochs}, lr={lr}, step_size={step_size}, gamma={gamma}, min_lr_ratio={min_lr_ratio}, save_path={save_path}, num_heads={num_heads}, hidden_dim={hidden_dim}, device={device}, dropout={dropout}, checkpoint_interval={checkpoint_interval}, intialisation={intialisation}, diagonal_loss={diagonal_loss}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}")
+
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_seed)
     fold = 1
     logger.info(
         "Training with K-Fold crossvalidation with " + str(n_splits) + " folds..."
     )
 
-    if parallel_kfolds:
-        # Set start method for multiprocessing
-        mp.set_start_method('spawn', force=True)
-
-        # Create a process for each fold
-        processes = []
-        num_gpus = torch.cuda.device_count()
+    if single_fold is not None:
+        if single_fold < 1 or single_fold > n_splits:
+            logger.error(f"Invalid single_fold value: {single_fold}. It must be between 1 and {n_splits}.")
+            raise ValueError(f"Invalid single_fold value: {single_fold}. It must be between 1 and {n_splits}.")
+        logger.info(f"Training only fold {single_fold}")
         for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
-            device_id = (fold - 1) % num_gpus
-            logger.info(f"Training fold {fold} on device {device_id}")
-            p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers))
-            p.start()
-            processes.append(p)
+            if fold == single_fold:
+                logger.info(f"Training fold {fold} on device {device}")
+                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers)
+                break
+    else:
+        if parallel_kfolds:
+            # Set start method for multiprocessing
+            mp.set_start_method('spawn', force=True)
 
-        # Wait for all processes to finish
-        for p in processes:
-            p.join()
+            # Create a process for each fold
+            processes = []
+            num_gpus = torch.cuda.device_count()
+            for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
+                device_id = (fold - 1) % num_gpus
+                logger.info(f"Training fold {fold} on device {device_id}")
+                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers))
+                p.start()
+                processes.append(p)
 
-        # Check if any process is still alive
-        for p in processes:
-            if p.is_alive():
-                logger.error(f"Process {p.pid} is still alive. Terminating...")
-                p.terminate()
+            # Wait for all processes to finish
+            for p in processes:
                 p.join()
 
-        # Clear cache after all processes finish
-        gc.collect()
-        torch.cuda.empty_cache()
-    else:
-        num_gpus = torch.cuda.device_count()
-        for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
-            device_id = (fold - 1) % num_gpus
-            logger.info(f"Training fold {fold} on device {device_id}")
-            train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers)
+            # Check if any process is still alive
+            for p in processes:
+                if p.is_alive():
+                    logger.error(f"Process {p.pid} is still alive. Terminating...")
+                    p.terminate()
+                    p.join()
 
-        # Clear cache after all folds finish
-        gc.collect()
-        torch.cuda.empty_cache()
+            # Clear cache after all processes finish
+            gc.collect()
+            torch.cuda.empty_cache()
+        else:
+            num_gpus = torch.cuda.device_count()
+            for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
+                device_id = (fold - 1) % num_gpus
+                logger.info(f"Training fold {fold} on device {device_id}")
+                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers)
+
+            # Clear cache after all folds finish
+            gc.collect()
+            torch.cuda.empty_cache()
 
 def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_output"):
     """

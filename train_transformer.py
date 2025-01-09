@@ -96,6 +96,12 @@ def validate_num_heads(ctx, param, value):
     help="Number of transformer layers.",
     type=int,
 )
+@click.option(
+    "--fold_index",
+    default=None,
+    help="Specify a single fold index to train.",
+    type=int,
+)
 def main(
     x_path,
     y_path,
@@ -118,35 +124,48 @@ def main(
     lambda_penalty,
     parallel_kfolds,
     num_layers,
+    fold_index,
 ):
-    # Create the output directory if it doesn't exist
-    if not os.path.exists(out):
-        os.makedirs(out)
-        print(f"Directory created: {out}")
-    else:
-        print(f"Warning: Directory {out} already exists.")
+    try:
+        # Create the output directory if it doesn't exist
+        if not os.path.exists(out):
+            os.makedirs(out)
+            print(f"Directory created: {out}")
+        else:
+            print(f"Warning: Directory {out} already exists.")
+    except Exception as e:
+        logger.error(f"Error creating output directory: {e}")
+        raise
 
     # generate loguru object
     logger.add(out + "/trainer.log", level="DEBUG")
 
-    # Input phrog info
-    phrog_integer = pickle.load(
-        open(
-            "/home/grig0076/GitHubs/Phynteny_transformer/phynteny_utils/integer_category.pkl",
-            "rb",
-        )
-    )
-    phrog_integer = dict(
-        zip(
-            [i - 1 for i in list(phrog_integer.keys())],
-            [i for i in list(phrog_integer.values())],
-        )
-    )  # shuffling the keys down by one
+    # Log parameter values
+    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, gamma={gamma}, step_size={step_size}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, diagonal_loss={diagonal_loss}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}")
 
-    # read in data
-    logger.info("Reading in data")
-    X = pickle.load(open(x_path, "rb"))
-    y = pickle.load(open(y_path, "rb"))
+    try:
+        # Input phrog info
+        logger.info("Loading phrog info")
+        phrog_integer = pickle.load(
+            open(
+                "/home/grig0076/GitHubs/Phynteny_transformer/phynteny_utils/integer_category.pkl",
+                "rb",
+            )
+        )
+        phrog_integer = dict(
+            zip(
+                [i - 1 for i in list(phrog_integer.keys())],
+                [i for i in list(phrog_integer.values())],
+            )
+        )  # shuffling the keys down by one
+
+        # read in data
+        logger.info("Reading in data")
+        X = pickle.load(open(x_path, "rb"))
+        y = pickle.load(open(y_path, "rb"))
+    except Exception as e:
+        logger.error(f"Error reading input files: {e}")
+        raise
 
     # Shuffle if specified
     if shuffle:
@@ -166,34 +185,39 @@ def main(
     # note that this is a very small training size
     
     train_dataset = model_onehot.VariableSeq2SeqEmbeddingDataset(
-        list(X[0].values()), list(y[0].values()), mask_portion=mask_portion
+        list(X.values()), list(y.values()), mask_portion=mask_portion
     )
     train_dataset.set_training(True)
+    logger.info(f"Total dataset size: {len(train_dataset)} samples")
+
     logger.info("\nTraining model...")
 
-
-    #TODO add step size as another parameter 
-    model_onehot.train_crossValidation(
-        train_dataset,
-        attention,
-        n_splits=10,
-        batch_size=batch_size, # have changed this batch size to 16 
-        epochs=epochs,
-        lr=lr,
-        save_path=out,
-        num_heads=num_heads,
-        gamma=gamma, 
-        step_size=step_size,
-        min_lr_ratio=min_lr_ratio,
-        hidden_dim=hidden_dim,
-        dropout=dropout,
-        device=device,
-        intialisation=intialisation, 
-        diagonal_loss=diagonal_loss,
-        lambda_penalty=lambda_penalty,
-        parallel_kfolds=parallel_kfolds,
-        num_layers=num_layers,
-    )
+    try:
+        model_onehot.train_crossValidation(
+            train_dataset,
+            attention,
+            n_splits=10,
+            batch_size=batch_size, # have changed this batch size to 16 
+            epochs=epochs,
+            lr=lr,
+            save_path=out,
+            num_heads=num_heads,
+            gamma=gamma, 
+            step_size=step_size,
+            min_lr_ratio=min_lr_ratio,
+            hidden_dim=hidden_dim,
+            dropout=dropout,
+            device=device,
+            intialisation=intialisation, 
+            diagonal_loss=diagonal_loss,
+            lambda_penalty=lambda_penalty,
+            parallel_kfolds=parallel_kfolds,
+            num_layers=num_layers,
+            single_fold=fold_index,
+        )
+    except Exception as e:
+        logger.error(f"Error during training: {e}")
+        raise
 
     # Evaluate the model
     # print('Evaluating the model', flush=True)
