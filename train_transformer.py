@@ -102,6 +102,12 @@ def validate_num_heads(ctx, param, value):
     help="Specify a single fold index to train.",
     type=int,
 )
+@click.option(
+    "--output_dim",
+    default=None,
+    help="Specify the output dimension for the model.",
+    type=int,
+)
 def main(
     x_path,
     y_path,
@@ -125,6 +131,7 @@ def main(
     parallel_kfolds,
     num_layers,
     fold_index,
+    output_dim,  # Add output_dim parameter
 ):
     try:
         # Create the output directory if it doesn't exist
@@ -141,7 +148,7 @@ def main(
     logger.add(out + "/trainer.log", level="DEBUG")
 
     # Log parameter values
-    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, gamma={gamma}, step_size={step_size}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, diagonal_loss={diagonal_loss}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}")
+    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, gamma={gamma}, step_size={step_size}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, diagonal_loss={diagonal_loss}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}")  # Log output_dim
 
     try:
         # Input phrog info
@@ -214,6 +221,7 @@ def main(
             parallel_kfolds=parallel_kfolds,
             num_layers=num_layers,
             single_fold=fold_index,
+            output_dim=output_dim  # Pass output_dim
         )
     except Exception as e:
         logger.error(f"Error during training: {e}")

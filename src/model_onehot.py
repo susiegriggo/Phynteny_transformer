@@ -195,7 +195,8 @@ class Seq2SeqTransformerClassifier(nn.Module):
         num_layers=2,
         hidden_dim=512,
         dropout=0.1,
-        intialisation='random'
+        intialisation='random',
+        output_dim=None  # Add output_dim parameter
     ):
         """
         Initialize the Seq2Seq Transformer Classifier.
@@ -251,7 +252,8 @@ class Seq2SeqTransformerClassifier(nn.Module):
         ).to(device)
 
         # Final Classification Layer
-        self.fc = nn.Linear(2 * hidden_dim, num_classes).to(device)
+        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+        self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
@@ -280,10 +282,14 @@ class Seq2SeqTransformerClassifier(nn.Module):
         if return_attn_weights:
             x, attn_weights = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
             x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x, attn_weights
         else:
             x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x
 
 # Add logging to check the device of various components
@@ -470,7 +476,8 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         hidden_dim=512,
         dropout=0.1,
         max_len=1000,
-        intialisation='random'
+        intialisation='random',
+        output_dim=None  # Add output_dim parameter
     ):
         """
         Initialize the Seq2Seq Transformer Classifier with Relative Attention.
@@ -513,7 +520,8 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
             encoder_layers, num_layers=num_layers
         ).to(device)
 
-        self.fc = nn.Linear(2 * hidden_dim, num_classes).to(device)
+        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+        self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
@@ -544,10 +552,14 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
             for layer in self.transformer_encoder.layers[1:]:
                 x = layer(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x, attn_weights
         else:
             x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x
 
 
@@ -747,7 +759,8 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         hidden_dim=512,
         dropout=0.1,
         max_len=1000,
-        intialisation='random'
+        intialisation='random',
+        output_dim=None  # Add output_dim parameter
     ):
         """
         Initialize the Seq2Seq Transformer Classifier with Circular Relative Attention.
@@ -792,7 +805,8 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
             encoder_layers, num_layers=num_layers
         ).to(device)
 
-        self.fc = nn.Linear(2 * hidden_dim, num_classes).to(device)
+        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+        self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
@@ -823,10 +837,14 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
             for layer in self.transformer_encoder.layers[1:]:
                 x = layer(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x, attn_weights
         else:
             x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x
 
 
@@ -1191,9 +1209,12 @@ def train(
     gc.collect()
     torch.cuda.empty_cache()
 
-def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers):
+
+
+def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers, output_dim):
+    fold_logger = None
     try:
-        device = torch.device(f"cuda:{device_id}")
+        device = torch.device(device_id)
         output_dir = f"{save_path}/fold_{fold}"
         
         # Set up a new logger for each fold
@@ -1251,7 +1272,7 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             fold_logger.info("Initializing model")
             input_dim = dataset[0][0].shape[1]
             num_classes = 9
-            fold_logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}")  # Log input_dim and num_classes
+            fold_logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}, output_dim={output_dim}")  # Log input_dim, num_classes, and output_dim
             if attention == "circular":
                 kfold_transformer_model = (
                     Seq2SeqTransformerClassifierCircularRelativeAttention(
@@ -1262,6 +1283,7 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                         dropout=dropout,
                         intialisation=intialisation,
                         num_layers=num_layers,
+                        output_dim=output_dim  # Pass output_dim
                     ).to(device)
                 )
             elif attention == "relative":
@@ -1273,6 +1295,7 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                     dropout=dropout,
                     intialisation=intialisation,
                     num_layers=num_layers,
+                    output_dim=output_dim  # Pass output_dim
                 ).to(device)
             elif attention == "absolute":
                 kfold_transformer_model = Seq2SeqTransformerClassifier(
@@ -1283,6 +1306,7 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                     dropout=dropout,
                     intialisation=intialisation,
                     num_layers=num_layers,
+                    output_dim=output_dim  # Pass output_dim
                 ).to(device)
             else:
                 fold_logger.error("Invalid attention type specified")
@@ -1318,7 +1342,10 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
         gc.collect()
         torch.cuda.empty_cache()
     except Exception as e:
-        fold_logger.error(f"Error in fold {fold}: {e}")
+        if fold_logger: 
+            fold_logger.error(f"Error in fold {fold}: {e}")
+        else:
+            fold_logger.error(f"Error in fold {fold}: {e}")
 
 def train_crossValidation(
     dataset,
@@ -1343,6 +1370,7 @@ def train_crossValidation(
     num_layers=2, 
     random_seed=42,
     single_fold=None,
+    output_dim=None  # Add output_dim parameter
 ):
     """
     Train the model using K-Fold cross-validation.
@@ -1378,7 +1406,7 @@ def train_crossValidation(
     logger.add(save_path + "trainer.log", level="DEBUG")
 
     # Log the parameters being used to train the model
-    logger.info(f"Training parameters: attention={attention}, n_splits={n_splits}, batch_size={batch_size}, epochs={epochs}, lr={lr}, step_size={step_size}, gamma={gamma}, min_lr_ratio={min_lr_ratio}, save_path={save_path}, num_heads={num_heads}, hidden_dim={hidden_dim}, device={device}, dropout={dropout}, checkpoint_interval={checkpoint_interval}, intialisation={intialisation}, diagonal_loss={diagonal_loss}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}")
+    logger.info(f"Training parameters: attention={attention}, n_splits={n_splits}, batch_size={batch_size}, epochs={epochs}, lr={lr}, step_size={step_size}, gamma={gamma}, min_lr_ratio={min_lr_ratio}, save_path={save_path}, num_heads={num_heads}, hidden_dim={hidden_dim}, device={device}, dropout={dropout}, checkpoint_interval={checkpoint_interval}, intialisation={intialisation}, diagonal_loss={diagonal_loss}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, output_dim={output_dim}")
 
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_seed)
     fold = 1
@@ -1393,8 +1421,9 @@ def train_crossValidation(
         logger.info(f"Training only fold {single_fold}")
         for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
             if fold == single_fold:
+                fold_logger = logger.bind(fold=fold)  # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device}")
-                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers)
+                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers, output_dim)
                 break
     else:
         if parallel_kfolds:
@@ -1407,7 +1436,7 @@ def train_crossValidation(
             for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
                 device_id = (fold - 1) % num_gpus
                 logger.info(f"Training fold {fold} on device {device_id}")
-                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers))
+                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers, output_dim))
                 p.start()
                 processes.append(p)
 
@@ -1429,8 +1458,9 @@ def train_crossValidation(
             num_gpus = torch.cuda.device_count()
             for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
                 device_id = (fold - 1) % num_gpus
+                fold_logger = logger.bind(fold=fold)  # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device_id}")
-                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers)
+                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers, output_dim)
 
             # Clear cache after all folds finish
             gc.collect()
