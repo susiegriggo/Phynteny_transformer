@@ -227,16 +227,17 @@ class Seq2SeqTransformerClassifier(nn.Module):
         self.dropout = nn.Dropout(dropout).to(device)  
 
         # Positional Encoding (now learnable) -  could try using the fixed sinusoidal embeddings instead
+        logger.info(f"Initialising positional encoding with {intialisation} values")
         if intialisation == 'random':
             self.positional_encoding = nn.Parameter(
                 torch.randn(1000, hidden_dim)
             ).to(device)
-        elif intialisation == 'zero':
+        elif intialisation == 'zeros':
             self.positional_encoding = nn.Parameter(
                 torch.zeros(1000, hidden_dim) 
             ).to(device)
         else: 
-            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zero'.")
+            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zeros'.")
 
         # LSTM layer
         self.lstm = nn.LSTM(
@@ -329,7 +330,7 @@ class RelativePositionAttention(nn.Module):
             self.relative_position_v = nn.Parameter(
                 torch.randn(max_len, d_model // num_heads)
             )
-        elif intialisation == 'zero':
+        elif intialisation == 'zeros':
             self.relative_position_k = nn.Parameter(
                 torch.zeros(max_len, d_model // num_heads)
             )               
@@ -337,9 +338,9 @@ class RelativePositionAttention(nn.Module):
                 torch.zeros(max_len, d_model // num_heads)
             )           
         else:       
-            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zero'.")
+            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zeros'.")
 
-    def forward(self, query, key, value, attn_mask=None, return_attn_weights=False):
+    def forward(self, query, key, value, attn_mask=None, return_attn_weights=False, src_key_padding_mask=None):
         """
         Forward pass of the relative position attention.
 
@@ -385,6 +386,10 @@ class RelativePositionAttention(nn.Module):
 
         if attn_mask is not None:
             scores = scores.masked_fill(attn_mask == 0, float("-inf"))
+        
+        if src_key_padding_mask is not None:
+            scores = scores.masked_fill(src_key_padding_mask.unsqueeze(1).unsqueeze(2) == 0, float("-inf"))
+            scores = scores.masked_fill(src_key_padding_mask.unsqueeze(1).unsqueeze(3) == 0, float("-inf"))
 
         attn_weights = F.softmax(scores, dim=-1)
         attn_output = torch.matmul(attn_weights, v)
@@ -449,7 +454,7 @@ class CustomTransformerEncoderLayer(nn.Module):
         torch.Tensor: Output tensor.
         """
         if return_attn_weights:
-            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, return_attn_weights=return_attn_weights) # this is a change here that I made 
+            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, src_key_padding_mask=src_key_padding_mask, return_attn_weights=return_attn_weights) # this is a change here that I made 
             src = src + self.dropout1(src2)
             src = self.norm1(src)
             src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
@@ -457,7 +462,7 @@ class CustomTransformerEncoderLayer(nn.Module):
             src = self.norm2(src)
             return src, attn_weights
         else:
-            src2 = self.self_attn(src, src, src, attn_mask=src_mask)
+            src2 = self.self_attn(src, src, src, attn_mask=src_mask, src_key_padding_mask=src_key_padding_mask)
             src = src + self.dropout1(src2)
             src = self.norm1(src)
             src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
@@ -590,7 +595,7 @@ class CircularRelativePositionAttention(nn.Module):
                 torch.randn(max_len, d_model // num_heads)
             )  
 
-        elif intialisation == 'zero':
+        elif intialisation == 'zeros':
             self.relative_position_k = nn.Parameter(
                 torch.zeros(max_len, d_model // num_heads)
             ) 
@@ -598,9 +603,9 @@ class CircularRelativePositionAttention(nn.Module):
                 torch.zeros(max_len, d_model // num_heads)
             )
         else:
-            raise ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zero'.")
+            raise ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zeros'.")
             
-    def forward(self, query, key, value, attn_mask=None, is_causal=False, output_dir=None, batch_idx=None, return_attn_weights=False):
+    def forward(self, query, key, value, attn_mask=None, src_key_padding_mask=None, is_causal=False, output_dir=None, batch_idx=None, return_attn_weights=False):
         """
         Forward pass of the circular relative position attention.
 
@@ -660,10 +665,27 @@ class CircularRelativePositionAttention(nn.Module):
         scores += torch.einsum("bhqd,bqkd->bhqk", q, rel_positions_k[0])
 
         if attn_mask is not None:
-            scores = scores.masked_fill(attn_mask == 0, float("-inf"))
+            logger.info(f"attn_mask: {attn_mask}")  
+            scores = scores.masked_fill(attn_mask == 0, float("-inf")) 
 
+        if src_key_padding_mask is not None:
+            # apply the mask in both direction 
+            scores = scores.masked_fill(src_key_padding_mask.unsqueeze(1).unsqueeze(2) == 0, float("-inf")) #mask the padded rows 
+            scores = scores.masked_fill(src_key_padding_mask.unsqueeze(1).unsqueeze(3) == 0, float("-inf")) #mask the padded columns
+
+        # Apply softmax to get attention weights
         attn_weights = F.softmax(scores, dim=-1)
+        
+        # Mask the resulting attention weights to ensure padded positions have zero attention
+        if src_key_padding_mask is not None:
+            attn_weights = torch.nan_to_num(attn_weights, nan=0.0) # this is a bit cheeky 
+
         attn_output = torch.matmul(attn_weights, v)
+        #logger.info(f"attn_weights shape: {attn_weights.shape}")
+        #logger.info(f"attn_output shape: {attn_output.shape}") 
+        #logger.info(f"attn_output: {attn_output}")
+        #logger.info(f"attn_weights: {attn_weights}")
+      
 
         # Adjust dimensions for broadcasting
         rel_positions_v = (
@@ -732,7 +754,7 @@ class CircularTransformerEncoderLayer(nn.Module):
         torch.Tensor: Output tensor.
         """
         if return_attn_weights: 
-            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, is_causal=is_causal, return_attn_weights=return_attn_weights)
+            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, is_causal=is_causal, src_key_padding_mask=src_key_padding_mask, return_attn_weights=return_attn_weights)
             src = src + self.dropout1(src2)
             src = self.norm1(src)
             src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
@@ -740,7 +762,7 @@ class CircularTransformerEncoderLayer(nn.Module):
             src = self.norm2(src)
             return src, attn_weights
         else: 
-            src2 = self.self_attn(src, src, src, attn_mask=src_mask, is_causal=is_causal)
+            src2 = self.self_attn(src, src, src, attn_mask=src_mask, src_key_padding_mask=src_key_padding_mask, is_causal=is_causal)
             src = src + self.dropout1(src2)
             src = self.norm1(src)
             src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
@@ -908,7 +930,7 @@ def collate_fn(batch):
     masks_padded = pad_sequence(masks, batch_first=True, padding_value=-2)
     return embeddings_padded, categories_padded, masks_padded, idx
 
-def combined_loss(output, target, mask, attn_weights, idx, lambda_penalty=0.1, ignore_index=-1):
+def combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask, lambda_penalty=0.1, ignore_index=-1):
     """
     Combine classification loss with a diagonal attention penalty.
 
@@ -947,16 +969,21 @@ def combined_loss(output, target, mask, attn_weights, idx, lambda_penalty=0.1, i
     # Compute classification loss
     loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").to(device)
     classification_loss = loss_fct(output_flat, target_flat)
+    #logger.info(f'classification_loss: {classification_loss}') 
     classification_loss = classification_loss[idx_flat].sum() / len(idx_flat)
+    #logger.info(f'classification_loss: {classification_loss}')
+
+    # potentially using src_key_padding_mask for something here 
 
     # Compute diagonal penalty
-    diagonal_penalty = diagonal_attention_penalty(attn_weights)
+    diagonal_penalty = diagonal_attention_penalty(attn_weights, src_key_padding_mask=src_key_padding_mask)
+    #logger.info(f'diagonal_penalty: {diagonal_penalty}')
 
     # Combined loss
     total_loss = classification_loss + lambda_penalty * diagonal_penalty
     return total_loss
 
-def diagonal_attention_penalty(attn_weights):
+def diagonal_attention_penalty(attn_weights, src_key_padding_mask):
     """
     Calculate the diagonal attention penalty.
 
@@ -967,18 +994,33 @@ def diagonal_attention_penalty(attn_weights):
     torch.Tensor: Calculated penalty.
     """
     # attn_weights: [batch_size, num_heads, seq_len, seq_len]
+    # seq_len is the largest seqence length in the batch 
     batch_size, num_heads, seq_len, _ = attn_weights.size()
     device = attn_weights.device
 
     # Create a diagonal mask
     diag_mask = torch.eye(seq_len, device=device).unsqueeze(0).unsqueeze(0)  # Shape: [1, 1, seq_len, seq_len]
+    
+    # Create a mask for valid positions (non-padded positions)
+    valid_mask = src_key_padding_mask.unsqueeze(1).unsqueeze(2).expand(-1, num_heads, seq_len, -1)  # Shape: [batch_size, num_heads, seq_len, seq_len]
+
+    # Apply the valid mask to the attention weights
+    attn_weights = attn_weights * valid_mask
 
     # Extract diagonal attention weights
     diag_values = attn_weights * diag_mask  # Retain only diagonal values
 
+     # Calculate the valid sequence lengths
+    valid_lengths = src_key_padding_mask.sum(dim=1).unsqueeze(1).unsqueeze(2).expand(-1, num_heads, seq_len)  # Shape: [batch_size, num_heads, seq_len]
+
     # Penalize the diagonal attention weights
-    penalty = diag_values.sum(dim=(-2, -1))  # Sum over seq_len dimensions
-    return penalty.mean()  # Return average penalty over batch and heads
+    #penalty = diag_values.sum(dim=(-2, -1)) #/ valid_lengths.sum(dim=-1) # I think this here is broken 
+    #return penalty.mean()  # Return average penalty over batch and heads
+
+    penalty = torch.nansum(diag_values, dim=(-2,-1)) / valid_lengths.sum(dim=-1)
+    #logger.info(f'penalty: {penalty.mean()}')
+
+    return penalty.mean()
 
 
 def cosine_lr_scheduler(optimizer, num_warmup_steps, num_training_steps, min_lr_ratio=0.1, last_epoch=-1):
@@ -1092,7 +1134,7 @@ def train(
             optimizer.zero_grad()
             
             # Mask the padding from the transformer 
-            src_key_padding_mask = (masks == -2).bool().to(device)
+            src_key_padding_mask = (masks != -2).bool().to(device) #NOTE I HAVE EDITED THIS LINE 
      
            
             with autocast():
@@ -1101,7 +1143,7 @@ def train(
                     #logger.info(f"Using diagonal loss with lambda_penalty: {lambda_penalty}")
                     outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
                     loss = combined_loss(
-                        outputs, categories, masks, attn_weights, idx, lambda_penalty=lambda_penalty
+                        outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty
                     ) 
                 else:  
                     outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
@@ -1138,7 +1180,7 @@ def train(
                     masks.to(device).float(),
                 )
                
-                src_key_padding_mask = (masks == -2).bool().to(device)  # Mask the padding from the transformer 
+                src_key_padding_mask = (masks != -2).bool().to(device)  # Mask the padding from the transformer 
                 
                 with autocast():
                     outputs, attn_weights = model(
@@ -1146,7 +1188,7 @@ def train(
                     )
                     if diagonal_loss:
                         val_loss = combined_loss(
-                            outputs, categories, masks, attn_weights, idx, lambda_penalty=lambda_penalty
+                            outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty
                         )
                     else:
                         val_loss = masked_loss(
