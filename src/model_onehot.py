@@ -678,14 +678,9 @@ class CircularRelativePositionAttention(nn.Module):
         
         # Mask the resulting attention weights to ensure padded positions have zero attention
         if src_key_padding_mask is not None:
-            attn_weights = torch.nan_to_num(attn_weights, nan=0.0) # this is a bit cheeky 
+            attn_weights = torch.nan_to_num(attn_weights, nan=0.0) # swap any nan values remaining from the padding to zeros 
 
         attn_output = torch.matmul(attn_weights, v)
-        #logger.info(f"attn_weights shape: {attn_weights.shape}")
-        #logger.info(f"attn_output shape: {attn_output.shape}") 
-        #logger.info(f"attn_output: {attn_output}")
-        #logger.info(f"attn_weights: {attn_weights}")
-      
 
         # Adjust dimensions for broadcasting
         rel_positions_v = (
@@ -890,9 +885,6 @@ def masked_loss(output, target, mask, idx, ignore_index=-1):
     # Check if CUDA is available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    #logger.info(f"Output is on device: {output.device}")
-    #logger.info(f"Target is on device: {target.device}")
-    #logger.info(f"Mask is on device: {mask.device}")
 
     # Flatten the batch and sequence dimensions
     output_flat = output.view(-1, num_classes)  # [batch_size * seq_len, num_classes]
@@ -950,11 +942,7 @@ def combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask,
     batch_size, seq_len, num_classes = output.shape
     device = output.device
 
-    #logger.info(f"Output is on device: {output.device}")
-    #logger.info(f"Target is on device: {target.device}")
-    #logger.info(f"Mask is on device: {mask.device}")
-    #logger.info(f"Attention weights are on device: {attn_weights.device}")
-
+    # Flatten the batch and sequence dimensions
     output_flat = output.view(-1, num_classes)
     target_flat = target.view(-1)
     mask_flat = mask.view(-1)
@@ -969,19 +957,15 @@ def combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask,
     # Compute classification loss
     loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").to(device)
     classification_loss = loss_fct(output_flat, target_flat)
-    #logger.info(f'classification_loss: {classification_loss}') 
     classification_loss = classification_loss[idx_flat].sum() / len(idx_flat)
-    #logger.info(f'classification_loss: {classification_loss}')
-
-    # potentially using src_key_padding_mask for something here 
 
     # Compute diagonal penalty
     diagonal_penalty = diagonal_attention_penalty(attn_weights, src_key_padding_mask=src_key_padding_mask)
-    #logger.info(f'diagonal_penalty: {diagonal_penalty}')
 
     # Combined loss
-    total_loss = classification_loss + lambda_penalty * diagonal_penalty
-    return total_loss
+    penalised_loss = classification_loss + lambda_penalty * diagonal_penalty
+
+    return penalised_loss, classification_loss
 
 def diagonal_attention_penalty(attn_weights, src_key_padding_mask):
     """
@@ -1014,11 +998,7 @@ def diagonal_attention_penalty(attn_weights, src_key_padding_mask):
     valid_lengths = src_key_padding_mask.sum(dim=1).unsqueeze(1).unsqueeze(2).expand(-1, num_heads, seq_len)  # Shape: [batch_size, num_heads, seq_len]
 
     # Penalize the diagonal attention weights
-    #penalty = diag_values.sum(dim=(-2, -1)) #/ valid_lengths.sum(dim=-1) # I think this here is broken 
-    #return penalty.mean()  # Return average penalty over batch and heads
-
     penalty = torch.nansum(diag_values, dim=(-2,-1)) / valid_lengths.sum(dim=-1)
-    #logger.info(f'penalty: {penalty.mean()}')
 
     return penalty.mean()
 
@@ -1068,14 +1048,11 @@ def train(
     train_dataloader,
     test_dataloader,
     epochs=10,
-    step_size=10, 
-    gamma=0.1,
     lr=1e-5,
     min_lr_ratio=0.1,
     save_path="model",
     device="cuda",
     checkpoint_interval=1, 
-    diagonal_loss=True, 
     lambda_penalty=0.1
 ):
     """
@@ -1086,14 +1063,11 @@ def train(
     train_dataloader (DataLoader): DataLoader for training data.
     test_dataloader (DataLoader): DataLoader for test data.
     epochs (int, optional): Number of training epochs.
-    step_size (int, optional): Step size for the learning rate scheduler.
-    gamma (float, optional): Gamma for the learning rate scheduler.
     lr (float, optional): Learning rate.
     min_lr_ratio (float, optional): Minimum learning rate ratio.
     save_path (str, optional): Path to save the model.
     device (str, optional): Device to train on ('cuda' or 'cpu').
     checkpoint_interval (int, optional): Interval for saving checkpoints.
-    diagonal_loss (bool, optional): If True, use diagonal loss function.
     lambda_penalty (float, optional): Penalty for diagonal attention.
 
     Returns:
@@ -1114,16 +1088,21 @@ def train(
     # Initialize gradient scaler for mixed precision training
     scaler = GradScaler()
     
+    # lists to store metrics 
     train_losses = []
     val_losses = []
+    val_classification_losses = []
     final_validation_weights = []
     final_validation_attention = [] 
-    final_validation_masks = []  # Add this line
+    final_validation_masks = [] 
+    diagonal_penalities = []
 
     logger.info("Beginning training loop")
     for epoch in range(epochs):
         model.train()  # Ensure model is in training mode
         total_loss = 0
+  
+        logger.info(f"Starting epoch {epoch + 1}/{epochs}")
         for embeddings, categories, masks, idx in train_dataloader:
             embeddings, categories, masks = (
                 embeddings.to(device).float(),
@@ -1134,35 +1113,28 @@ def train(
             optimizer.zero_grad()
             
             # Mask the padding from the transformer 
-            src_key_padding_mask = (masks != -2).bool().to(device) #NOTE I HAVE EDITED THIS LINE 
+            src_key_padding_mask = (masks != -2).bool().to(device) 
      
-           
+           # Forward pass
             with autocast():
-                # Use the diagonal loss function if specified
-                if diagonal_loss: 
-                    #logger.info(f"Using diagonal loss with lambda_penalty: {lambda_penalty}")
-                    outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
-                    loss = combined_loss(
-                        outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty
-                    ) 
-                else:  
-                    outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-                    #logger.info(f"Outputs are on device: {outputs.device}")
-                    loss = masked_loss(
-                        outputs, categories, masks, idx
-                    )
-                #logger.info(f"Loss is on device: {loss.device}")
-
+                outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                loss, _ = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty) 
+                       
+         
             # Backpropagation and optimization
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
 
+            # Update total loss
             total_loss += loss.item()
 
+        # Calculate average training loss for the epoch
         avg_train_loss = total_loss / len(train_dataloader)
         train_losses.append(avg_train_loss)
-        logger.info(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_train_loss}")
+
+        # Log training loss
+        logger.info(f"Epoch {epoch + 1}/{epochs}, Training Loss: {avg_train_loss}")
 
         # Clear cache after training epoch
         gc.collect()
@@ -1171,8 +1143,11 @@ def train(
         # Validation loss
         model.eval()  # Ensure model is in evaluation mode
         total_val_loss = 0
+        total_val_classification_loss = 0
+        total_diagonal_penalty = 0
         final_validation_categories = []  # List to store categories for each validation instance
-        with torch.no_grad():
+
+        with torch.no_grad(): # No need to calculate gradients for validation
             for embeddings, categories, masks, idx in test_dataloader:
                 embeddings, categories, masks = (
                     embeddings.to(device).float(),
@@ -1180,30 +1155,40 @@ def train(
                     masks.to(device).float(),
                 )
                
-                src_key_padding_mask = (masks != -2).bool().to(device)  # Mask the padding from the transformer 
+                # Mask the padding from the transformer
+                src_key_padding_mask = (masks != -2).bool().to(device)  
                 
+                # Forward pass
                 with autocast():
-                    outputs, attn_weights = model(
-                        embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True
-                    )
-                    if diagonal_loss:
-                        val_loss = combined_loss(
-                            outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty
-                        )
-                    else:
-                        val_loss = masked_loss(
-                            outputs, categories, masks, idx
-                        )
+                    outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                    val_loss, val_classification_loss = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty)
+                    
+                    # Calculate diagonal penalty so it can be stored in the metrics
+                    diagonal_penalty = diagonal_attention_penalty(attn_weights, src_key_padding_mask=src_key_padding_mask)
+    
+                # Update total validation loss
                 total_val_loss += val_loss.item()
+                total_val_classification_loss += val_classification_loss.item()
+                total_diagonal_penalty += diagonal_penalty.item()
 
+                # Store the final validation weights and attention weights
                 if epoch == epochs - 1:
                     final_validation_weights.append(outputs.cpu().detach().numpy())
                     final_validation_attention.append(attn_weights.cpu().detach().numpy())
                     final_validation_categories.append(categories.cpu().detach().numpy())  # Store categories
                     final_validation_masks.append(masks.cpu().detach().numpy())  # Store masks
 
+        # Calculate average validation loss
         avg_val_loss = total_val_loss / len(test_dataloader)
+        avg_val_classification_loss = total_val_classification_loss / len(test_dataloader)
+        avg_diagonal_penalty = total_diagonal_penalty / len(test_dataloader)
+
+        # Append metrics to lists
         val_losses.append(avg_val_loss)
+        val_classification_losses.append(avg_val_classification_loss)
+        diagonal_penalities.append(avg_diagonal_penalty)
+
+        # Log validation loss
         logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {avg_val_loss}")
 
         # Save the final validation categories and masks
@@ -1218,7 +1203,7 @@ def train(
 
         # Update scheduler
         scheduler.step()
-        logger.info(f'learning rate {scheduler.get_last_lr()}', flush=True)
+        logger.info(f"Epoch {epoch + 1}/{epochs}, Learning Rate: {scheduler.get_last_lr()}")
 
         # Save checkpoint every 'checkpoint_interval' epochs 
         if (epoch + 1) % checkpoint_interval == 0:
@@ -1230,11 +1215,14 @@ def train(
     torch.save(model.state_dict(), save_path + "transformer.model")
 
     # Save the training and validation loss to CSV
+    logger.info("Saving metrics to CSV")
     loss_df = pd.DataFrame(
         {
             "epoch": [i for i in range(epochs)],
             "training losses": train_losses,
-            "validation losses": val_losses,
+            "validation losses": val_losses, # this here is the 'penalised loss' 
+            "diagonal_penalities": diagonal_penalities,
+            "classification_losses": val_classification_losses,
         }
     )
     output_dir = f"{save_path}"
@@ -1252,8 +1240,7 @@ def train(
     torch.cuda.empty_cache()
 
 
-
-def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers, output_dim):
+def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim):
     fold_logger = None
     try:
         device = torch.device(device_id)
@@ -1368,13 +1355,10 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             val_kfold_loader,
             epochs=epochs,
             lr=lr,
-            step_size=step_size, 
-            gamma=gamma, 
             min_lr_ratio=min_lr_ratio,
             save_path=output_dir,
             device=device,
             checkpoint_interval=checkpoint_interval,
-            diagonal_loss=diagonal_loss,
             lambda_penalty=lambda_penalty
         )
 
@@ -1396,17 +1380,14 @@ def train_crossValidation(
     batch_size=16,
     epochs=10,
     lr=1e-5,
-    step_size=10, 
-    gamma=0.1,
     min_lr_ratio=0.1,
     save_path="out",
     num_heads=4,
     hidden_dim=512,
     device="cuda",
     dropout=0.1,
-    checkpoint_interval=1, 
+    checkpoint_interval=10, 
     intialisation='random',
-    diagonal_loss=True,
     lambda_penalty=0.1,
     parallel_kfolds=False,
     num_layers=2, 
@@ -1424,8 +1405,6 @@ def train_crossValidation(
     batch_size (int, optional): Batch size.
     epochs (int, optional): Number of training epochs.
     lr (float, optional): Learning rate.
-    step_size (int, optional): Step size for the learning rate scheduler.
-    gamma (float, optional): Gamma for the learning rate scheduler.
     min_lr_ratio (float, optional): Minimum learning rate ratio.
     save_path (str, optional): Path to save the model.
     num_heads (int, optional): Number of attention heads.
@@ -1434,7 +1413,6 @@ def train_crossValidation(
     dropout (float, optional): Dropout rate.
     checkpoint_interval (int, optional): Interval for saving checkpoints.
     intialisation (str, optional): Initialization method for positional encoding ('random' or 'zero').
-    diagonal_loss (bool, optional): If True, use diagonal loss function.
     lambda_penalty (float, optional): Penalty for diagonal attention.
     parallel_kfolds (bool, optional): If True, train kfolds in parallel.
     num_layers (int, optional): Number of transformer layers.
@@ -1448,7 +1426,7 @@ def train_crossValidation(
     logger.add(save_path + "trainer.log", level="DEBUG")
 
     # Log the parameters being used to train the model
-    logger.info(f"Training parameters: attention={attention}, n_splits={n_splits}, batch_size={batch_size}, epochs={epochs}, lr={lr}, step_size={step_size}, gamma={gamma}, min_lr_ratio={min_lr_ratio}, save_path={save_path}, num_heads={num_heads}, hidden_dim={hidden_dim}, device={device}, dropout={dropout}, checkpoint_interval={checkpoint_interval}, intialisation={intialisation}, diagonal_loss={diagonal_loss}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, output_dim={output_dim}")
+    logger.info(f"Training parameters: attention={attention}, n_splits={n_splits}, batch_size={batch_size}, epochs={epochs}, lr={lr}, min_lr_ratio={min_lr_ratio}, save_path={save_path}, num_heads={num_heads}, hidden_dim={hidden_dim}, device={device}, dropout={dropout}, checkpoint_interval={checkpoint_interval}, intialisation={intialisation},lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, output_dim={output_dim}")
 
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_seed)
     fold = 1
@@ -1465,7 +1443,7 @@ def train_crossValidation(
             if fold == single_fold:
                 fold_logger = logger.bind(fold=fold)  # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device}")
-                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers, output_dim)
+                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim)
                 break
     else:
         if parallel_kfolds:
@@ -1478,7 +1456,7 @@ def train_crossValidation(
             for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
                 device_id = (fold - 1) % num_gpus
                 logger.info(f"Training fold {fold} on device {device_id}")
-                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers, output_dim))
+                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim))
                 p.start()
                 processes.append(p)
 
@@ -1502,7 +1480,7 @@ def train_crossValidation(
                 device_id = (fold - 1) % num_gpus
                 fold_logger = logger.bind(fold=fold)  # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device_id}")
-                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers, output_dim)
+                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim)
 
             # Clear cache after all folds finish
             gc.collect()
@@ -1575,5 +1553,5 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_outpu
     recall = recall_score(all_labels, all_preds, average=None, zero_division=1)
 
     print("f1")
-    print
+
 
