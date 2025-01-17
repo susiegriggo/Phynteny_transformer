@@ -36,23 +36,22 @@ To train the model, follow these steps:
     - `--mask_portion`: Portion of knowns to mask during training (default: 0.15).
     - `--attention`: Type of positional embedding for the model (`absolute`, `relative`, `circular`).
     - `--shuffle`: Shuffle order of the genes (default: False).
-    - `--gamma`: Gamma for the learning rate scheduler (default: 0.1).
-    - `--step_size`: Step size for the learning rate scheduler (default: 5).
     - `--lr`: Learning rate for the optimizer (default: 1e-6).
+    - `--min_lr_ratio`: Minimum learning rate ratio for the cosine scheduler (default: 0.1).
     - `--epochs`: Number of training epochs (default: 15).
     - `--dropout`: Dropout value for dropout layer (default: 0.1).
     - `--hidden_dim`: Hidden dimension size for the transformer model (default: 512).
     - `--batch_size`: Batch size used to train the model (default: 1).
     - `--num_heads`: Number of attention heads in the transformer model (default: 4).
     - `--num_layers`: Number of transformer layers (default: 2).
-    - `--lstm_hidden_dim`: LSTM hidden dimension size (default: 512).
-    - `--num_splits`: Number of splits for cross-validation (default: 10).
-    - `--checkpoint_interval`: Interval for saving checkpoints (default: 1).
     - `--out`, `-o`: Path to save the output (default: `train_out`).
     - `--intialisation`: Specify whether to initialise attention mechanism with zeros or random values (`random`, `zeros`).
     - `--diagonal_loss`: Specify whether to use the diagonal loss function.
     - `--lambda_penalty`: Specify the lambda penalty for the diagonal loss function (default: 0.1).
+    - `--parallel_kfolds`: Distribute kfolds across available GPUs or train sequentially (default: False).
     - `--device`: Specify `cuda` or `cpu` (default: `cuda`).
+    - `--fold_index`: Specify a single fold index to train (default: None).
+    - `--output_dim`: Specify the output dimension for the model (default: None).
 
 ### Example Command
 
