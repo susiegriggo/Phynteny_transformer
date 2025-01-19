@@ -123,8 +123,6 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
                 logger.error(f"NaN or infinite values found in mask tensor at index: {idx}")
 
             # Define a probability distribution over maskable tokens
-            #logger.info(f'mask.sum: {mask.sum()}')
-            #logger.info(f'mask.float: {mask.float()}')
             probability_distribution = mask.float() / mask.sum()
 
             # Calculate the number of tokens to mask based on input length
@@ -375,6 +373,10 @@ class RelativePositionAttention(nn.Module):
             batch_size, seq_len, self.num_heads, d_model // self.num_heads
         ).transpose(1, 2)
 
+        # Check for NaN values in the input tensors
+        if torch.isnan(query).any() or torch.isnan(key).any() or torch.isnan(value).any():
+            logger.error("NaN values found in input tensors")
+
         # Scaled dot-product attention
         scores = torch.matmul(q, k.transpose(-2, -1)) / np.sqrt(
             d_model // self.num_heads
@@ -394,7 +396,7 @@ class RelativePositionAttention(nn.Module):
 
         # Apply softmax to get attention weights
         attn_weights = F.softmax(scores, dim=-1)
-        
+
         # Mask the resulting attention weights to ensure padded positions have zero attention
         if src_key_padding_mask is not None:
             attn_weights = torch.nan_to_num(attn_weights, nan=0.0) # swap any nan values remaining from the padding to zeros 
@@ -402,8 +404,16 @@ class RelativePositionAttention(nn.Module):
         attn_output = torch.matmul(attn_weights, v)
 
         # broadcasting 
-        rel_positions_v = self.relative_position_v[:seq_len, :].unsqueeze(0).expand(batch_size, -1, -1)
-        attn_output = attn_output + torch.einsum("bhqk,bkd->bhqd", attn_weights, rel_positions_v)
+        rel_positions_v = self.relative_position_v[:seq_len, :]
+        attn_output = attn_output + torch.matmul(attn_weights, rel_positions_v)
+
+        # Check for NaN values in the attention weights
+        if torch.isnan(attn_weights).any():
+            logger.error("NaN values found in attention weights")
+
+        # Check for NaN values in the attention weights
+        if torch.isnan(attn_weights).any():
+            logger.error("NaN values found in attention weights")
 
         # Reshape back to the original shape
         attn_output = (
@@ -967,11 +977,23 @@ def combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask,
     classification_loss = loss_fct(output_flat, target_flat)
     classification_loss = classification_loss[idx_flat].sum() / len(idx_flat)
 
+    # Check for NaN values in the classification loss
+    if torch.isnan(classification_loss).any():
+        logger.error("NaN values found in classification loss")
+
     # Compute diagonal penalty
     diagonal_penalty = diagonal_attention_penalty(attn_weights, src_key_padding_mask=src_key_padding_mask)
 
+    # Check for NaN values in the diagonal penalty
+    if torch.isnan(diagonal_penalty).any():
+        logger.error("NaN values found in diagonal penalty")
+
     # Combined loss
     penalised_loss = classification_loss + lambda_penalty * diagonal_penalty
+
+    # Check for NaN values in the combined loss
+    if torch.isnan(penalised_loss).any():
+        logger.error("NaN values found in combined loss")
 
     return penalised_loss, classification_loss
 
@@ -1204,8 +1226,9 @@ def train(
         # Save the final validation categories and masks
         with open(os.path.join(save_path, "final_validation_categories.pkl"), "wb") as f:
             pickle.dump(final_validation_categories, f)
-        with open(os.path.join(save_path, "final_validation_masks.pkl"), "wb") as f:  # Add this block
+        with open(os.path.join(save_path, "final_validation_masks.pkl"), "wb") as f:  
             pickle.dump(final_validation_masks, f)
+
 
         # Clear cache after validation epoch
         gc.collect()
