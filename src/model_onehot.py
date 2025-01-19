@@ -391,9 +391,17 @@ class RelativePositionAttention(nn.Module):
             scores = scores.masked_fill(src_key_padding_mask.unsqueeze(1).unsqueeze(2) == 0, float("-inf"))
             scores = scores.masked_fill(src_key_padding_mask.unsqueeze(1).unsqueeze(3) == 0, float("-inf"))
 
+
+        # Apply softmax to get attention weights
         attn_weights = F.softmax(scores, dim=-1)
+        
+        # Mask the resulting attention weights to ensure padded positions have zero attention
+        if src_key_padding_mask is not None:
+            attn_weights = torch.nan_to_num(attn_weights, nan=0.0) # swap any nan values remaining from the padding to zeros 
+
         attn_output = torch.matmul(attn_weights, v)
 
+        # broadcasting 
         rel_positions_v = self.relative_position_v[:seq_len, :].unsqueeze(0).expand(batch_size, -1, -1)
         attn_output = attn_output + torch.einsum("bhqk,bkd->bhqd", attn_weights, rel_positions_v)
 
@@ -1114,10 +1122,12 @@ def train(
             
             # Mask the padding from the transformer 
             src_key_padding_mask = (masks != -2).bool().to(device) 
-     
-           # Forward pass
+
+            # Forward pass
             with autocast():
                 outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                logger.debug(f"outputs shape: {outputs.shape}")
+                logger.debug(f"attn_weights shape: {attn_weights.shape}")
                 loss, _ = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty) 
                        
          
@@ -1238,7 +1248,6 @@ def train(
     # Clear cache after saving the model
     gc.collect()
     torch.cuda.empty_cache()
-
 
 def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim):
     fold_logger = None
@@ -1368,10 +1377,11 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
         gc.collect()
         torch.cuda.empty_cache()
     except Exception as e:
+        import traceback
         if fold_logger: 
-            fold_logger.error(f"Error in fold {fold}: {e}")
+            fold_logger.error(f"Error in fold {fold} at line {traceback.extract_tb(e.__traceback__)[-1][1]}: {e}")
         else:
-            fold_logger.error(f"Error in fold {fold}: {e}")
+            fold_logger.error(f"Error in fold {fold} at line {traceback.extract_tb(e.__traceback__)[-1][1]}: {e}")
 
 def train_crossValidation(
     dataset,
