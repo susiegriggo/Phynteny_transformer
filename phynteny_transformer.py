@@ -1,13 +1,19 @@
-from src import format_data
-import click 
-from esm import pretrained
-from loguru import logger 
+#!/usr/bin/env python
+
 import sys
+import os
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+
+from src import format_data
+from src.predictor import Predictor
+import click 
+from loguru import logger 
 import pandas as pd
 from Bio import SeqIO
 import pickle
-import gzip
-import re 
+import numpy as np 
+import torch 
+from importlib_resources import files
 
 
 __author__ = "Susanna Grigson"
@@ -23,43 +29,66 @@ __status__ = "development"
     "-o",
     "--out",
     type=click.STRING,
-    default="",
+    default="phynteny",
     help="output directory",
+    required=True,
 )
-
 @click.option(
     "--esm_model",
-    default = "",
+    default = "esm2_t33_650M_UR50D",
     type=str,
     help="Specify path to esm model if not the default",
     required=False,
 )
-@click.option("-f", "--force", is_flag=True, help="Overwrite output directory")
 
+@click.option(
+    "-m", 
+    "--models",
+    type=click.Path(exists=True),
+    help="Path to the models to use for predictions",
+    default = files("phynteny_utils").joinpath("models")
+)
+
+@click.option("-f", "--force", is_flag=True, help="Overwrite output directory")
 
 @click.version_option(version=__version__)
 
-def main(infile, out,  esm_model, force):
-
-
-    # generate the output directory
-    format_data.instantiate_dir(out, force)
-
-    # generate the logging object
+def main(infile, out, esm_model, models, force):
+    instantiate_output_directory(out, force)
     logger.add(out + "/phynteny.log", level="DEBUG")
     logger.info("Starting Phynteny")
 
-    # get annotations information
+    category_dict, phrog_integer_category = read_annotations_information()
+    gb_dict = read_genbank_file(infile)
+    gb_features, embeddings = extract_features_and_embeddings(gb_dict, out, esm_model)
+    X, y = convert_embeddings(embeddings, gb_features, phrog_integer_category)
+    src_key_padding = pad_sequence(y)
+
+    logger.info("Creating predictor object")
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    predictor = Predictor(device=device)
+    
+    logger.info(f"Reading models from directory: {models}")
+    predictor.read_models_from_directory(models)
+
+    logger.info("Making predictions")
+    scores = predictor.predict(X, src_key_padding)
+    
+    logger.info("Predictions completed")
+
+def instantiate_output_directory(out, force):
+    format_data.instantiate_dir(out, force)
+
+def read_annotations_information():
     phrogs = pd.read_csv(
         "src/phrog_annotation_info/phrog_annot_v4.tsv",
         sep="\t",
     )
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
 
-    # read in integer encoding of the categories - #TODO try to automate this weird step
     phrog_integer = pickle.load(
         open(
-            "src/phrog_annotation_info/integer_category.pkl",
+            "phynteny_utils/integer_category.pkl", #TODO change this to a path
             "rb",
         )
     )
@@ -68,7 +97,7 @@ def main(infile, out,  esm_model, force):
             [i - 1 for i in list(phrog_integer.keys())],
             [i for i in list(phrog_integer.values())],
         )
-    )  # shuffling the keys down by one
+    )
     phrog_integer_reverse = dict(
         zip(list(phrog_integer.values()), list(phrog_integer.keys()))
     )
@@ -81,36 +110,42 @@ def main(infile, out,  esm_model, force):
     )
     phrog_integer_category["No_PHROG"] = -1
 
-    # read in the esm model
-    #model, alphabet = pretrained.load_model_and_alphabet(esm_model)
-    #model.eval()
+    return category_dict, phrog_integer_category
 
-    # get entries in the genbank file
+def read_genbank_file(infile):
     logger.info("Reading genbank file!")
     gb_dict = format_data.get_genbank(infile)
     if not gb_dict:
         click.echo("Error: no sequences found in genbank file")
         logger.critcal("No sequences found in genbank file. Nothing to annotate")
         sys.exit()
+    return gb_dict
 
-
-    # extract features 
+def extract_features_and_embeddings(gb_dict, out, esm_model):
     logger.info('Extracting protein sequences as a fasta')
     keys = list(gb_dict.keys())
     gb_features = {}
     for k in keys: 
-        gb_features[k ]= format_data.extract_features(gb_dict.get(k),k )
+        gb_features[k] = format_data.extract_features(gb_dict.get(k), k)
         records = gb_features[k].get('sequence')
-        output_handle = out + '/' + k+ '.faa'
+        output_handle = out + '/' + k + '.faa'
         SeqIO.write(records, output_handle, "fasta")
         
-         # generate esm embeddings 
         logger.info('Generating esm embeddings')
-        embeddings = format_data.extract_embeddings(output_handle, out + '/' + k)
-        
-    
+        embeddings = format_data.extract_embeddings(output_handle, out + '/' + k, model_name=esm_model)
+    return gb_features, embeddings
+
+def convert_embeddings(embeddings, gb_features, phrog_integer_category):
+    return format_data.convert_embeddings(embeddings, gb_features, phrog_integer_category)
+
+def pad_sequence(y):
+    max_length = np.max([len(i) for i in y]) 
+    src_key_padding = np.zeros((len(y), max_length)) - 2 
+    for i in range(len(y)):
+        src_key_padding[i][:len(y[i])] = 0 
+        src_key_padding[i][torch.nonzero(y[i] == -1, as_tuple=False)] = 1
+    return src_key_padding
 
 if __name__ == "__main__":
     main()
 
-    
