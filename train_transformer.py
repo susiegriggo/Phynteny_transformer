@@ -30,8 +30,6 @@ def validate_num_heads(ctx, param, value):
     default=False,
     help="Shuffle order of the genes. Helpful for determining if gene order increases predictive power",
 )
-@click.option("--gamma", default=0.1, help="Gamma for the learning rate scheduler.", type=float)
-@click.option("--step_size", default=5, help="Step size for the learning rate scheduler.", type=int)
 @click.option("--lr", default=1e-6, help="Learning rate for the optimizer.", type=float)
 @click.option("--min_lr_ratio", default=0.1, help="Minimum learning rate ratio for the cosine scheduler.", type=float)
 @click.option("--epochs", default=15, help="Number of training epochs.", type=int)
@@ -71,14 +69,9 @@ def validate_num_heads(ctx, param, value):
     type=click.Choice(['random', 'zeros'], case_sensitive=False),
 )
 @click.option(
-    "--diagonal_loss",
-    is_flag=True,
-    help="Specify whether to use the diagonal loss function.",
-)
-@click.option(
     "--lambda_penalty",
     default=0.1,
-    help="Specify the lambda penalty for the diagonal loss function.",
+    help="Specify the lambda penalty for the diagonal loss function. Set to 0 to disable diagonal loss.",
     type=float,
 )
 @click.option(
@@ -96,6 +89,24 @@ def validate_num_heads(ctx, param, value):
     help="Number of transformer layers.",
     type=int,
 )
+@click.option(
+    "--checkpoint_interval",
+    default=20,  
+    help="Number of epochs between saving checkpoints.",
+    type=int,
+)
+@click.option(
+    "--fold_index",
+    default=None,
+    help="Specify a single fold index to train.",
+    type=int,
+)
+@click.option(
+    "--output_dim",
+    default=None,
+    help="Specify the output dimension for the model.",
+    type=int,
+)
 def main(
     x_path,
     y_path,
@@ -103,8 +114,6 @@ def main(
     attention,
     shuffle,
     lr,
-    gamma, 
-    step_size,
     min_lr_ratio,
     epochs,
     hidden_dim,
@@ -114,39 +123,53 @@ def main(
     dropout,
     device,
     intialisation, 
-    diagonal_loss,
     lambda_penalty,
     parallel_kfolds,
     num_layers,
+    fold_index,
+    checkpoint_interval,
+    output_dim,  # Add output_dim parameter
 ):
-    # Create the output directory if it doesn't exist
-    if not os.path.exists(out):
-        os.makedirs(out)
-        print(f"Directory created: {out}")
-    else:
-        print(f"Warning: Directory {out} already exists.")
+    try:
+        # Create the output directory if it doesn't exist
+        if not os.path.exists(out):
+            os.makedirs(out)
+            print(f"Directory created: {out}")
+        else:
+            print(f"Warning: Directory {out} already exists.")
+    except Exception as e:
+        logger.error(f"Error creating output directory: {e}")
+        raise
 
     # generate loguru object
     logger.add(out + "/trainer.log", level="DEBUG")
 
-    # Input phrog info
-    phrog_integer = pickle.load(
-        open(
-            "/home/grig0076/GitHubs/Phynteny_transformer/phynteny_utils/integer_category.pkl",
-            "rb",
-        )
-    )
-    phrog_integer = dict(
-        zip(
-            [i - 1 for i in list(phrog_integer.keys())],
-            [i for i in list(phrog_integer.values())],
-        )
-    )  # shuffling the keys down by one
+    # Log parameter values
+    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}")  # Log output_dim
 
-    # read in data
-    logger.info("Reading in data")
-    X = pickle.load(open(x_path, "rb"))
-    y = pickle.load(open(y_path, "rb"))
+    try:
+        # Input phrog info
+        logger.info("Loading phrog info")
+        phrog_integer = pickle.load(
+            open(
+                "/home/grig0076/GitHubs/Phynteny_transformer/phynteny_utils/integer_category.pkl",
+                "rb",
+            )
+        )
+        phrog_integer = dict(
+            zip(
+                [i - 1 for i in list(phrog_integer.keys())],
+                [i for i in list(phrog_integer.values())],
+            )
+        )  # shuffling the keys down by one
+
+        # read in data
+        logger.info("Reading in data")
+        X = pickle.load(open(x_path, "rb"))
+        y = pickle.load(open(y_path, "rb"))
+    except Exception as e:
+        logger.error(f"Error reading input files: {e}")
+        raise
 
     # Shuffle if specified
     if shuffle:
@@ -166,34 +189,38 @@ def main(
     # note that this is a very small training size
     
     train_dataset = model_onehot.VariableSeq2SeqEmbeddingDataset(
-        list(X[0].values()), list(y[0].values()), mask_portion=mask_portion
+        list(X.values()), list(y.values()), mask_portion=mask_portion
     )
     train_dataset.set_training(True)
+    logger.info(f"Total dataset size: {len(train_dataset)} samples")
+
     logger.info("\nTraining model...")
 
-
-    #TODO add step size as another parameter 
-    model_onehot.train_crossValidation(
-        train_dataset,
-        attention,
-        n_splits=10,
-        batch_size=batch_size, # have changed this batch size to 16 
-        epochs=epochs,
-        lr=lr,
-        save_path=out,
-        num_heads=num_heads,
-        gamma=gamma, 
-        step_size=step_size,
-        min_lr_ratio=min_lr_ratio,
-        hidden_dim=hidden_dim,
-        dropout=dropout,
-        device=device,
-        intialisation=intialisation, 
-        diagonal_loss=diagonal_loss,
-        lambda_penalty=lambda_penalty,
-        parallel_kfolds=parallel_kfolds,
-        num_layers=num_layers,
-    )
+    try:
+        model_onehot.train_crossValidation(
+            train_dataset,
+            attention,
+            n_splits=10,
+            batch_size=batch_size, # have changed this batch size to 16 
+            epochs=epochs,
+            lr=lr,
+            save_path=out,
+            num_heads=num_heads,
+            min_lr_ratio=min_lr_ratio,
+            hidden_dim=hidden_dim,
+            dropout=dropout,
+            device=device,
+            intialisation=intialisation, 
+            lambda_penalty=lambda_penalty,
+            parallel_kfolds=parallel_kfolds,
+            checkpoint_interval=checkpoint_interval,
+            num_layers=num_layers,
+            single_fold=fold_index,
+            output_dim=output_dim  # Pass output_dim
+        )
+    except Exception as e:
+        logger.error(f"Error during training: {e}")
+        raise
 
     # Evaluate the model
     # print('Evaluating the model', flush=True)

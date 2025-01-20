@@ -123,8 +123,6 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
                 logger.error(f"NaN or infinite values found in mask tensor at index: {idx}")
 
             # Define a probability distribution over maskable tokens
-            #logger.info(f'mask.sum: {mask.sum()}')
-            #logger.info(f'mask.float: {mask.float()}')
             probability_distribution = mask.float() / mask.sum()
 
             # Calculate the number of tokens to mask based on input length
@@ -195,7 +193,8 @@ class Seq2SeqTransformerClassifier(nn.Module):
         num_layers=2,
         hidden_dim=512,
         dropout=0.1,
-        intialisation='random'
+        intialisation='random',
+        output_dim=None  # Add output_dim parameter
     ):
         """
         Initialize the Seq2Seq Transformer Classifier.
@@ -226,16 +225,17 @@ class Seq2SeqTransformerClassifier(nn.Module):
         self.dropout = nn.Dropout(dropout).to(device)  
 
         # Positional Encoding (now learnable) -  could try using the fixed sinusoidal embeddings instead
+        logger.info(f"Initialising positional encoding with {intialisation} values")
         if intialisation == 'random':
             self.positional_encoding = nn.Parameter(
                 torch.randn(1000, hidden_dim)
             ).to(device)
-        elif intialisation == 'zero':
+        elif intialisation == 'zeros':
             self.positional_encoding = nn.Parameter(
                 torch.zeros(1000, hidden_dim) 
             ).to(device)
         else: 
-            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zero'.")
+            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zeros'.")
 
         # LSTM layer
         self.lstm = nn.LSTM(
@@ -251,7 +251,8 @@ class Seq2SeqTransformerClassifier(nn.Module):
         ).to(device)
 
         # Final Classification Layer
-        self.fc = nn.Linear(2 * hidden_dim, num_classes).to(device)
+        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+        self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
@@ -280,10 +281,14 @@ class Seq2SeqTransformerClassifier(nn.Module):
         if return_attn_weights:
             x, attn_weights = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
             x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x, attn_weights
         else:
             x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x
 
 # Add logging to check the device of various components
@@ -323,7 +328,7 @@ class RelativePositionAttention(nn.Module):
             self.relative_position_v = nn.Parameter(
                 torch.randn(max_len, d_model // num_heads)
             )
-        elif intialisation == 'zero':
+        elif intialisation == 'zeros':
             self.relative_position_k = nn.Parameter(
                 torch.zeros(max_len, d_model // num_heads)
             )               
@@ -331,9 +336,9 @@ class RelativePositionAttention(nn.Module):
                 torch.zeros(max_len, d_model // num_heads)
             )           
         else:       
-            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zero'.")
+            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zeros'.")
 
-    def forward(self, query, key, value, attn_mask=None, return_attn_weights=False):
+    def forward(self, query, key, value, attn_mask=None, return_attn_weights=False, src_key_padding_mask=None):
         """
         Forward pass of the relative position attention.
 
@@ -368,23 +373,47 @@ class RelativePositionAttention(nn.Module):
             batch_size, seq_len, self.num_heads, d_model // self.num_heads
         ).transpose(1, 2)
 
+        # Check for NaN values in the input tensors
+        if torch.isnan(query).any() or torch.isnan(key).any() or torch.isnan(value).any():
+            logger.error("NaN values found in input tensors")
+
         # Scaled dot-product attention
         scores = torch.matmul(q, k.transpose(-2, -1)) / np.sqrt(
             d_model // self.num_heads
         )
 
         # Add relative position biases
-        rel_positions = self.relative_position_k[:seq_len, :]
-        scores = scores + torch.matmul(q, rel_positions.transpose(-2, -1))
+        rel_positions = self.relative_position_k[:seq_len, :].unsqueeze(0).expand(batch_size, -1, -1)
+        scores = scores + torch.einsum("bhqd,bqd->bhq", q, rel_positions)
 
         if attn_mask is not None:
             scores = scores.masked_fill(attn_mask == 0, float("-inf"))
+        
+        if src_key_padding_mask is not None:
+            scores = scores.masked_fill(src_key_padding_mask.unsqueeze(1).unsqueeze(2) == 0, float("-inf"))
+            scores = scores.masked_fill(src_key_padding_mask.unsqueeze(1).unsqueeze(3) == 0, float("-inf"))
 
+
+        # Apply softmax to get attention weights
         attn_weights = F.softmax(scores, dim=-1)
+
+        # Mask the resulting attention weights to ensure padded positions have zero attention
+        if src_key_padding_mask is not None:
+            attn_weights = torch.nan_to_num(attn_weights, nan=0.0) # swap any nan values remaining from the padding to zeros 
+
         attn_output = torch.matmul(attn_weights, v)
 
+        # broadcasting 
         rel_positions_v = self.relative_position_v[:seq_len, :]
         attn_output = attn_output + torch.matmul(attn_weights, rel_positions_v)
+
+        # Check for NaN values in the attention weights
+        if torch.isnan(attn_weights).any():
+            logger.error("NaN values found in attention weights")
+
+        # Check for NaN values in the attention weights
+        if torch.isnan(attn_weights).any():
+            logger.error("NaN values found in attention weights")
 
         # Reshape back to the original shape
         attn_output = (
@@ -443,7 +472,7 @@ class CustomTransformerEncoderLayer(nn.Module):
         torch.Tensor: Output tensor.
         """
         if return_attn_weights:
-            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, return_attn_weights=return_attn_weights) # this is a change here that I made 
+            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, src_key_padding_mask=src_key_padding_mask, return_attn_weights=return_attn_weights) # this is a change here that I made 
             src = src + self.dropout1(src2)
             src = self.norm1(src)
             src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
@@ -451,7 +480,7 @@ class CustomTransformerEncoderLayer(nn.Module):
             src = self.norm2(src)
             return src, attn_weights
         else:
-            src2 = self.self_attn(src, src, src, attn_mask=src_mask)
+            src2 = self.self_attn(src, src, src, attn_mask=src_mask, src_key_padding_mask=src_key_padding_mask)
             src = src + self.dropout1(src2)
             src = self.norm1(src)
             src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
@@ -470,7 +499,8 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         hidden_dim=512,
         dropout=0.1,
         max_len=1000,
-        intialisation='random'
+        intialisation='random',
+        output_dim=None  # Add output_dim parameter
     ):
         """
         Initialize the Seq2Seq Transformer Classifier with Relative Attention.
@@ -513,7 +543,8 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
             encoder_layers, num_layers=num_layers
         ).to(device)
 
-        self.fc = nn.Linear(2 * hidden_dim, num_classes).to(device)
+        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+        self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
@@ -544,10 +575,14 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
             for layer in self.transformer_encoder.layers[1:]:
                 x = layer(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x, attn_weights
         else:
             x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x
 
 
@@ -578,7 +613,7 @@ class CircularRelativePositionAttention(nn.Module):
                 torch.randn(max_len, d_model // num_heads)
             )  
 
-        elif intialisation == 'zero':
+        elif intialisation == 'zeros':
             self.relative_position_k = nn.Parameter(
                 torch.zeros(max_len, d_model // num_heads)
             ) 
@@ -586,9 +621,9 @@ class CircularRelativePositionAttention(nn.Module):
                 torch.zeros(max_len, d_model // num_heads)
             )
         else:
-            raise ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zero'.")
+            raise ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zeros'.")
             
-    def forward(self, query, key, value, attn_mask=None, is_causal=False, output_dir=None, batch_idx=None, return_attn_weights=False):
+    def forward(self, query, key, value, attn_mask=None, src_key_padding_mask=None, is_causal=False, output_dir=None, batch_idx=None, return_attn_weights=False):
         """
         Forward pass of the circular relative position attention.
 
@@ -643,23 +678,35 @@ class CircularRelativePositionAttention(nn.Module):
         rel_positions_k = (
             self.relative_position_k[circular_indices]
             .unsqueeze(0)
-            .expand(batch_size, -1, -1, -1, -1)
+            .expand(batch_size, -1, -1, -1)
         )
-        scores += torch.einsum("bhqd,bqkd->bhqk", q, rel_positions_k[0])
+        scores += torch.einsum("bhqd,bqkd->bhqk", q, rel_positions_k)
 
         if attn_mask is not None:
-            scores = scores.masked_fill(attn_mask == 0, float("-inf"))
+            logger.info(f"attn_mask: {attn_mask}")  
+            scores = scores.masked_fill(attn_mask == 0, float("-inf")) 
 
+        if src_key_padding_mask is not None:
+            # apply the mask in both direction 
+            scores = scores.masked_fill(src_key_padding_mask.unsqueeze(1).unsqueeze(2) == 0, float("-inf")) #mask the padded rows 
+            scores = scores.masked_fill(src_key_padding_mask.unsqueeze(1).unsqueeze(3) == 0, float("-inf")) #mask the padded columns
+
+        # Apply softmax to get attention weights
         attn_weights = F.softmax(scores, dim=-1)
+        
+        # Mask the resulting attention weights to ensure padded positions have zero attention
+        if src_key_padding_mask is not None:
+            attn_weights = torch.nan_to_num(attn_weights, nan=0.0) # swap any nan values remaining from the padding to zeros 
+
         attn_output = torch.matmul(attn_weights, v)
 
         # Adjust dimensions for broadcasting
         rel_positions_v = (
             self.relative_position_v[circular_indices]
             .unsqueeze(0)
-            .expand(batch_size, -1, -1, -1, -1)
+            .expand(batch_size, -1, -1, -1)
         )
-        attn_output += torch.einsum("bhqk,bqkd->bhqd", attn_weights, rel_positions_v[0])
+        attn_output += torch.einsum("bhqk,bqkd->bhqd", attn_weights, rel_positions_v)
 
         attn_output = attn_output.transpose(1, 2).contiguous().view(batch_size, seq_len, d_model)
 
@@ -720,7 +767,7 @@ class CircularTransformerEncoderLayer(nn.Module):
         torch.Tensor: Output tensor.
         """
         if return_attn_weights: 
-            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, is_causal=is_causal, return_attn_weights=return_attn_weights)
+            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, is_causal=is_causal, src_key_padding_mask=src_key_padding_mask, return_attn_weights=return_attn_weights)
             src = src + self.dropout1(src2)
             src = self.norm1(src)
             src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
@@ -728,7 +775,7 @@ class CircularTransformerEncoderLayer(nn.Module):
             src = self.norm2(src)
             return src, attn_weights
         else: 
-            src2 = self.self_attn(src, src, src, attn_mask=src_mask, is_causal=is_causal)
+            src2 = self.self_attn(src, src, src, attn_mask=src_mask, src_key_padding_mask=src_key_padding_mask, is_causal=is_causal)
             src = src + self.dropout1(src2)
             src = self.norm1(src)
             src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
@@ -747,7 +794,8 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         hidden_dim=512,
         dropout=0.1,
         max_len=1000,
-        intialisation='random'
+        intialisation='random',
+        output_dim=None  # Add output_dim parameter
     ):
         """
         Initialize the Seq2Seq Transformer Classifier with Circular Relative Attention.
@@ -792,7 +840,8 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
             encoder_layers, num_layers=num_layers
         ).to(device)
 
-        self.fc = nn.Linear(2 * hidden_dim, num_classes).to(device)
+        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+        self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
@@ -823,10 +872,14 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
             for layer in self.transformer_encoder.layers[1:]:
                 x = layer(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x, attn_weights
         else:
             x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x
 
 
@@ -850,9 +903,6 @@ def masked_loss(output, target, mask, idx, ignore_index=-1):
     # Check if CUDA is available
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    #logger.info(f"Output is on device: {output.device}")
-    #logger.info(f"Target is on device: {target.device}")
-    #logger.info(f"Mask is on device: {mask.device}")
 
     # Flatten the batch and sequence dimensions
     output_flat = output.view(-1, num_classes)  # [batch_size * seq_len, num_classes]
@@ -890,7 +940,7 @@ def collate_fn(batch):
     masks_padded = pad_sequence(masks, batch_first=True, padding_value=-2)
     return embeddings_padded, categories_padded, masks_padded, idx
 
-def combined_loss(output, target, mask, attn_weights, idx, lambda_penalty=0.1, ignore_index=-1):
+def combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask, lambda_penalty=0.1, ignore_index=-1):
     """
     Combine classification loss with a diagonal attention penalty.
 
@@ -910,11 +960,7 @@ def combined_loss(output, target, mask, attn_weights, idx, lambda_penalty=0.1, i
     batch_size, seq_len, num_classes = output.shape
     device = output.device
 
-    #logger.info(f"Output is on device: {output.device}")
-    #logger.info(f"Target is on device: {target.device}")
-    #logger.info(f"Mask is on device: {mask.device}")
-    #logger.info(f"Attention weights are on device: {attn_weights.device}")
-
+    # Flatten the batch and sequence dimensions
     output_flat = output.view(-1, num_classes)
     target_flat = target.view(-1)
     mask_flat = mask.view(-1)
@@ -931,14 +977,27 @@ def combined_loss(output, target, mask, attn_weights, idx, lambda_penalty=0.1, i
     classification_loss = loss_fct(output_flat, target_flat)
     classification_loss = classification_loss[idx_flat].sum() / len(idx_flat)
 
+    # Check for NaN values in the classification loss
+    if torch.isnan(classification_loss).any():
+        logger.error("NaN values found in classification loss")
+
     # Compute diagonal penalty
-    diagonal_penalty = diagonal_attention_penalty(attn_weights)
+    diagonal_penalty = diagonal_attention_penalty(attn_weights, src_key_padding_mask=src_key_padding_mask)
+
+    # Check for NaN values in the diagonal penalty
+    if torch.isnan(diagonal_penalty).any():
+        logger.error("NaN values found in diagonal penalty")
 
     # Combined loss
-    total_loss = classification_loss + lambda_penalty * diagonal_penalty
-    return total_loss
+    penalised_loss = classification_loss + lambda_penalty * diagonal_penalty
 
-def diagonal_attention_penalty(attn_weights):
+    # Check for NaN values in the combined loss
+    if torch.isnan(penalised_loss).any():
+        logger.error("NaN values found in combined loss")
+
+    return penalised_loss, classification_loss
+
+def diagonal_attention_penalty(attn_weights, src_key_padding_mask):
     """
     Calculate the diagonal attention penalty.
 
@@ -949,18 +1008,29 @@ def diagonal_attention_penalty(attn_weights):
     torch.Tensor: Calculated penalty.
     """
     # attn_weights: [batch_size, num_heads, seq_len, seq_len]
+    # seq_len is the largest seqence length in the batch 
     batch_size, num_heads, seq_len, _ = attn_weights.size()
     device = attn_weights.device
 
     # Create a diagonal mask
     diag_mask = torch.eye(seq_len, device=device).unsqueeze(0).unsqueeze(0)  # Shape: [1, 1, seq_len, seq_len]
+    
+    # Create a mask for valid positions (non-padded positions)
+    valid_mask = src_key_padding_mask.unsqueeze(1).unsqueeze(2).expand(-1, num_heads, seq_len, -1)  # Shape: [batch_size, num_heads, seq_len, seq_len]
+
+    # Apply the valid mask to the attention weights
+    attn_weights = attn_weights * valid_mask
 
     # Extract diagonal attention weights
     diag_values = attn_weights * diag_mask  # Retain only diagonal values
 
+     # Calculate the valid sequence lengths
+    valid_lengths = src_key_padding_mask.sum(dim=1).unsqueeze(1).unsqueeze(2).expand(-1, num_heads, seq_len)  # Shape: [batch_size, num_heads, seq_len]
+
     # Penalize the diagonal attention weights
-    penalty = diag_values.sum(dim=(-2, -1))  # Sum over seq_len dimensions
-    return penalty.mean()  # Return average penalty over batch and heads
+    penalty = torch.nansum(diag_values, dim=(-2,-1)) / valid_lengths.sum(dim=-1)
+
+    return penalty.mean()
 
 
 def cosine_lr_scheduler(optimizer, num_warmup_steps, num_training_steps, min_lr_ratio=0.1, last_epoch=-1):
@@ -1008,14 +1078,11 @@ def train(
     train_dataloader,
     test_dataloader,
     epochs=10,
-    step_size=10, 
-    gamma=0.1,
     lr=1e-5,
     min_lr_ratio=0.1,
     save_path="model",
     device="cuda",
     checkpoint_interval=1, 
-    diagonal_loss=True, 
     lambda_penalty=0.1
 ):
     """
@@ -1026,14 +1093,11 @@ def train(
     train_dataloader (DataLoader): DataLoader for training data.
     test_dataloader (DataLoader): DataLoader for test data.
     epochs (int, optional): Number of training epochs.
-    step_size (int, optional): Step size for the learning rate scheduler.
-    gamma (float, optional): Gamma for the learning rate scheduler.
     lr (float, optional): Learning rate.
     min_lr_ratio (float, optional): Minimum learning rate ratio.
     save_path (str, optional): Path to save the model.
     device (str, optional): Device to train on ('cuda' or 'cpu').
     checkpoint_interval (int, optional): Interval for saving checkpoints.
-    diagonal_loss (bool, optional): If True, use diagonal loss function.
     lambda_penalty (float, optional): Penalty for diagonal attention.
 
     Returns:
@@ -1054,15 +1118,21 @@ def train(
     # Initialize gradient scaler for mixed precision training
     scaler = GradScaler()
     
+    # lists to store metrics 
     train_losses = []
     val_losses = []
+    val_classification_losses = []
     final_validation_weights = []
     final_validation_attention = [] 
+    final_validation_masks = [] 
+    diagonal_penalities = []
 
     logger.info("Beginning training loop")
     for epoch in range(epochs):
         model.train()  # Ensure model is in training mode
         total_loss = 0
+  
+        logger.info(f"Starting epoch {epoch + 1}/{epochs}")
         for embeddings, categories, masks, idx in train_dataloader:
             embeddings, categories, masks = (
                 embeddings.to(device).float(),
@@ -1073,35 +1143,30 @@ def train(
             optimizer.zero_grad()
             
             # Mask the padding from the transformer 
-            src_key_padding_mask = (masks == -2).bool().to(device)
-     
-           
-            with autocast():
-                # Use the diagonal loss function if specified
-                if diagonal_loss: 
-                    #logger.info(f"Using diagonal loss with lambda_penalty: {lambda_penalty}")
-                    outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
-                    loss = combined_loss(
-                        outputs, categories, masks, attn_weights, idx, lambda_penalty=lambda_penalty
-                    ) 
-                else:  
-                    outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-                    #logger.info(f"Outputs are on device: {outputs.device}")
-                    loss = masked_loss(
-                        outputs, categories, masks, idx
-                    )
-                #logger.info(f"Loss is on device: {loss.device}")
+            src_key_padding_mask = (masks != -2).bool().to(device) 
 
+            # Forward pass
+            with autocast():
+                outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                logger.debug(f"outputs shape: {outputs.shape}")
+                logger.debug(f"attn_weights shape: {attn_weights.shape}")
+                loss, _ = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty) 
+                       
+         
             # Backpropagation and optimization
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
 
+            # Update total loss
             total_loss += loss.item()
 
+        # Calculate average training loss for the epoch
         avg_train_loss = total_loss / len(train_dataloader)
         train_losses.append(avg_train_loss)
-        logger.info(f"Epoch {epoch + 1}/{epochs}, Loss: {avg_train_loss}")
+
+        # Log training loss
+        logger.info(f"Epoch {epoch + 1}/{epochs}, Training Loss: {avg_train_loss}")
 
         # Clear cache after training epoch
         gc.collect()
@@ -1110,8 +1175,11 @@ def train(
         # Validation loss
         model.eval()  # Ensure model is in evaluation mode
         total_val_loss = 0
+        total_val_classification_loss = 0
+        total_diagonal_penalty = 0
         final_validation_categories = []  # List to store categories for each validation instance
-        with torch.no_grad():
+
+        with torch.no_grad(): # No need to calculate gradients for validation
             for embeddings, categories, masks, idx in test_dataloader:
                 embeddings, categories, masks = (
                     embeddings.to(device).float(),
@@ -1119,34 +1187,48 @@ def train(
                     masks.to(device).float(),
                 )
                
-                src_key_padding_mask = (masks == -2).bool().to(device)  # Mask the padding from the transformer 
+                # Mask the padding from the transformer
+                src_key_padding_mask = (masks != -2).bool().to(device)  
                 
+                # Forward pass
                 with autocast():
-                    outputs, attn_weights = model(
-                        embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True
-                    )
-                    if diagonal_loss:
-                        val_loss = combined_loss(
-                            outputs, categories, masks, attn_weights, idx, lambda_penalty=lambda_penalty
-                        )
-                    else:
-                        val_loss = masked_loss(
-                            outputs, categories, masks, idx
-                        )
+                    outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                    val_loss, val_classification_loss = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty)
+                    
+                    # Calculate diagonal penalty so it can be stored in the metrics
+                    diagonal_penalty = diagonal_attention_penalty(attn_weights, src_key_padding_mask=src_key_padding_mask)
+    
+                # Update total validation loss
                 total_val_loss += val_loss.item()
+                total_val_classification_loss += val_classification_loss.item()
+                total_diagonal_penalty += diagonal_penalty.item()
 
+                # Store the final validation weights and attention weights
                 if epoch == epochs - 1:
                     final_validation_weights.append(outputs.cpu().detach().numpy())
                     final_validation_attention.append(attn_weights.cpu().detach().numpy())
                     final_validation_categories.append(categories.cpu().detach().numpy())  # Store categories
+                    final_validation_masks.append(masks.cpu().detach().numpy())  # Store masks
 
+        # Calculate average validation loss
         avg_val_loss = total_val_loss / len(test_dataloader)
+        avg_val_classification_loss = total_val_classification_loss / len(test_dataloader)
+        avg_diagonal_penalty = total_diagonal_penalty / len(test_dataloader)
+
+        # Append metrics to lists
         val_losses.append(avg_val_loss)
+        val_classification_losses.append(avg_val_classification_loss)
+        diagonal_penalities.append(avg_diagonal_penalty)
+
+        # Log validation loss
         logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {avg_val_loss}")
 
-        # Save the final validation categories
+        # Save the final validation categories and masks
         with open(os.path.join(save_path, "final_validation_categories.pkl"), "wb") as f:
             pickle.dump(final_validation_categories, f)
+        with open(os.path.join(save_path, "final_validation_masks.pkl"), "wb") as f:  
+            pickle.dump(final_validation_masks, f)
+
 
         # Clear cache after validation epoch
         gc.collect()
@@ -1154,7 +1236,7 @@ def train(
 
         # Update scheduler
         scheduler.step()
-        logger.info(f'learning rate {scheduler.get_last_lr()}', flush=True)
+        logger.info(f"Epoch {epoch + 1}/{epochs}, Learning Rate: {scheduler.get_last_lr()}")
 
         # Save checkpoint every 'checkpoint_interval' epochs 
         if (epoch + 1) % checkpoint_interval == 0:
@@ -1166,11 +1248,14 @@ def train(
     torch.save(model.state_dict(), save_path + "transformer.model")
 
     # Save the training and validation loss to CSV
+    logger.info("Saving metrics to CSV")
     loss_df = pd.DataFrame(
         {
             "epoch": [i for i in range(epochs)],
             "training losses": train_losses,
-            "validation losses": val_losses,
+            "validation losses": val_losses, # this here is the 'penalised loss' 
+            "diagonal_penalities": diagonal_penalities,
+            "classification_losses": val_classification_losses,
         }
     )
     output_dir = f"{save_path}"
@@ -1187,27 +1272,32 @@ def train(
     gc.collect()
     torch.cuda.empty_cache()
 
-def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers):
+def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim):
+    fold_logger = None
     try:
-        device = torch.device(f"cuda:{device_id}")
+        device = torch.device(device_id)
         output_dir = f"{save_path}/fold_{fold}"
         
         # Set up a new logger for each fold
         fold_logger = logger.bind(fold=fold)
         fold_logger.add(os.path.join(output_dir, "trainer.log"), level="DEBUG")
 
-        fold_logger.info(f"FOLD: {fold}")
+        fold_logger.info(f"FOLD: {fold} - Starting training")
 
         # Create output directory for the current fold
-        fold_logger.info("Creating output directory")
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-            fold_logger.info(f"Directory created: {output_dir}")
-        else:
-            fold_logger.info(f"Warning: Directory {output_dir} already exists.")
+        try:
+            fold_logger.info("Creating output directory")
+            if not os.path.exists(output_dir):
+                os.makedirs(output_dir)
+                fold_logger.info(f"Directory created: {output_dir}")
+            else:
+                fold_logger.info(f"Warning: Directory {output_dir} already exists.")
+        except Exception as e:
+            fold_logger.error(f"Error creating output directory: {e}")
+            raise
 
         # Use SubsetRandomSampler for efficient subsetting
-        fold_logger.info("generating subsamples")
+        fold_logger.info("Generating subsamples")
         train_sampler = SubsetRandomSampler(train_index)
         val_sampler = SubsetRandomSampler(val_index)
 
@@ -1239,44 +1329,53 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                 file.write(f"{k}\n")
 
         # Initialize model
-        fold_logger.info("Initializing model")
-        input_dim = dataset[0][0].shape[1]
-        if attention == "circular":
-            kfold_transformer_model = (
-                Seq2SeqTransformerClassifierCircularRelativeAttention(
+        try:
+            fold_logger.info("Initializing model")
+            input_dim = dataset[0][0].shape[1]
+            num_classes = 9
+            fold_logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}, output_dim={output_dim}")  # Log input_dim, num_classes, and output_dim
+            if attention == "circular":
+                kfold_transformer_model = (
+                    Seq2SeqTransformerClassifierCircularRelativeAttention(
+                        input_dim=input_dim,
+                        num_classes=num_classes,
+                        num_heads=num_heads,
+                        hidden_dim=hidden_dim,
+                        dropout=dropout,
+                        intialisation=intialisation,
+                        num_layers=num_layers,
+                        output_dim=output_dim  # Pass output_dim
+                    ).to(device)
+                )
+            elif attention == "relative":
+                kfold_transformer_model = Seq2SeqTransformerClassifierRelativeAttention(
                     input_dim=input_dim,
-                    num_classes=9,
+                    num_classes=num_classes,
                     num_heads=num_heads,
                     hidden_dim=hidden_dim,
                     dropout=dropout,
                     intialisation=intialisation,
                     num_layers=num_layers,
+                    output_dim=output_dim  # Pass output_dim
                 ).to(device)
-            )
-        elif attention == "relative":
-            kfold_transformer_model = Seq2SeqTransformerClassifierRelativeAttention(
-                input_dim=input_dim,
-                num_classes=9,
-                num_heads=num_heads,
-                hidden_dim=hidden_dim,
-                dropout=dropout,
-                intialisation=intialisation,
-                num_layers=num_layers,
-            ).to(device)
-        elif attention == "absolute":
-            kfold_transformer_model = Seq2SeqTransformerClassifier(
-                input_dim=input_dim,
-                num_classes=9,
-                num_heads=num_heads,
-                hidden_dim=hidden_dim,
-                dropout=dropout,
-                intialisation=intialisation,
-                num_layers=num_layers,
-            ).to(device)
-        else:
-            fold_logger.error("invalid attention type specified")
+            elif attention == "absolute":
+                kfold_transformer_model = Seq2SeqTransformerClassifier(
+                    input_dim=input_dim,
+                    num_classes=num_classes,
+                    num_heads=num_heads,
+                    hidden_dim=hidden_dim,
+                    dropout=dropout,
+                    intialisation=intialisation,
+                    num_layers=num_layers,
+                    output_dim=output_dim  # Pass output_dim
+                ).to(device)
+            else:
+                fold_logger.error("Invalid attention type specified")
+                raise ValueError("Invalid attention type specified")
+        except Exception as e:
+            fold_logger.error(f"Error initializing model: {e}")
+            raise
 
-        
         # Log the devices of various components of the model
         log_model_devices(kfold_transformer_model)
 
@@ -1288,21 +1387,24 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             val_kfold_loader,
             epochs=epochs,
             lr=lr,
-            step_size=step_size, 
-            gamma=gamma, 
             min_lr_ratio=min_lr_ratio,
             save_path=output_dir,
             device=device,
             checkpoint_interval=checkpoint_interval,
-            diagonal_loss=diagonal_loss,
             lambda_penalty=lambda_penalty
         )
+
+        fold_logger.info(f"FOLD: {fold} - Training completed")
 
         # Clear cache after training each fold
         gc.collect()
         torch.cuda.empty_cache()
     except Exception as e:
-        fold_logger.error(f"Error in fold {fold}: {e}")
+        import traceback
+        if fold_logger: 
+            fold_logger.error(f"Error in fold {fold} at line {traceback.extract_tb(e.__traceback__)[-1][1]}: {e}")
+        else:
+            fold_logger.error(f"Error in fold {fold} at line {traceback.extract_tb(e.__traceback__)[-1][1]}: {e}")
 
 def train_crossValidation(
     dataset,
@@ -1311,20 +1413,20 @@ def train_crossValidation(
     batch_size=16,
     epochs=10,
     lr=1e-5,
-    step_size=10, 
-    gamma=0.1,
     min_lr_ratio=0.1,
     save_path="out",
     num_heads=4,
     hidden_dim=512,
     device="cuda",
     dropout=0.1,
-    checkpoint_interval=1, 
-    intialisation = 'random',
-    diagonal_loss=True,
+    checkpoint_interval=10, 
+    intialisation='random',
     lambda_penalty=0.1,
-    parallel_kfolds=True,
+    parallel_kfolds=False,
     num_layers=2, 
+    random_seed=42,
+    single_fold=None,
+    output_dim=None  # Add output_dim parameter
 ):
     """
     Train the model using K-Fold cross-validation.
@@ -1336,8 +1438,6 @@ def train_crossValidation(
     batch_size (int, optional): Batch size.
     epochs (int, optional): Number of training epochs.
     lr (float, optional): Learning rate.
-    step_size (int, optional): Step size for the learning rate scheduler.
-    gamma (float, optional): Gamma for the learning rate scheduler.
     min_lr_ratio (float, optional): Minimum learning rate ratio.
     save_path (str, optional): Path to save the model.
     num_heads (int, optional): Number of attention heads.
@@ -1346,9 +1446,11 @@ def train_crossValidation(
     dropout (float, optional): Dropout rate.
     checkpoint_interval (int, optional): Interval for saving checkpoints.
     intialisation (str, optional): Initialization method for positional encoding ('random' or 'zero').
-    diagonal_loss (bool, optional): If True, use diagonal loss function.
     lambda_penalty (float, optional): Penalty for diagonal attention.
     parallel_kfolds (bool, optional): If True, train kfolds in parallel.
+    num_layers (int, optional): Number of transformer layers.
+    random_seed (int, optional): Random seed for reproducibility.
+    single_fold (int, optional): If specified, train only the specified fold.
 
     Returns:
     None
@@ -1356,50 +1458,66 @@ def train_crossValidation(
     # access the logger object
     logger.add(save_path + "trainer.log", level="DEBUG")
 
-    kf = KFold(n_splits=n_splits, shuffle=True, random_state=42)
+    # Log the parameters being used to train the model
+    logger.info(f"Training parameters: attention={attention}, n_splits={n_splits}, batch_size={batch_size}, epochs={epochs}, lr={lr}, min_lr_ratio={min_lr_ratio}, save_path={save_path}, num_heads={num_heads}, hidden_dim={hidden_dim}, device={device}, dropout={dropout}, checkpoint_interval={checkpoint_interval}, intialisation={intialisation},lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, output_dim={output_dim}")
+
+    kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_seed)
     fold = 1
     logger.info(
         "Training with K-Fold crossvalidation with " + str(n_splits) + " folds..."
     )
 
-    if parallel_kfolds:
-        # Set start method for multiprocessing
-        mp.set_start_method('spawn', force=True)
-
-        # Create a process for each fold
-        processes = []
-        num_gpus = torch.cuda.device_count()
+    if single_fold is not None:
+        if single_fold < 1 or single_fold > n_splits:
+            logger.error(f"Invalid single_fold value: {single_fold}. It must be between 1 and {n_splits}.")
+            raise ValueError(f"Invalid single_fold value: {single_fold}. It must be between 1 and {n_splits}.")
+        logger.info(f"Training only fold {single_fold}")
         for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
-            device_id = (fold - 1) % num_gpus
-            logger.info(f"Training fold {fold} on device {device_id}")
-            p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers))
-            p.start()
-            processes.append(p)
+            if fold == single_fold:
+                fold_logger = logger.bind(fold=fold)  # Ensure fold_logger is defined
+                logger.info(f"Training fold {fold} on device {device}")
+                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim)
+                break
+    else:
+        if parallel_kfolds:
+            # Set start method for multiprocessing
+            mp.set_start_method('spawn', force=True)
 
-        # Wait for all processes to finish
-        for p in processes:
-            p.join()
+            # Create a process for each fold
+            processes = []
+            num_gpus = torch.cuda.device_count()
+            for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
+                device_id = (fold - 1) % num_gpus
+                logger.info(f"Training fold {fold} on device {device_id}")
+                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim))
+                p.start()
+                processes.append(p)
 
-        # Check if any process is still alive
-        for p in processes:
-            if p.is_alive():
-                logger.error(f"Process {p.pid} is still alive. Terminating...")
-                p.terminate()
+            # Wait for all processes to finish
+            for p in processes:
                 p.join()
 
-        # Clear cache after all processes finish
-        gc.collect()
-        torch.cuda.empty_cache()
-    else:
-        num_gpus = torch.cuda.device_count()
-        for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
-            device_id = (fold - 1) % num_gpus
-            logger.info(f"Training fold {fold} on device {device_id}")
-            train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, step_size, gamma, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, diagonal_loss, lambda_penalty, num_layers)
+            # Check if any process is still alive
+            for p in processes:
+                if p.is_alive():
+                    logger.error(f"Process {p.pid} is still alive. Terminating...")
+                    p.terminate()
+                    p.join()
 
-        # Clear cache after all folds finish
-        gc.collect()
-        torch.cuda.empty_cache()
+            # Clear cache after all processes finish
+            gc.collect()
+            torch.cuda.empty_cache()
+        else:
+            num_gpus = torch.cuda.device_count()
+            for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
+                device_id = (fold - 1) % num_gpus
+                fold_logger = logger.bind(fold=fold)  # Ensure fold_logger is defined
+                logger.info(f"Training fold {fold} on device {device_id}")
+                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim)
+
+            # Clear cache after all folds finish
+            gc.collect()
+            torch.cuda.empty_cache()
 
 def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_output"):
     """
@@ -1468,5 +1586,5 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_outpu
     recall = recall_score(all_labels, all_preds, average=None, zero_division=1)
 
     print("f1")
-    print
+
 
