@@ -5,7 +5,8 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from src import format_data
-from src.predictor import Predictor
+from src import predictor
+from src import model_onehot
 import click 
 from loguru import logger 
 import pandas as pd
@@ -58,21 +59,24 @@ def main(infile, out, esm_model, models, force):
     logger.add(out + "/phynteny.log", level="DEBUG")
     logger.info("Starting Phynteny")
 
-    category_dict, phrog_integer_category = read_annotations_information()
-    gb_dict = read_genbank_file(infile)
-    gb_features, embeddings = extract_features_and_embeddings(gb_dict, out, esm_model)
-    X, y = convert_embeddings(embeddings, gb_features, phrog_integer_category)
-    src_key_padding = pad_sequence(y)
+    category_dict, phrog_integer_category = read_annotations_information() # what this this method even doing? 
+    gb_dict = read_genbank_file(infile, phrog_integer_category) # what categories the genes belong to is missing 
+    logger.info("Genbank file read")
+
+    logger.info("Extracting features and embeddings")
+    embeddings = extract_features_and_embeddings(gb_dict, out, esm_model)
+    X, y = format_data.process_data(embeddings, gb_dict) # TODO - up to here, bug in np.hstack 
+    src_key_padding = pad_sequence(list(y.values()))
 
     logger.info("Creating predictor object")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    predictor = Predictor(device=device)
+    p = predictor.Predictor(device=device)
     
     logger.info(f"Reading models from directory: {models}")
-    predictor.read_models_from_directory(models)
+    p.read_models_from_directory(models)
 
     logger.info("Making predictions")
-    scores = predictor.predict(X, src_key_padding)
+    scores = p.predict(X, src_key_padding)
     
     logger.info("Predictions completed")
 
@@ -112,31 +116,39 @@ def read_annotations_information():
 
     return category_dict, phrog_integer_category
 
-def read_genbank_file(infile):
+def read_genbank_file(infile, phrog_integer):
     logger.info("Reading genbank file!")
-    gb_dict = format_data.get_genbank(infile)
+    #gb_dict = format_data.get_genbank(infile)
+    logger.info("Infile: " + infile)
+    gb_dict = format_data.get_data(infile, 0, phrog_integer)
     if not gb_dict:
         click.echo("Error: no sequences found in genbank file")
         logger.critcal("No sequences found in genbank file. Nothing to annotate")
         sys.exit()
+    logger.info("Genbank file keys`")
+    logger.info(gb_dict.keys())
     return gb_dict
 
 def extract_features_and_embeddings(gb_dict, out, esm_model):
     logger.info('Extracting protein sequences as a fasta')
     keys = list(gb_dict.keys())
-    gb_features = {}
+
+    extracted_embeddings = dict()
+
     for k in keys: 
-        gb_features[k] = format_data.extract_features(gb_dict.get(k), k)
-        records = gb_features[k].get('sequence')
+   
+        records = gb_dict[k].get('sequence')
         output_handle = out + '/' + k + '.faa'
         SeqIO.write(records, output_handle, "fasta")
         
         logger.info('Generating esm embeddings')
         embeddings = format_data.extract_embeddings(output_handle, out + '/' + k, model_name=esm_model)
-    return gb_features, embeddings
+        extracted_embeddings[k] = embeddings
 
-def convert_embeddings(embeddings, gb_features, phrog_integer_category):
-    return format_data.convert_embeddings(embeddings, gb_features, phrog_integer_category)
+    return  extracted_embeddings
+
+#def convert_embeddings(embeddings, gb_features, phrog_integer_category):
+#    return format_data.convert_embeddings(embeddings, gb_features, phrog_integer_category)
 
 def pad_sequence(y):
     max_length = np.max([len(i) for i in y]) 

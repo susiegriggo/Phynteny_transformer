@@ -2,7 +2,22 @@
 
 ### Overview
 
-The Phynteny Transformer is a deep learning model designed to predict the missing functions of genes in phage genomes. It leverages a transformer architecture with various attention mechanisms (absolute, relative, and circular) to capture the positional information of genes. The model can be trained using K-Fold cross-validation to ensure robust performance.
+The Phynteny Transformer is a deep learning model designed to predict the missing functions of genes in phage genomes. It leverages a transformer architecture with attention mechanisms and long short term memory model to capture the positional information of genes.
+
+### Dependencies 
+
+
+### Installation 
+
+#### Install Models 
+
+
+
+### Running Phynteny 
+
+
+
+
 
 ### Model Architecture
 
@@ -84,4 +99,10 @@ To generate the data required for training the model, follow these steps:
     - `--extra_features`: Include extra features alongside the embedding, including strand information, orientation, and gene length.
     - `--data_only`: Only generate the data and not the embeddings. Does not output X and y files.
 
-### Example Command
+
+
+## Bugs and Suggestions 
+If you break Phynteny or would like to make any suggestions please open an issue or email me at susie.grigson@gmail.com and I'll try to get back to you. 
+
+## Wow how can I cite this? 
+

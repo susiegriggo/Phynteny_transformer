@@ -221,55 +221,83 @@ def encode_length(gene_positions):
         [round(np.abs(i[1] - i[0]) / 1000, 3) for i in gene_positions]
     ).reshape(-1, 1)
 
+def is_genbank_file(file_path): 
+    """
+    Check if the file is a Genbank file by looking for specific keywords in the file 
+
+    :param file_path: path to the file to check
+    :return: True if the file is a Genbank file, False otherwise
+    """
+
+    with open(file_path, "r") as file: 
+        for line in file: 
+            if line.startswith("LOCUS") or line.startswith("ORIGIN"): 
+                return True 
+            # Limit the number of lines to read to avoid reading very large files entirely
+            if file.tell() > 10000:  # Adjust the number of bytes as needed
+                break
+    
+    logger.info(f"{file_path} is not a Genbank file")
+    return False
+
 
 def get_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
     """
     Loop to fetch training and test data
 
-    :param input_data: path to where the input files are located
+    :param input_data: path to a text file or a single genbank path
     :param gene_categories: number of gene categories which must be included
     :return: curated data dictionary
     """
 
     training_data = {}  # dictionary to store all of the training data
+    genbank_files = []
 
-    with open(input_data, "r", errors="replace") as file:
-        genbank_files = file.readlines()
+    # check if the input data is a genbank file 
+    if is_genbank_file(input_data):
+        logger.info("Input data is a genbank file")
+        genbank_files = [input_data]    
+    else:
+        logger.info("Input data is a text file")
+        # read in the genbank files from the input data
+        with open(input_data, "r") as file:
+            genbank_files = file.readlines()
+    
 
-        for genbank in genbank_files:
-            # convert genbank to a dictionary
-            gb_dict = get_genbank(genbank)
-            gb_keys = list(gb_dict.keys())
+    for genbank in genbank_files:
+        # convert genbank to a dictionary
+        gb_dict = get_genbank(genbank)
+        gb_keys = list(gb_dict.keys())
 
-            for key in gb_keys:
-                # extract the relevant features
-                phage_dict = extract_features(gb_dict.get(key), key)
+        for key in gb_keys:
+            # extract the relevant features
+            phage_dict = extract_features(gb_dict.get(key), key)
 
-                # integer encoding of phrog categories
-                integer = phrog_to_integer(phage_dict.get("phrogs"), phrog_integer)
-                phage_dict["categories"] = integer
+            # integer encoding of phrog categories
+            integer = phrog_to_integer(phage_dict.get("phrogs"), phrog_integer)
+            phage_dict["categories"] = integer
 
-                # evaluate the number of categories present in the phage
-                categories_present = set(integer)
-                if 0 in categories_present:
-                    categories_present.remove(0)
+            # evaluate the number of categories present in the phage
+            categories_present = set(integer)
+            if 0 in categories_present:
+                categories_present.remove(0)
 
-                if maximum_genes == False:
-                    if len(categories_present) >= gene_categories:
-                        # update dictionary with this entry
-                        g = re.split(",|\.", re.split("/", genbank.strip())[-1])[0]
-                        training_data[g + "_" + key] = phage_dict
+            if maximum_genes == False:
+                if len(categories_present) >= gene_categories:
+                    # update dictionary with this entry
+                    g = re.split(",|\.", re.split("/", genbank.strip())[-1])[0]
+                    training_data[g + "_" + key] = phage_dict
 
-                else:
-                    # if above the minimum number of categories are included
-                    if (
-                        len(phage_dict.get("phrogs")) <= maximum_genes
-                        and len(categories_present) >= gene_categories
-                    ):
-                        # update dictionary with this entry
-                        g = re.split(",|\.", re.split("/", genbank.strip())[-1])[0]
-                        # training_data[g + "_" + key] = phage_dict
-                        training_data[key] = phage_dict
+            else:
+                # if above the minimum number of categories are included
+                if (
+                    len(phage_dict.get("phrogs")) <= maximum_genes
+                    and len(categories_present) >= gene_categories
+                ):
+                    # update dictionary with this entry
+                    g = re.split(",|\.", re.split("/", genbank.strip())[-1])[0]
+                    # training_data[g + "_" + key] = phage_dict
+                    training_data[key] = phage_dict
 
     return training_data
 
@@ -351,6 +379,7 @@ def process_data(
 
     genomes = list(genome_details.keys())
 
+
     X = list()
     y = list()
     removed = []
@@ -375,19 +404,21 @@ def process_data(
             if exclude_embedding:
                 this_vectors = [[] for i in this_genes]
             else:
-                this_vectors = [
-                    esm_vectors.get(g + "_" + str(i))
-                    for i in range(len(this_categories))
-                ]
+             
+                #this_vectors = [
+                #    esm_vectors.get(g + "_" + str(i)).numpy().astype(np.float32)
+                #    for i in range(len(this_categories))
+                #]
+                this_vectors = [esm_vectors.get(g).get(k) for k in list(esm_vectors.get(g).keys())]
 
             # merge these columns into a numpy array
-            embedding = np.hstack(
-                (strand1, strand2, gene_lengths, np.array(this_vectors))
+            embedding = np.hstack( #TODO change the shapping of this vectors 
+                (strand1, strand2, gene_lengths, np.array(this_vectors).reshape(len(this_vectors),len(this_vectors[0])))
             )
 
         else:
             # merge vectors into a numpy array
-            embedding = np.array(this_vectors)
+            embedding = np.array(this_vectors).astype(np.float32)
 
         # store the info in the dataset
         X.append(torch.tensor(np.array(embedding)))
