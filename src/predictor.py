@@ -29,8 +29,14 @@ class Predictor:
 
         all_scores = {}
 
+        # Find the maximum length of the input sequences
+        max_length = max([v.shape[0] for v in X.values()])
+
+        # Pad the input sequences to the same length
+        X_padded = {key: F.pad(X[key], (0, 0, 0, max_length - X[key].shape[0])) for key in X.keys()}
+
         # Convert input data to tensors
-        X_tensor = torch.stack([X[key] for key in X.keys()]).to(self.device)
+        X_tensor = torch.stack([X_padded[key] for key in X_padded.keys()]).to(self.device)
         src_key_padding_tensor = torch.tensor(src_key_padding).to(self.device)
 
         with torch.no_grad():

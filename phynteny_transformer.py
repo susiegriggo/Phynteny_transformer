@@ -6,7 +6,6 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 
 from src import format_data
 from src import predictor
-from src import model_onehot
 import click 
 from loguru import logger 
 import pandas as pd
@@ -65,8 +64,11 @@ def main(infile, out, esm_model, models, force):
 
     logger.info("Extracting features and embeddings")
     embeddings = extract_features_and_embeddings(gb_dict, out, esm_model)
-    X, y = format_data.process_data(embeddings, gb_dict) # TODO - up to here, bug in np.hstack 
+    X, y = format_data.process_data(embeddings, gb_dict) # Think these here are missing the categories
     src_key_padding = pad_sequence(list(y.values()))
+
+    # Need to add a one-hot encoding of the categories to the X data
+    X_one_hot = {key: torch.tensor(np.hstack((custom_one_hot_encode(y[key]), X[key]))) for key in X.keys()}
 
     logger.info("Creating predictor object")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
@@ -76,7 +78,14 @@ def main(infile, out, esm_model, models, force):
     p.read_models_from_directory(models)
 
     logger.info("Making predictions")
-    scores = p.predict(X, src_key_padding)
+    scores = p.predict(X_one_hot, src_key_padding)
+    logger.info(f"f{scores}")
+
+    logger.info("Writing predictions to genbank file")
+    genbank_file = out + "/phynteny.gbk"
+
+    logger.info("Generating table...")
+    table_file = out + "/phynteny.tsv"
     
     logger.info("Predictions completed")
 
@@ -157,6 +166,28 @@ def pad_sequence(y):
         src_key_padding[i][:len(y[i])] = 0 
         src_key_padding[i][torch.nonzero(y[i] == -1, as_tuple=False)] = 1
     return src_key_padding
+
+def custom_one_hot_encode(data, num_classes=10):
+    """
+    Generate a one-hot encoding for the given data.
+
+    Parameters:
+    data (torch.Tensor): Data tensor to encode.
+    num_classes (int): Number of classes to encode.
+
+    Returns:
+    np.array: One-hot encoded array.
+    """
+
+    one_hot_encoded = []
+    for value in data:
+        if value == -1:
+            one_hot_encoded.append([0] * num_classes)
+        else:
+            one_hot_row = [0] * num_classes
+            one_hot_row[value] = 1
+            one_hot_encoded.append(one_hot_row)
+    return np.array(one_hot_encoded)
 
 if __name__ == "__main__":
     main()
