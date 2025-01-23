@@ -830,7 +830,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         ).to(device)
 
         encoder_layers = CircularTransformerEncoderLayer(
-            d_model=hidden_dim * 2,
+            d_model=hidden_dim * 2,  # Input to transformer encoder is 2 * hidden_dim
             num_heads=num_heads,
             dropout=dropout,
             max_len=max_len,
@@ -843,7 +843,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
         self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
 
-    def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
+    def forward(self, x, src_key_padding_mask=None, return_attn_weights=False, save_lstm_output=False, save_transformer_output=False):
         """
         Forward pass of the model.
 
@@ -867,6 +867,9 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         x = self.dropout(x)
         x, _ = self.lstm(x)
 
+        if save_lstm_output:
+            self.saved_lstm_output = x.clone().detach().cpu().numpy()
+
         if return_attn_weights:
             x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
             for layer in self.transformer_encoder.layers[1:]:
@@ -874,12 +877,16 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
             x = self.fc(x)
             if self.output_dim != 9:  # Apply softmax if output_dim is not 9
                 x = F.softmax(x, dim=-1)
+            if save_transformer_output:
+                self.saved_transformer_output = x.clone().detach().cpu().numpy()
             return x, attn_weights
         else:
             x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
             if self.output_dim != 9:  # Apply softmax if output_dim is not 9
                 x = F.softmax(x, dim=-1)
+            if save_transformer_output:
+                self.saved_transformer_output = x.clone().detach().cpu().numpy()
             return x
 
 
@@ -1148,8 +1155,8 @@ def train(
             # Forward pass
             with autocast():
                 outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
-                logger.debug(f"outputs shape: {outputs.shape}")
-                logger.debug(f"attn_weights shape: {attn_weights.shape}")
+                #logger.debug(f"outputs shape: {outputs.shape}")
+                #logger.debug(f"attn_weights shape: {attn_weights.shape}")
                 loss, _ = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty) 
                        
          
@@ -1519,7 +1526,7 @@ def train_crossValidation(
             gc.collect()
             torch.cuda.empty_cache()
 
-def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_output"):
+def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_output", save_lstm_output=False, save_transformer_output=False):
     """
     Evaluate the model.
 
@@ -1529,16 +1536,19 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_outpu
     phrog_integer (dict): Dictionary mapping integer labels to categories.
     device (str): Device to evaluate on ('cuda' or 'cpu').
     output_dir (str, optional): Directory to save evaluation metrics.
+    save_lstm_output (bool, optional): If True, save the output of the LSTM layer.
+    save_transformer_output (bool, optional): If True, save the output of the transformer layer.
 
     Returns:
     None
     """
-    ## This here needs work. Could be done outside of this function
     model.to(device)
     model.eval()
     labels = list(phrog_integer.keys())
     all_labels = []
     all_probs = []
+    lstm_outputs = []
+    transformer_outputs = []
 
     with torch.no_grad():
         for embeddings, categories, masks, idx in dataloader:
@@ -1548,7 +1558,12 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_outpu
                 masks.to(device).float(),
             )
             src_key_padding_mask = masks == 0
-            outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+            outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask, save_lstm_output=save_lstm_output, save_transformer_output=save_transformer_output)
+
+            if save_lstm_output:
+                lstm_outputs.append(model.saved_lstm_output)
+            if save_transformer_output:
+                transformer_outputs.append(model.saved_transformer_output)
 
             # Apply softmax to get probabilities
             probs = F.softmax(outputs, dim=2).detach().cpu().numpy()
@@ -1574,10 +1589,19 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_outpu
         roc_df = pd.DataFrame({"FPR": fpr, "TPR": thresholds})
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
+
         roc_df.to_csv(
             os.path.join(output_dir, f"roc_curve_category_{phrog_integer[label]}.csv"),
             index=False,
         )
+
+    # Save LSTM and transformer outputs if specified
+    if save_lstm_output:
+        with open(os.path.join(output_dir, "lstm_outputs.pkl"), "wb") as f:
+            pickle.dump(lstm_outputs, f)
+    if save_transformer_output:
+        with open(os.path.join(output_dir, "transformer_outputs.pkl"), "wb") as f:
+            pickle.dump(transformer_outputs, f)
 
     # Compute F1 score, precision, recall for each category
     all_preds = np.argmax(all_probs, axis=1)
@@ -1588,3 +1612,32 @@ def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_outpu
     print("f1")
 
 
+
+    print("f1")
+
+"""
+# Load the pre-trained model
+m = model_onehot.Seq2SeqTransformerClassifierRelativeAttention(
+    input_dim=1293, 
+    num_classes=num_classes, 
+    num_heads=4, 
+    hidden_dim=512, 
+    dropout=0.1
+)
+m.load_state_dict(torch.load(
+    f'/home/grig0076/GitHubs/Phynteny_transformer_15012025/Phynteny_transformer/_17012025_saveidx_inphared_avlogpenalty_lambda100_randomintialised_4heads_lr4_16batch_10epochs_allfolds/fold_{k+1}transformer.model',
+    map_location=torch.device('cpu')
+))
+m.eval()
+
+# Prepare your input data (example)
+input_data = torch.randn(1, 10, 1293)  # Example input tensor
+
+# Forward pass with save_lstm_output=True
+output = m(input_data, save_lstm_output=True)
+
+# Access the saved LSTM output
+lstm_output = m.saved_lstm_output
+print(lstm_output)
+
+"""
