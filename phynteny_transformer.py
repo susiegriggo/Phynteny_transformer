@@ -14,6 +14,14 @@ import pickle
 import numpy as np 
 import torch 
 from importlib_resources import files
+from src.format_data import (
+    instantiate_output_directory,
+    read_annotations_information,
+    read_genbank_file,
+    extract_features_and_embeddings,
+    pad_sequence,
+    custom_one_hot_encode
+)
 
 
 __author__ = "Susanna Grigson"
@@ -88,106 +96,6 @@ def main(infile, out, esm_model, models, force):
     table_file = out + "/phynteny.tsv"
     
     logger.info("Predictions completed")
-
-def instantiate_output_directory(out, force):
-    format_data.instantiate_dir(out, force)
-
-def read_annotations_information():
-    phrogs = pd.read_csv(
-        "src/phrog_annotation_info/phrog_annot_v4.tsv",
-        sep="\t",
-    )
-    category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
-
-    phrog_integer = pickle.load(
-        open(
-            "phynteny_utils/integer_category.pkl", #TODO change this to a path
-            "rb",
-        )
-    )
-    phrog_integer = dict(
-        zip(
-            [i - 1 for i in list(phrog_integer.keys())],
-            [i for i in list(phrog_integer.values())],
-        )
-    )
-    phrog_integer_reverse = dict(
-        zip(list(phrog_integer.values()), list(phrog_integer.keys()))
-    )
-    phrog_integer_reverse["unknown function"] = -1
-    phrog_integer_category = dict(
-        zip(
-            [str(k) for k in list(category_dict.keys())],
-            [phrog_integer_reverse.get(k) for k in list(category_dict.values())],
-        )
-    )
-    phrog_integer_category["No_PHROG"] = -1
-
-    return category_dict, phrog_integer_category
-
-def read_genbank_file(infile, phrog_integer):
-    logger.info("Reading genbank file!")
-    #gb_dict = format_data.get_genbank(infile)
-    logger.info("Infile: " + infile)
-    gb_dict = format_data.get_data(infile, 0, phrog_integer)
-    if not gb_dict:
-        click.echo("Error: no sequences found in genbank file")
-        logger.critcal("No sequences found in genbank file. Nothing to annotate")
-        sys.exit()
-    logger.info("Genbank file keys`")
-    logger.info(gb_dict.keys())
-    return gb_dict
-
-def extract_features_and_embeddings(gb_dict, out, esm_model):
-    logger.info('Extracting protein sequences as a fasta')
-    keys = list(gb_dict.keys())
-
-    extracted_embeddings = dict()
-
-    for k in keys: 
-   
-        records = gb_dict[k].get('sequence')
-        output_handle = out + '/' + k + '.faa'
-        SeqIO.write(records, output_handle, "fasta")
-        
-        logger.info('Generating esm embeddings')
-        embeddings = format_data.extract_embeddings(output_handle, out + '/' + k, model_name=esm_model)
-        extracted_embeddings[k] = embeddings
-
-    return  extracted_embeddings
-
-#def convert_embeddings(embeddings, gb_features, phrog_integer_category):
-#    return format_data.convert_embeddings(embeddings, gb_features, phrog_integer_category)
-
-def pad_sequence(y):
-    max_length = np.max([len(i) for i in y]) 
-    src_key_padding = np.zeros((len(y), max_length)) - 2 
-    for i in range(len(y)):
-        src_key_padding[i][:len(y[i])] = 0 
-        src_key_padding[i][torch.nonzero(y[i] == -1, as_tuple=False)] = 1
-    return src_key_padding
-
-def custom_one_hot_encode(data, num_classes=10):
-    """
-    Generate a one-hot encoding for the given data.
-
-    Parameters:
-    data (torch.Tensor): Data tensor to encode.
-    num_classes (int): Number of classes to encode.
-
-    Returns:
-    np.array: One-hot encoded array.
-    """
-
-    one_hot_encoded = []
-    for value in data:
-        if value == -1:
-            one_hot_encoded.append([0] * num_classes)
-        else:
-            one_hot_row = [0] * num_classes
-            one_hot_row[value] = 1
-            one_hot_encoded.append(one_hot_row)
-    return np.array(one_hot_encoded)
 
 if __name__ == "__main__":
     main()
