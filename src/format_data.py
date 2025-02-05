@@ -13,6 +13,7 @@ import re
 import shutil
 import pickle
 import os
+import pandas as pd
 import sys
 
 
@@ -229,13 +230,19 @@ def is_genbank_file(file_path):
     :return: True if the file is a Genbank file, False otherwise
     """
 
+    file_size = os.path.getsize(file_path)
+    update_interval = file_size / 10
+
     with open(file_path, "r") as file: 
+        bytes_read = 0
+        next_update = update_interval
         for line in file: 
+            bytes_read += len(line)
             if line.startswith("LOCUS") or line.startswith("ORIGIN"): 
                 return True 
-            # Limit the number of lines to read to avoid reading very large files entirely
-            if file.tell() > 10000:  # Adjust the number of bytes as needed
-                break
+            if bytes_read >= next_update:
+                logger.info(f"Read {bytes_read} bytes ({(bytes_read / file_size) * 100:.1f}%) from {file_path}")
+                next_update += update_interval
     
     logger.info(f"{file_path} is not a Genbank file")
     return False
@@ -328,6 +335,7 @@ def extract_embeddings(
     # batch the fasta file
     dataset = FastaBatchedDataset.from_file(fasta_file)
     batches = dataset.get_batch_indices(tokens_per_batch, extra_toks_per_seq=1)
+    logger.info(f"Number of batches: {len(batches)}")
 
     # create data loader obj
     data_loader = torch.utils.data.DataLoader(
@@ -344,28 +352,44 @@ def extract_embeddings(
     # start processing batches
     with torch.no_grad():
         for batch_idx, (labels, strs, toks) in enumerate(data_loader):
-            print(f"Processing batch {batch_idx + 1} of {len(batches)}")
+            logger.info(f"Processing batch {batch_idx + 1} of {len(batches)}")
+            logger.info(f"Batch size (tokens): {toks.size()}")
 
             # move tokens to gpu if available
             if torch.cuda.is_available():
                 toks = toks.to(device="cuda", non_blocking=True)
 
+            # Log memory usage before processing the batch
+            if torch.cuda.is_available():
+                logger.info(f"CUDA memory allocated before batch: {torch.cuda.memory_allocated() / (1024 ** 3):.2f} GB")
+                logger.info(f"CUDA memory reserved before batch: {torch.cuda.memory_reserved() / (1024 ** 3):.2f} GB")
+
             # Extract embeddings
-            with torch.no_grad():
+            try:
                 model_predictions = model(
                     toks, repr_layers=repr_layers, return_contacts=False
                 )
-            token_representations = model_predictions["representations"][33]
+                token_representations = model_predictions["representations"][33]
 
-            # update this to save dictionary for an entire fasta file
-            for i, label in enumerate(labels):
-                representation = token_representations[i, 1 : len(strs[i]) - 1].mean(0)
+                # update this to save dictionary for an entire fasta file
+                for i, label in enumerate(labels):
+                    representation = token_representations[i, 1 : len(strs[i]) - 1].mean(0)
+                    if torch.cuda.is_available():
+                        results[label] = representation.detach().cpu()
+                    else:
+                        results[label] = representation
+
+                # Log memory usage after processing the batch
                 if torch.cuda.is_available():
-                    results[label] = representation.detach().cpu()
-                else:
-                    results[label] = representation
+                    logger.info(f"CUDA memory allocated after batch: {torch.cuda.memory_allocated() / (1024 ** 3):.2f} GB")
+                    logger.info(f"CUDA memory reserved after batch: {torch.cuda.memory_reserved() / (1024 ** 3):.2f} GB")
+            except torch.cuda.OutOfMemoryError as e:
+                logger.error(f"CUDA out of memory: {e}")
+                torch.cuda.empty_cache()
+                raise
 
     torch.save(results, output_dir + "/esm/embeddings.pt")
+    logger.info("Embeddings saved successfully")
 
     return results
 
@@ -384,7 +408,13 @@ def process_data(
     y = list()
     removed = []
 
+    logger.info(f'ESm vectors: {esm_vectors}')
+    logger.info(f'Esm vector keys: {esm_vectors.keys()}')
+
     for g in genomes:
+
+        logger.info(f"Processing genome {g}")   
+
         # get the genes in this genome
         this_genes = genome_details.get(g)
 
@@ -409,7 +439,9 @@ def process_data(
                 #    esm_vectors.get(g + "_" + str(i)).numpy().astype(np.float32)
                 #    for i in range(len(this_categories))
                 #]
-                this_vectors = [esm_vectors.get(g).get(k) for k in list(esm_vectors.get(g).keys())]
+                
+                this_keys = [k for k in list(esm_vectors.keys()) if f"{g}_" in k]
+                this_vectors = [esm_vectors.get(k) for k in this_keys]
 
             # merge these columns into a numpy array
             embedding = np.hstack( #TODO change the shapping of this vectors 

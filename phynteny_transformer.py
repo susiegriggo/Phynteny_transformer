@@ -14,14 +14,6 @@ import pickle
 import numpy as np 
 import torch 
 from importlib_resources import files
-from src.format_data import (
-    instantiate_output_directory,
-    read_annotations_information,
-    read_genbank_file,
-    extract_features_and_embeddings,
-    pad_sequence,
-    custom_one_hot_encode
-)
 
 
 __author__ = "Susanna Grigson"
@@ -62,21 +54,21 @@ __status__ = "development"
 @click.version_option(version=__version__)
 
 def main(infile, out, esm_model, models, force):
-    instantiate_output_directory(out, force)
+    format_data.instantiate_output_directory(out, force)
     logger.add(out + "/phynteny.log", level="DEBUG")
     logger.info("Starting Phynteny")
 
-    category_dict, phrog_integer_category = read_annotations_information() # what this this method even doing? 
-    gb_dict = read_genbank_file(infile, phrog_integer_category) # what categories the genes belong to is missing 
+    category_dict, phrog_integer_category = format_data.read_annotations_information() # what this this method even doing? 
+    gb_dict = format_data.read_genbank_file(infile, phrog_integer_category) # what categories the genes belong to is missing 
     logger.info("Genbank file read")
 
     logger.info("Extracting features and embeddings")
-    embeddings = extract_features_and_embeddings(gb_dict, out, esm_model)
+    embeddings = format_data.extract_features_and_embeddings(gb_dict, out, esm_model)
     X, y = format_data.process_data(embeddings, gb_dict) # Think these here are missing the categories
-    src_key_padding = pad_sequence(list(y.values()))
+    src_key_padding = format_data.pad_sequence(list(y.values()))
 
     # Need to add a one-hot encoding of the categories to the X data
-    X_one_hot = {key: torch.tensor(np.hstack((custom_one_hot_encode(y[key]), X[key]))) for key in X.keys()}
+    X_one_hot = {key: torch.tensor(np.hstack((format_data.custom_one_hot_encode(y[key]), X[key]))) for key in X.keys()}
 
     logger.info("Creating predictor object")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

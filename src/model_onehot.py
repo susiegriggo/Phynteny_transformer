@@ -183,6 +183,21 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
             logger.error(f"Error in custom_one_hot_encode: {e}")
             raise
 
+    def process_all(self):
+        """
+        Process all the data in the dataset.
+        """
+        embeddings = []
+        categories = []
+        masks = []
+        indices = []
+        for idx in range(len(self)):
+            embedding_one_hot, category, mask, idx = self.__getitem__(idx)
+            embeddings.append(embedding_one_hot)
+            categories.append(category)
+            masks.append(mask)
+            indices.append(idx)
+        return embeddings, categories, masks, indices
 
 class Seq2SeqTransformerClassifier(nn.Module):
     def __init__(

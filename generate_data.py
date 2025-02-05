@@ -75,6 +75,12 @@ from Bio import SeqIO
     default=False,
     help="Only generate the data and not the embeddings. Does not output X a y files"
 )
+@click.option(
+    "--tokens_per_batch",
+    type=int,
+    default=4096,
+    help="Specify the number of tokens per batch for extracting embeddings",
+)
 def main(
     input_data,
     include_genomes,
@@ -87,11 +93,12 @@ def main(
     exclude_embedding,
     extra_features,
     data_only,
+    tokens_per_batch,
 ):
     # read in information for the phrog annotations
     # read in annotation file
     phrogs = pd.read_csv(
-        "~/susie_scratch/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv",
+        "~/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv",
         sep="\t",
     )
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
@@ -99,7 +106,7 @@ def main(
     # read in integer encoding of the categories - #TODO try to automate this weird step
     phrog_integer = pickle.load(
         open(
-            "/scratch/pawsey1018/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl",
+            "/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl",
             "rb",
         )
     )
@@ -167,7 +174,7 @@ def main(
         # Extract the embeddings from the outputted fasta files
         print("Computing ESM embeddings", flush=True)
         print("... if step is being slow consider using GPU!")
-        embeddings = format_data.extract_embeddings(fasta_out, out, model_name=model)
+        embeddings = format_data.extract_embeddings(fasta_out, out, model_name=model, tokens_per_batch=tokens_per_batch)
 
         # move on to create training and testing data
         if extra_features:

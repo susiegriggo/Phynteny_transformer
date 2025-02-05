@@ -3,6 +3,7 @@ Module for handling predictions with torch
 """ 
 
 from src import model_onehot
+from src import format_data
 import torch
 import torch.nn.functional as F
 import os
@@ -15,12 +16,12 @@ class Predictor:
         self.device = torch.device(device)
         self.models = []
 
-    def predict(self, X, src_key_padding):
+    def predict(self, X, y):
         """
         Predict the scores for the given input data.
 
-        :param X: Dictionary of input data
-        :param src_key_padding: Padding mask for the input data
+        :param X: List of input data values
+        :param y: List of target data values
         :return: Dictionary of predicted scores
         """
         self.models = [model.to(self.device) for model in self.models]
@@ -30,20 +31,23 @@ class Predictor:
         all_scores = {}
 
         # Find the maximum length of the input sequences
-        max_length = max([v.shape[0] for v in X.values()])
+        max_length = max([v.shape[0] for v in X])
 
         # Pad the input sequences to the same length
-        X_padded = {key: F.pad(X[key], (0, 0, 0, max_length - X[key].shape[0])) for key in X.keys()}
+        X_padded = [F.pad(x, (0, 0, 0, max_length - x.shape[0])) for x in X]
 
         # Convert input data to tensors
-        X_tensor = torch.stack([X_padded[key] for key in X_padded.keys()]).to(self.device)
+        X_tensor = torch.stack(X_padded).to(self.device)
+
+        # Compute src_key_padding using format_data.pad_sequence
+        src_key_padding = format_data.pad_sequence(y)
         src_key_padding_tensor = torch.tensor(src_key_padding).to(self.device)
 
         with torch.no_grad():
             for model in self.models:
                 outputs = model(X_tensor, src_key_padding_mask=src_key_padding_tensor)
                 outputs = F.softmax(outputs, dim=-1)
-                for i, key in enumerate(X.keys()):
+                for i, key in enumerate(y.keys()):
                     if key not in all_scores:
                         all_scores[key] = outputs[i].cpu().numpy()
                     else:
