@@ -19,14 +19,14 @@ export containerImage=/scratch/pawsey1018/grig0076/docker/phynteny_transformer_v
 # Define parameter values
 FOLDS=(1 2 3 4 5 6 7 8 9 10)
 BATCH_SIZES=(64)
-MASK_PORTIONS=(0.1 0.2 0.3)
+MASK_PORTIONS=(0.2)
 ATTENTIONS=( "circular")
-LRS=(1e-4 1e-5)
-DROPOUTS=(0.05 0.1 0.2)
+LRS=(1e-4)
+DROPOUTS=(0.1)
 HIDDEN_DIMS=(256) #also do 512 
 NUM_HEADS=(4)
 NUM_LAYERS=(2)
-LAMBDA_PENALTIES=(100 10)
+LAMBDA_PENALTIES=(100)
 
 # Calculate the total number of combinations
 TOTAL_COMBINATIONS=${#FOLDS[@]}*${#BATCH_SIZES[@]}*${#MASK_PORTIONS[@]}*${#ATTENTIONS[@]}*${#LRS[@]}*${#DROPOUTS[@]}*${#HIDDEN_DIMS[@]}*${#NUM_HEADS[@]}*${#NUM_LAYERS[@]}*${#LAMBDA_PENALTIES[@]}
@@ -68,6 +68,7 @@ singularity exec --rocm $containerImage python3 /home/grig0076/GitHubs/Phynteny_
   --y_path /home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/merged_data.y.pkl \
   --mask_portion $MASK_PORTION \
   --epochs 100 \
+  --shuffle  \
   --attention $ATTENTION \
   --lr $LR \
   --dropout $DROPOUT \
@@ -76,4 +77,4 @@ singularity exec --rocm $containerImage python3 /home/grig0076/GitHubs/Phynteny_
   --num_layers $NUM_LAYERS \
   --batch_size $BATCH_SIZE \
   --lambda_penalty $LAMBDA_PENALTY \
-  --out /home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/grid_search_19012025_origoutputdim/${BATCH_SIZE}_${MASK_PORTION}_${ATTENTION}_${LR}_${DROPOUT}_${HIDDEN_DIM}_${NUM_HEADS}_${NUM_LAYERS}_${LAMBDA_PENALTY}_${FOLD}
+  --out /home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/grid_search_19012025_origoutputdimi_shuffle/${BATCH_SIZE}_${MASK_PORTION}_${ATTENTION}_${LR}_${DROPOUT}_${HIDDEN_DIM}_${NUM_HEADS}_${NUM_LAYERS}_${LAMBDA_PENALTY}_${FOLD}

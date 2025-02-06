@@ -91,7 +91,7 @@ def main(
     # read in information for the phrog annotations
     # read in annotation file
     phrogs = pd.read_csv(
-        "~/susie_scratch/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv",
+        "/scratch/pawsey1018/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv",
         sep="\t",
     )
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
