@@ -131,6 +131,11 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
                 1, int(self.mask_portion * num_maskable_tokens)
             )  # Ensure at least 1 token is masked
 
+            # Validate inputs before sampling
+            if num_tokens_to_mask > probability_distribution.size(-1):
+                logger.error(f"Cannot sample {num_tokens_to_mask} tokens from a distribution of size {probability_distribution.size(-1)}")
+                raise ValueError(f"Cannot sample {num_tokens_to_mask} tokens from a distribution of size {probability_distribution.size(-1)}")
+
             # Sample tokens to mask
             idx = torch.multinomial(
                 probability_distribution, num_samples=num_tokens_to_mask, replacement=False
@@ -318,7 +323,7 @@ def log_model_devices(model):
     logger.info(f"fc is on device: {model.fc.weight.device}")
 
 class RelativePositionAttention(nn.Module):
-    def __init__(self, d_model, num_heads, max_len=1000, batch_first=True, intialisation = 'random'):
+    def __init__(self, d_model, num_heads, max_len=1500, batch_first=True, intialisation = 'random'):
         """
         Initialize the Relative Position Attention module.
 
@@ -447,7 +452,7 @@ class RelativePositionAttention(nn.Module):
 
 class CustomTransformerEncoderLayer(nn.Module):
     def __init__(
-        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000, intialisation='random'
+        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1500, intialisation='random'
     ):
         """
         Initialize the Custom Transformer Encoder Layer.
@@ -513,7 +518,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         num_layers=2,
         hidden_dim=512,
         dropout=0.1,
-        max_len=1000,
+        max_len=1500,
         intialisation='random',
         output_dim=None  # Add output_dim parameter
     ):
@@ -602,7 +607,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
 
 
 class CircularRelativePositionAttention(nn.Module):
-    def __init__(self, d_model, num_heads, max_len=1000, batch_first=True, intialisation = 'random'):
+    def __init__(self, d_model, num_heads, max_len=1500, batch_first=True, intialisation = 'random'):
         """
         Initialize the Circular Relative Position Attention module.
 
@@ -742,7 +747,7 @@ class CircularRelativePositionAttention(nn.Module):
 
 class CircularTransformerEncoderLayer(nn.Module):
     def __init__(
-        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000, initialisation='random'
+        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1500, initialisation='random'
     ):
         """
         Initialize the Circular Transformer Encoder Layer.
@@ -808,7 +813,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         num_layers=2,
         hidden_dim=512,
         dropout=0.1,
-        max_len=1000,
+        max_len=1500,
         intialisation='random',
         output_dim=None  # Add output_dim parameter
     ):
@@ -1324,7 +1329,7 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
         val_sampler = SubsetRandomSampler(val_index)
 
         # Create data loaders with samplers
-        fold_logger.info("Saving datasets")
+        fold_logger.info("Saving datasets") 
         train_kfold_loader = DataLoader(
             dataset,
             batch_size=batch_size,
@@ -1343,6 +1348,19 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
         # Log the size of training and validation data
         fold_logger.info(f"Training data size: {len(train_sampler)} samples")
         fold_logger.info(f"Validation data size: {len(val_sampler)} samples")
+
+        # Log the indices of training and validation data to ensure no leakage
+        #fold_logger.info(f"Training indices: {train_index}")
+        #fold_logger.info(f"Validation indices: {val_index}")
+
+        # Check for data leakage
+        train_set = set(train_index)
+        val_set = set(val_index)
+        intersection = train_set.intersection(val_set)
+        if intersection:
+            fold_logger.error(f"Data leakage detected! Overlapping indices: {intersection}")
+        else:
+            fold_logger.info("No data leakage detected between training and validation sets.")
 
         # save the validation data object as well as the keys used in validation 
         pickle.dump(val_kfold_loader, open(output_dir + "/val_kfold_loader.pkl", "wb"))

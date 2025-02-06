@@ -248,7 +248,7 @@ def is_genbank_file(file_path):
     return False
 
 
-def get_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
+def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
     """
     Loop to fetch training and test data
 
@@ -280,6 +280,18 @@ def get_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
             # extract the relevant features
             phage_dict = extract_features(gb_dict.get(key), key)
 
+            # Check for CDS with more than 10,000 amino acids
+            skip_genome = False
+            sequences = phage_dict.get("sequence")
+            for seq in sequences:
+                if len(seq.seq) > 10000:
+                    logger.warning(f"Genome {key} contains a CDS with more than 10,000 amino acids and will be excluded from further analysis.")
+                    skip_genome = True
+                    break
+
+            if skip_genome:
+                continue
+
             # integer encoding of phrog categories
             integer = phrog_to_integer(phage_dict.get("phrogs"), phrog_integer)
             phage_dict["categories"] = integer
@@ -303,7 +315,6 @@ def get_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
                 ):
                     # update dictionary with this entry
                     g = re.split(",|\.", re.split("/", genbank.strip())[-1])[0]
-                    # training_data[g + "_" + key] = phage_dict
                     training_data[key] = phage_dict
 
     return training_data
@@ -353,16 +364,16 @@ def extract_embeddings(
     with torch.no_grad():
         for batch_idx, (labels, strs, toks) in enumerate(data_loader):
             logger.info(f"Processing batch {batch_idx + 1} of {len(batches)}")
-            logger.info(f"Batch size (tokens): {toks.size()}")
+            #logger.info(f"Batch size (tokens): {toks.size()}")
 
             # move tokens to gpu if available
             if torch.cuda.is_available():
                 toks = toks.to(device="cuda", non_blocking=True)
 
             # Log memory usage before processing the batch
-            if torch.cuda.is_available():
-                logger.info(f"CUDA memory allocated before batch: {torch.cuda.memory_allocated() / (1024 ** 3):.2f} GB")
-                logger.info(f"CUDA memory reserved before batch: {torch.cuda.memory_reserved() / (1024 ** 3):.2f} GB")
+            #if torch.cuda.is_available():
+            #    logger.info(f"CUDA memory allocated before batch: {torch.cuda.memory_allocated() / (1024 ** 3):.2f} GB")
+            #    logger.info(f"CUDA memory reserved before batch: {torch.cuda.memory_reserved() / (1024 ** 3):.2f} GB")
 
             # Extract embeddings
             try:
@@ -379,10 +390,10 @@ def extract_embeddings(
                     else:
                         results[label] = representation
 
-                # Log memory usage after processing the batch
-                if torch.cuda.is_available():
-                    logger.info(f"CUDA memory allocated after batch: {torch.cuda.memory_allocated() / (1024 ** 3):.2f} GB")
-                    logger.info(f"CUDA memory reserved after batch: {torch.cuda.memory_reserved() / (1024 ** 3):.2f} GB")
+                # Loqg memory usage after processing the batch
+                #if torch.cuda.is_available():
+                #    logger.info(f"CUDA memory allocated after batch: {torch.cuda.memory_allocated() / (1024 ** 3):.2f} GB")
+                #    logger.info(f"CUDA memory reserved after batch: {torch.cuda.memory_reserved() / (1024 ** 3):.2f} GB")
             except torch.cuda.OutOfMemoryError as e:
                 logger.error(f"CUDA out of memory: {e}")
                 torch.cuda.empty_cache()
@@ -394,7 +405,7 @@ def extract_embeddings(
     return results
 
 
-def process_data(
+def prepare_data(
     esm_vectors, genome_details, extra_features=True, exclude_embedding=False
 ):
     """
@@ -413,7 +424,7 @@ def process_data(
 
     for g in genomes:
 
-        logger.info(f"Processing genome {g}")   
+        #logger.info(f"Processing genome {g}")   
 
         # get the genes in this genome
         this_genes = genome_details.get(g)
@@ -530,7 +541,7 @@ def read_genbank_file(infile, phrog_integer):
     logger.info("Reading genbank file!")
     #gb_dict = get_genbank(infile)
     logger.info("Infile: " + infile)
-    gb_dict = get_data(infile, 0, phrog_integer)
+    gb_dict = fetch_data(infile, 0, phrog_integer)
     if not gb_dict:
         click.echo("Error: no sequences found in genbank file")
         logger.critcal("No sequences found in genbank file. Nothing to annotate")
