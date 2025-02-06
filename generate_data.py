@@ -75,6 +75,12 @@ from Bio import SeqIO
     default=False,
     help="Only generate the data and not the embeddings. Does not output X a y files"
 )
+@click.option(
+    "--tokens_per_batch",
+    type=int,
+    default=4096,
+    help="Specify the number of tokens per batch for extracting embeddings",
+)
 def main(
     input_data,
     include_genomes,
@@ -87,6 +93,7 @@ def main(
     exclude_embedding,
     extra_features,
     data_only,
+    tokens_per_batch,
 ):
     # read in information for the phrog annotations
     # read in annotation file
@@ -130,7 +137,7 @@ def main(
 
     # read in the genbank file/files
     print("Extracting info from genbank files", flush=True)
-    data = format_data.get_data(
+    data = format_data.fetch_data(
         input_data, gene_categories, phrog_integer_category, maximum_genes
     )
     pickle.dump(data, open(out + "/" + prefix + ".data.pkl", "wb"))
@@ -167,16 +174,16 @@ def main(
         # Extract the embeddings from the outputted fasta files
         print("Computing ESM embeddings", flush=True)
         print("... if step is being slow consider using GPU!")
-        embeddings = format_data.extract_embeddings(fasta_out, out, model_name=model)
+        embeddings = format_data.extract_embeddings(fasta_out, out, model_name=model, tokens_per_batch=tokens_per_batch)
 
         # move on to create training and testing data
         if extra_features:
-            X, y = format_data.process_data(
+            X, y = format_data.prepare_data(
                 embeddings, data, exclude_embedding=exclude_embedding
             )
 
         else:
-            X, y = format_data.process_data(
+            X, y = format_data.prepare_data(
                 embeddings, data, extra_features=False, exclude_embedding=exclude_embedding
             )
 
@@ -185,6 +192,7 @@ def main(
         print(y)
         pickle.dump(X, open(out + "/" + prefix + ".X.pkl", "wb"))
         pickle.dump(y, open(out + "/" + prefix + ".y.pkl", "wb"))
+        print('Data saved to file')
 
 
 # Press the green button in the gutter to run the script.
