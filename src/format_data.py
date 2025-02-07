@@ -15,6 +15,7 @@ import pickle
 import os
 import pandas as pd
 import sys
+from transformers import EsmModel, EsmTokenizer
 
 
 def get_dict(dict_path):
@@ -320,80 +321,116 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
     return training_data
 
 
-# this code seems to batch from a fasta file better from the code later
+
+### this code seems to batch from a fasta file better from the code later
+def read_fasta(file_path):
+    """
+    Read sequences from a fasta file.
+
+    :param file_path: path to the fasta file
+    :return: list of sequences
+    """
+    sequences = []
+    with open(file_path, "r") as file:
+        sequence = ""
+        for line in file:
+            if line.startswith(">"):
+                if sequence:
+                    sequences.append(sequence)
+                    sequence = ""
+            else:
+                sequence += line.strip()
+        if sequence:
+            sequences.append(sequence)
+    return sequences
+
+def batch_sequences(sequences, tokens_per_batch, tokenizer):
+    """
+    Batch sequences for processing.
+
+    :param sequences: list of sequences
+    :param tokens_per_batch: maximum number of tokens per batch
+    :param tokenizer: tokenizer to use for encoding sequences
+    :return: list of batches
+    """
+    batches = []
+    current_batch = []
+    current_tokens = 0
+
+    for seq in sequences:
+        tokenized_seq = tokenizer(seq, return_tensors="pt", truncation=True, padding=True)
+        num_tokens = tokenized_seq.input_ids.size(1)
+        if current_tokens + num_tokens > tokens_per_batch:
+            batches.append(current_batch)
+            current_batch = []
+            current_tokens = 0
+        current_batch.append(seq)
+        current_tokens += num_tokens
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
+
 def extract_embeddings(
     fasta_file,
     output_dir,
-    model_name="esm2_t33_650M_UR50D",
+    model_name="facebook/esm2_t33_650M_UR50D",
     tokens_per_batch=4096,
     repr_layers=[33],
 ):
     """
-    Extract ESM2 embeddings
+    Extract ESM2 embeddings using HuggingFace
     """
 
-    # read in the specified esm model
-    model, alphabet = pretrained.load_model_and_alphabet(model_name)
+    # Load the specified ESM model and tokenizer from HuggingFace
+    tokenizer = EsmTokenizer.from_pretrained(model_name)
+    model = EsmModel.from_pretrained(model_name)
     model.eval()
 
-    # move model to gpu if available
+    # Move model to GPU if available
     if torch.cuda.is_available():
         model = model.cuda()
         print("USING CUDA :)")
     else:
         print("NO CUDA :()")
 
-    # batch the fasta file
-    dataset = FastaBatchedDataset.from_file(fasta_file)
-    batches = dataset.get_batch_indices(tokens_per_batch, extra_toks_per_seq=1)
+    # Read and batch the fasta file
+    sequences = read_fasta(fasta_file)
+    batches = batch_sequences(sequences, tokens_per_batch, tokenizer)
     logger.info(f"Number of batches: {len(batches)}")
 
-    # create data loader obj
-    data_loader = torch.utils.data.DataLoader(
-        dataset, collate_fn=alphabet.get_batch_converter(), batch_sampler=batches
-    )
-
-    # make output directory
+    # Make output directory
     output_path = pathlib.Path(output_dir + "/esm")
     output_path.mkdir(parents=True, exist_ok=True)
 
-    # dictionary to write to
+    # Dictionary to write to
     results = dict()
 
-    # start processing batches
+    # Start processing batches
     with torch.no_grad():
-        for batch_idx, (labels, strs, toks) in enumerate(data_loader):
+        for batch_idx, batch in enumerate(batches):
             logger.info(f"Processing batch {batch_idx + 1} of {len(batches)}")
-            #logger.info(f"Batch size (tokens): {toks.size()}")
 
-            # move tokens to gpu if available
+            # Tokenize the batch
+            inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True)
             if torch.cuda.is_available():
-                toks = toks.to(device="cuda", non_blocking=True)
-
-            # Log memory usage before processing the batch
-            #if torch.cuda.is_available():
-            #    logger.info(f"CUDA memory allocated before batch: {torch.cuda.memory_allocated() / (1024 ** 3):.2f} GB")
-            #    logger.info(f"CUDA memory reserved before batch: {torch.cuda.memory_reserved() / (1024 ** 3):.2f} GB")
+                inputs = {key: val.cuda() for key, val in inputs.items()}
 
             # Extract embeddings
             try:
-                model_predictions = model(
-                    toks, repr_layers=repr_layers, return_contacts=False
-                )
-                token_representations = model_predictions["representations"][33]
+                outputs = model(**inputs)
+                token_representations = outputs.last_hidden_state
 
-                # update this to save dictionary for an entire fasta file
-                for i, label in enumerate(labels):
-                    representation = token_representations[i, 1 : len(strs[i]) - 1].mean(0)
+                # Update this to save dictionary for an entire fasta file
+                for i, seq in enumerate(batch):
+                    representation = token_representations[i, 1 : len(seq) - 1].mean(0)
+                    label = f"seq_{batch_idx}_{i}"
                     if torch.cuda.is_available():
                         results[label] = representation.detach().cpu()
                     else:
                         results[label] = representation
 
-                # Loqg memory usage after processing the batch
-                #if torch.cuda.is_available():
-                #    logger.info(f"CUDA memory allocated after batch: {torch.cuda.memory_allocated() / (1024 ** 3):.2f} GB")
-                #    logger.info(f"CUDA memory reserved after batch: {torch.cuda.memory_reserved() / (1024 ** 3):.2f} GB")
             except torch.cuda.OutOfMemoryError as e:
                 logger.error(f"CUDA out of memory: {e}")
                 torch.cuda.empty_cache()
