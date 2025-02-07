@@ -419,8 +419,8 @@ def prepare_data(
     y = list()
     removed = []
 
-    logger.info(f'ESm vectors: {esm_vectors}')
-    logger.info(f'Esm vector keys: {esm_vectors.keys()}')
+    #logger.info(f'ESm vectors: {esm_vectors}')
+    #logger.info(f'Esm vector keys: {esm_vectors.keys()}')
 
     for g in genomes:
 
@@ -445,14 +445,14 @@ def prepare_data(
             if exclude_embedding:
                 this_vectors = [[] for i in this_genes]
             else:
-             
-                #this_vectors = [
-                #    esm_vectors.get(g + "_" + str(i)).numpy().astype(np.float32)
-                #    for i in range(len(this_categories))
-                #]
                 
-                this_keys = [k for k in list(esm_vectors.keys()) if f"{g}_" in k]
-                this_vectors = [esm_vectors.get(k) for k in this_keys]
+
+                # extra and sort the keys with a lambda function 
+                this_keys = sorted([k for k in list(esm_vectors.keys()) if f"{g}_" in k], key=lambda x: int(x.split('_')[-1]))
+                this_vectors = [esm_vectors.get(k) for k in this_keys] 
+                #logger.info("Check that the keys are in the correct order and that the vectors are being extracted correctly")
+                #logger.info(this_keys)
+           
 
             # merge these columns into a numpy array
             embedding = np.hstack( #TODO change the shapping of this vectors 
