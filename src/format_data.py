@@ -328,21 +328,26 @@ def read_fasta(file_path):
     Read sequences from a fasta file.
 
     :param file_path: path to the fasta file
-    :return: list of sequences
+    :return: list of headers and list of sequences
     """
+    headers = []
     sequences = []
     with open(file_path, "r") as file:
         sequence = ""
+        header = ""
         for line in file:
             if line.startswith(">"):
                 if sequence:
                     sequences.append(sequence)
+                    headers.append(header)
                     sequence = ""
+                header = line[1:].strip()
             else:
                 sequence += line.strip()
         if sequence:
             sequences.append(sequence)
-    return sequences
+            headers.append(header)
+    return headers, sequences
 
 def batch_sequences(sequences, tokens_per_batch, tokenizer):
     """
@@ -396,7 +401,7 @@ def extract_embeddings(
         print("NO CUDA :()")
 
     # Read and batch the fasta file
-    sequences = read_fasta(fasta_file)
+    headers, sequences = read_fasta(fasta_file)
     batches = batch_sequences(sequences, tokens_per_batch, tokenizer)
     logger.info(f"Number of batches: {len(batches)}")
 
@@ -425,11 +430,11 @@ def extract_embeddings(
                 # Update this to save dictionary for an entire fasta file
                 for i, seq in enumerate(batch):
                     representation = token_representations[i, 1 : len(seq) - 1].mean(0)
-                    label = f"seq_{batch_idx}_{i}"
+                    header = headers.pop(0)  # Use the header as the key
                     if torch.cuda.is_available():
-                        results[label] = representation.detach().cpu()
+                        results[header] = representation.detach().cpu()
                     else:
-                        results[label] = representation
+                        results[header] = representation
 
             except torch.cuda.OutOfMemoryError as e:
                 logger.error(f"CUDA out of memory: {e}")
@@ -487,8 +492,6 @@ def prepare_data(
                 # extra and sort the keys with a lambda function 
                 this_keys = sorted([k for k in list(esm_vectors.keys()) if f"{g}_" in k], key=lambda x: int(x.split('_')[-1]))
                 this_vectors = [esm_vectors.get(k) for k in this_keys] 
-                #logger.info("Check that the keys are in the correct order and that the vectors are being extracted correctly")
-                #logger.info(this_keys)
            
 
             # merge these columns into a numpy array

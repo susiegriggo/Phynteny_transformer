@@ -4,6 +4,7 @@ import pickle
 import pandas as pd
 import os
 from Bio import SeqIO
+from loguru import logger
 
 
 @click.command()
@@ -28,7 +29,14 @@ from Bio import SeqIO
 )
 @click.option(
     "--model",
-    type=str,
+    type=click.Choice([
+        "facebook/esm2_t48_15B_UR50D",
+        "facebook/esm2_t6_8M_UR50D",
+        "facebook/esm2_t12_35M_UR50D",
+        "facebook/esm2_t30_150M_UR50D",
+        "facebook/esm2_t33_650M_UR50D"
+    ]),
+    default="facebook/esm2_t33_650M_UR50D",
     help="Specify path to model if not the default",
     required=False,
 )
@@ -98,7 +106,7 @@ def main(
     # read in information for the phrog annotations
     # read in annotation file
     phrogs = pd.read_csv(
-        "/scratch/pawsey1018/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv",
+        "/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv",
         sep="\t",
     )
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
@@ -106,7 +114,7 @@ def main(
     # read in integer encoding of the categories - #TODO try to automate this weird step
     phrog_integer = pickle.load(
         open(
-            "/scratch/pawsey1018/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl",
+            "/home/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl",
             "rb",
         )
     )
@@ -129,14 +137,18 @@ def main(
     phrog_integer_category["No_PHROG"] = -1
 
     # Create the output directory if it doesn't exist
-    if not os.path.exists(out):
-        os.makedirs(out)
-        print(f"Directory created: {out}")
-    else:
-        print(f"Warning: Directory {out} already exists.")
+    try:
+        if not os.path.exists(out):
+            os.makedirs(out)
+            logger.info(f"Directory created: {out}")
+        else:
+            logger.warning(f"Directory {out} already exists.")
+    except Exception as e:
+        logger.error(f"Error creating output directory: {e}")
+        raise
 
     # read in the genbank file/files
-    print("Extracting info from genbank files", flush=True)
+    logger.info("Extracting info from genbank files")
     data = format_data.fetch_data(
         input_data, gene_categories, phrog_integer_category, maximum_genes
     )
@@ -145,11 +157,11 @@ def main(
     # filter duplicate orders and include specific genomes if specified
     if dereplicate or include_genomes:
         if dereplicate:
-            print("Deduplicating repeated gene orders", flush=True)
+            logger.info("Deduplicating repeated gene orders")
             data = format_data.derep_data(data)
         
         if include_genomes:
-            print("Filtering genomes", flush=True)
+            logger.info("Filtering genomes")
             with open(include_genomes, "r") as f:
                 genomes = f.read().splitlines()
             data = {k: v for k, v in data.items() if k in genomes}
@@ -157,12 +169,12 @@ def main(
         pickle.dump(data, open(out + "/" + prefix + ".data.pkl", "wb"))
 
     if data_only:
-        print("Data only flag set. Exiting now", flush=True)
+        logger.info("Data only flag set. Exiting now")
         return
 
     else: 
         # extract fasta from the genbank files
-        print("Extract fasta from genbank", flush=True)
+        logger.info("Extracting fasta from genbank")
         data_keys = list(data.keys())
         fasta_out = out + "/" + prefix + ".fasta"
         records = [data.get(k).get("sequence") for k in data_keys]
@@ -172,8 +184,8 @@ def main(
         output_handle.close()
 
         # Extract the embeddings from the outputted fasta files
-        print("Computing ESM embeddings", flush=True)
-        print("... if step is being slow consider using GPU!")
+        logger.info("Computing ESM embeddings")
+        logger.info("... if step is being slow consider using GPU!")
         embeddings = format_data.extract_embeddings(fasta_out, out, model_name=model, tokens_per_batch=tokens_per_batch)
 
         # move on to create training and testing data
@@ -188,11 +200,9 @@ def main(
             )
 
         # save the generated data to file
-        print(X)
-        print(y)
         pickle.dump(X, open(out + "/" + prefix + ".X.pkl", "wb"))
         pickle.dump(y, open(out + "/" + prefix + ".y.pkl", "wb"))
-        print('Data saved to file')
+        logger.info('Data saved to file')
 
 
 # Press the green button in the gutter to run the script.
