@@ -89,6 +89,12 @@ from loguru import logger
     default=4096,
     help="Specify the number of tokens per batch for extracting embeddings",
 )
+@click.option(
+    "--y_only", 
+    is_flag=True,
+    default=False,
+    help="Only generate the y object without the embeddings or the X arrays"
+)
 def main(
     input_data,
     include_genomes,
@@ -102,6 +108,7 @@ def main(
     extra_features,
     data_only,
     tokens_per_batch,
+    y_only,
 ):
     # read in information for the phrog annotations
     # read in annotation file
@@ -172,6 +179,13 @@ def main(
         logger.info("Data only flag set. Exiting now")
         return
 
+    if y_only:
+        logger.info("Generating y object only")
+        y = format_data.prepare_y_data(data)
+        pickle.dump(y, open(out + "/" + prefix + ".y.pkl", "wb"))
+        logger.info('y object saved to file')
+        return
+
     else: 
         # extract fasta from the genbank files
         logger.info("Extracting fasta from genbank")
@@ -200,7 +214,9 @@ def main(
             )
 
         # save the generated data to file
-        pickle.dump(X, open(out + "/" + prefix + ".X.pkl", "wb"))
+        if not y_only:
+            pickle.dump(X, open(out + "/" + prefix + ".X.pkl", "wb"))
+            
         pickle.dump(y, open(out + "/" + prefix + ".y.pkl", "wb"))
         logger.info('Data saved to file')
 
