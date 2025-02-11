@@ -175,11 +175,17 @@ def main(
     if shuffle:
         logger.info("Shuffling gene orders...")
         for key in list(X.keys()):
+
+            logger.info(f"Before shuffling: {X.get(key)}")
+            logger.info(f"Before shuffling: {y.get(key)}")
             # generate indices for shuffling
             indices = list(range(len(X.get(key))))
             random.Random(4).shuffle(indices)  # shuffle with a random seed of 4
             X[key] = X[key][indices]
             y[key] = y[key][indices]
+
+            logger.info(f"After shuffling: {X.get(key)}")
+            logger.info(f"After shuffling: {y.get(key)}")
 
         logger.info("\t Done shuffling gene orders")
     else:
@@ -187,6 +193,9 @@ def main(
 
     # Produce the dataset object
     # note that this is a very small training size
+
+    logger.info(f"X: {X}")
+    logger.info(f"y: {y}")  
     
     train_dataset = model_onehot.VariableSeq2SeqEmbeddingDataset(
         list(X.values()), list(y.values()), mask_portion=mask_portion

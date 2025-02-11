@@ -518,6 +518,31 @@ def prepare_data(
     return X, y
 
 
+def prepare_y_data(genome_details):
+    """
+    Prepare the y data only.
+
+    :param genome_details: dictionary with genome details
+    :return: y data
+    """
+
+    genomes = list(genome_details.keys())
+    y = list()
+
+    for g in genomes:
+        # get the corresponding functions - this is included in the object
+        this_categories = genome_details.get(g).get("categories")
+
+        # Replace None with -1
+        this_categories = [-1 if category is None else category for category in this_categories]
+        y.append(torch.tensor(this_categories))
+
+    # convert to dictionary inc the dictionary names
+    y = dict(zip(genomes, y))
+
+    return y
+
+
 def derep_data(data):
     """
     Deduplicate repeated gene orders for a phynteny dictionary
