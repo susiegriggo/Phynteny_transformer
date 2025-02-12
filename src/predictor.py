@@ -16,7 +16,27 @@ class Predictor:
         self.device = torch.device(device)
         self.models = []
 
-    def predict(self, X, y):
+    def predict_batch(self, embeddings, src_key_padding_mask):
+
+        self.models = [model.to(self.device) for model in self.models]
+        for model in self.models:
+            model.eval()
+
+        all_scores = {}
+
+        with torch.no_grad():
+            for model in self.models:
+                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                outputs = F.softmax(outputs, dim=-1)
+                
+                if len(all_scores) == 0:
+                    all_scores = outputs.cpu().numpy()
+                else:
+                    all_scores += outputs.cpu().numpy()
+        return all_scores   
+
+
+    def predict(self, X, y): # not sure if this is right 
         """
         Predict the scores for the given input data.
 
