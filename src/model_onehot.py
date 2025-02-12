@@ -83,6 +83,8 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
             # select a random category to mask if training
             if self.training:
                 masked_category, idx = self.category_mask(category, mask)
+            elif self.validation:
+                masked_category, idx  = self.validation_mask(category, idx) 
             else:
                 masked_category = category
 
@@ -105,6 +107,25 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         training (bool): If True, the dataset is in training mode.
         """
         self.training = training
+        self.validation = False
+
+    def set_validation(self, validation_categories, validation=True):
+        """
+        Set the validation mode for the dataset.
+
+        Parameters:
+        validation (bool): If True, the dataset is in validation mode.
+        validation_categories (list): Categories to validate against 
+        """
+        
+        self.validation = validation
+        self.training = False
+
+        # store the original categories for prediction
+        self.predict_categories = self.categories   
+
+        # replace the categories with the validation categories
+        self.categories = validation_categories 
 
     def category_mask(self, category, mask):
         """
@@ -149,6 +170,25 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         except Exception as e:
             logger.error(f"Error in category_mask: {e}")
             raise
+
+    def validation_mask(self, category, ii):
+        """
+        Mask the validation categories to test the model's ability to predict the correct categories.
+        
+        Parameters:
+        category (torch.Tensor): Category tensor.
+        mask (torch.Tensor): Mask tensor.
+        idx (torch.Tensor): Index tensor.
+        """
+        
+        # the idx will be the idx that are different between the validation categories and the predicted categories
+        idx = (category != self.predict_categories[ii]).nonzero(as_tuple=True)[0]
+
+        # generate masked versions
+        masked_category = category.clone()
+        masked_category[idx] = self.mask_token
+
+        return masked_category, idx 
 
     def shuffle_rows(self):
         """
@@ -323,7 +363,7 @@ def log_model_devices(model):
     logger.info(f"fc is on device: {model.fc.weight.device}")
 
 class RelativePositionAttention(nn.Module):
-    def __init__(self, d_model, num_heads, max_len=1500, batch_first=True, intialisation = 'random'):
+    def __init__(self, d_model, num_heads, max_len=1000, batch_first=True, intialisation = 'random'):
         """
         Initialize the Relative Position Attention module.
 
@@ -452,7 +492,7 @@ class RelativePositionAttention(nn.Module):
 
 class CustomTransformerEncoderLayer(nn.Module):
     def __init__(
-        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1500, intialisation='random'
+        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000, intialisation='random'
     ):
         """
         Initialize the Custom Transformer Encoder Layer.
@@ -518,7 +558,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         num_layers=2,
         hidden_dim=512,
         dropout=0.1,
-        max_len=1500,
+        max_len=1000,
         intialisation='random',
         output_dim=None  # Add output_dim parameter
     ):
@@ -607,7 +647,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
 
 
 class CircularRelativePositionAttention(nn.Module):
-    def __init__(self, d_model, num_heads, max_len=1500, batch_first=True, intialisation = 'random'):
+    def __init__(self, d_model, num_heads, max_len=1000, batch_first=True, intialisation = 'random'):
         """
         Initialize the Circular Relative Position Attention module.
 
@@ -747,7 +787,7 @@ class CircularRelativePositionAttention(nn.Module):
 
 class CircularTransformerEncoderLayer(nn.Module):
     def __init__(
-        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1500, initialisation='random'
+        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000, initialisation='random'
     ):
         """
         Initialize the Circular Transformer Encoder Layer.
@@ -813,7 +853,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         num_layers=2,
         hidden_dim=512,
         dropout=0.1,
-        max_len=1500,
+        max_len=1000,
         intialisation='random',
         output_dim=None  # Add output_dim parameter
     ):
