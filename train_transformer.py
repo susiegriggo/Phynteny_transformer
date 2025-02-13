@@ -193,9 +193,6 @@ def main(
 
     # Produce the dataset object
     # note that this is a very small training size
-
-    logger.info(f"X: {X}")
-    logger.info(f"y: {y}")  
     
     train_dataset = model_onehot.VariableSeq2SeqEmbeddingDataset(
         list(X.values()), list(y.values()), mask_portion=mask_portion

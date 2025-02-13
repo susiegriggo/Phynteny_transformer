@@ -1140,6 +1140,35 @@ def sinusoidal_positional_encoding(seq_len, d_model, device):
     pe[:, 1::2] = torch.cos(position * div_term)
     return pe
 
+def calculate_accuracy(output, target, mask, idx):
+    """
+    Calculate accuracy using only the indices of the masked data.
+
+    Parameters:
+    output (torch.Tensor): Output tensor from the model.
+    target (torch.Tensor): Target tensor.
+    mask (torch.Tensor): Mask tensor.
+    idx (list of torch.Tensor): Indices of masked tokens.
+
+    Returns:
+    float: Calculated accuracy.
+    """
+    with torch.no_grad():
+        _, preds = torch.max(output, dim=2)
+        correct = (preds == target) * mask
+
+        # Adjust indices for flattened batch and sequence
+        batch_size, seq_len = target.shape
+        idx_overall = [ii + val * seq_len for val, ii in enumerate(idx)]
+        idx_flat = torch.cat([t.flatten() for t in idx_overall])
+
+        # Only consider the elements at the specific `idx` positions
+        correct_flat = correct.view(-1)[idx_flat]
+        mask_flat = mask.view(-1)[idx_flat]
+
+        accuracy = correct_flat.sum().float() / mask_flat.sum().float()
+    return accuracy.item()
+
 def train(
     model,
     train_dataloader,
@@ -1188,6 +1217,8 @@ def train(
     # lists to store metrics 
     train_losses = []
     val_losses = []
+    train_accuracies = []
+    val_accuracies = []
     val_classification_losses = []
     final_validation_weights = []
     final_validation_attention = [] 
@@ -1198,6 +1229,8 @@ def train(
     for epoch in range(epochs):
         model.train()  # Ensure model is in training mode
         total_loss = 0
+        total_correct = 0
+        total_samples = 0
   
         logger.info(f"Starting epoch {epoch + 1}/{epochs}")
         for embeddings, categories, masks, idx in train_dataloader:
@@ -1215,35 +1248,39 @@ def train(
             # Forward pass
             with autocast():
                 outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
-                #logger.debug(f"outputs shape: {outputs.shape}")
-                #logger.debug(f"attn_weights shape: {attn_weights.shape}")
                 loss, _ = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty) 
+                accuracy = calculate_accuracy(outputs, categories, masks, idx)
                        
-         
             # Backpropagation and optimization
             scaler.scale(loss).backward()
             scaler.step(optimizer)
             scaler.update()
 
-            # Update total loss
+            # Update total loss and accuracy
             total_loss += loss.item()
+            total_correct += accuracy * len(idx)
+            total_samples += len(idx)
 
-        # Calculate average training loss for the epoch
+        # Calculate average training loss and accuracy for the epoch
         avg_train_loss = total_loss / len(train_dataloader)
+        avg_train_accuracy = total_correct / total_samples
         train_losses.append(avg_train_loss)
+        train_accuracies.append(avg_train_accuracy)
 
-        # Log training loss
-        logger.info(f"Epoch {epoch + 1}/{epochs}, Training Loss: {avg_train_loss}")
+        # Log training loss and accuracy
+        logger.info(f"Epoch {epoch + 1}/{epochs}, Training Loss: {avg_train_loss}, Training Accuracy: {avg_train_accuracy}")
 
         # Clear cache after training epoch
         gc.collect()
         torch.cuda.empty_cache()
 
-        # Validation loss
+        # Validation loss and accuracy
         model.eval()  # Ensure model is in evaluation mode
         total_val_loss = 0
         total_val_classification_loss = 0
         total_diagonal_penalty = 0
+        total_val_correct = 0
+        total_val_samples = 0
         final_validation_categories = []  # List to store categories for each validation instance
 
         with torch.no_grad(): # No need to calculate gradients for validation
@@ -1261,14 +1298,17 @@ def train(
                 with autocast():
                     outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
                     val_loss, val_classification_loss = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty)
+                    accuracy = calculate_accuracy(outputs, categories, masks, idx)
                     
                     # Calculate diagonal penalty so it can be stored in the metrics
                     diagonal_penalty = diagonal_attention_penalty(attn_weights, src_key_padding_mask=src_key_padding_mask)
     
-                # Update total validation loss
+                # Update total validation loss and accuracy
                 total_val_loss += val_loss.item()
                 total_val_classification_loss += val_classification_loss.item()
                 total_diagonal_penalty += diagonal_penalty.item()
+                total_val_correct += accuracy * len(idx)
+                total_val_samples += len(idx)
 
                 # Store the final validation weights and attention weights
                 if epoch == epochs - 1:
@@ -1277,25 +1317,26 @@ def train(
                     final_validation_categories.append(categories.cpu().detach().numpy())  # Store categories
                     final_validation_masks.append(masks.cpu().detach().numpy())  # Store masks
 
-        # Calculate average validation loss
+        # Calculate average validation loss and accuracy
         avg_val_loss = total_val_loss / len(test_dataloader)
         avg_val_classification_loss = total_val_classification_loss / len(test_dataloader)
         avg_diagonal_penalty = total_diagonal_penalty / len(test_dataloader)
+        avg_val_accuracy = total_val_correct / total_val_samples
 
         # Append metrics to lists
         val_losses.append(avg_val_loss)
         val_classification_losses.append(avg_val_classification_loss)
         diagonal_penalities.append(avg_diagonal_penalty)
+        val_accuracies.append(avg_val_accuracy)
 
-        # Log validation loss
-        logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {avg_val_loss}")
+        # Log validation loss and accuracy
+        logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {avg_val_loss}, Validation Accuracy: {avg_val_accuracy}")
 
         # Save the final validation categories and masks
         with open(os.path.join(save_path, "final_validation_categories.pkl"), "wb") as f:
             pickle.dump(final_validation_categories, f)
         with open(os.path.join(save_path, "final_validation_masks.pkl"), "wb") as f:  
             pickle.dump(final_validation_masks, f)
-
 
         # Clear cache after validation epoch
         gc.collect()
@@ -1323,6 +1364,8 @@ def train(
             "validation losses": val_losses, # this here is the 'penalised loss' 
             "diagonal_penalities": diagonal_penalities,
             "classification_losses": val_classification_losses,
+            "training accuracies": train_accuracies,
+            "validation accuracies": val_accuracies,
         }
     )
     output_dir = f"{save_path}"
