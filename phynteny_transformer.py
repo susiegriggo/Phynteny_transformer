@@ -3,14 +3,10 @@
 import sys
 import os
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
-
 from src import format_data
 from src import predictor
 import click 
 from loguru import logger 
-import pandas as pd
-from Bio import SeqIO
-import pickle
 import numpy as np 
 import torch 
 from importlib_resources import files

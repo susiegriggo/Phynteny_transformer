@@ -1,4 +1,3 @@
-from esm import FastaBatchedDataset, pretrained
 import torch
 import binascii
 import gzip
