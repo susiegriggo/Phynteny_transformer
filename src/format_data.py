@@ -381,7 +381,7 @@ def extract_embeddings(
     output_dir,
     model_name="facebook/esm2_t33_650M_UR50D",
     tokens_per_batch=4096,
-    repr_layers=[33],
+    max_length=1024,
 ):
     """
     Extract ESM2 embeddings using HuggingFace
@@ -417,18 +417,20 @@ def extract_embeddings(
             logger.info(f"Processing batch {batch_idx + 1} of {len(batches)}")
 
             # Tokenize the batch
-            inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True)
+            inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=max_length)
             if torch.cuda.is_available():
                 inputs = {key: val.cuda() for key, val in inputs.items()}
 
             # Extract embeddings
             try:
                 outputs = model(**inputs)
-                token_representations = outputs.last_hidden_state
+                #token_representations = outputs.last_hidden_state
+                pooled_representations = outputs.pooler_output
 
                 # Update this to save dictionary for an entire fasta file
                 for i, seq in enumerate(batch):
-                    representation = token_representations[i, 1 : len(seq) - 1].mean(0)
+                    #representation = token_representations[i, 1 : len(seq) - 1].mean(0)
+                    representation = pooled_representations[i]
                     header = headers.pop(0)  # Use the header as the key
                     if torch.cuda.is_available():
                         results[header] = representation.detach().cpu()
