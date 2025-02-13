@@ -424,13 +424,13 @@ def extract_embeddings(
             # Extract embeddings
             try:
                 outputs = model(**inputs)
-                #token_representations = outputs.last_hidden_state
-                pooled_representations = outputs.pooler_output
+                token_representations = outputs.last_hidden_state
+                #pooled_representations = outputs.pooler_output
 
                 # Update this to save dictionary for an entire fasta file
                 for i, seq in enumerate(batch):
-                    #representation = token_representations[i, 1 : len(seq) - 1].mean(0)
-                    representation = pooled_representations[i]
+                    representation = token_representations[i, 1 : len(seq) - 1].mean(0)
+                    #representation = pooled_representations[i]
                     header = headers.pop(0)  # Use the header as the key
                     if torch.cuda.is_available():
                         results[header] = representation.detach().cpu()
