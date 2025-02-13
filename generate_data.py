@@ -5,6 +5,7 @@ import pandas as pd
 import os
 from Bio import SeqIO
 from loguru import logger
+import transformers
 
 
 @click.command()
@@ -86,7 +87,7 @@ from loguru import logger
 @click.option(
     "--tokens_per_batch",
     type=int,
-    default=4096,
+    default=1024,
     help="Specify the number of tokens per batch for extracting embeddings",
 )
 @click.option(
@@ -110,6 +111,13 @@ def main(
     tokens_per_batch,
     y_only,
 ):
+    # Set the cache directory for HuggingFace transformers
+    cache_dir = "/path/to/cache"  # Update this path to your desired cache directory
+    transformers.utils.logging.set_verbosity_info()
+    transformers.utils.logging.enable_default_handler()
+    transformers.utils.logging.enable_explicit_format()
+    os.environ["TRANSFORMERS_CACHE"] = cache_dir
+
     # read in information for the phrog annotations
     # read in annotation file
     phrogs = pd.read_csv(
