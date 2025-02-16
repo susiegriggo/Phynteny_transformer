@@ -270,6 +270,7 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
         with open(input_data, "r") as file:
             genbank_files = file.readlines()
     
+    skipped_genomes = []
 
     for genbank in genbank_files:
         # convert genbank to a dictionary
@@ -290,6 +291,7 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
                     break
 
             if skip_genome:
+                skipped_genomes.append(key)
                 continue
 
             # integer encoding of phrog categories
@@ -306,6 +308,8 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
                     # update dictionary with this entry
                     g = re.split(",|\.", re.split("/", genbank.strip())[-1])[0]
                     training_data[g + "_" + key] = phage_dict
+                else:
+                    skipped_genomes.append(key)
 
             else:
                 # if above the minimum number of categories are included
@@ -316,6 +320,14 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
                     # update dictionary with this entry
                     g = re.split(",|\.", re.split("/", genbank.strip())[-1])[0]
                     training_data[key] = phage_dict
+                else:
+                    skipped_genomes.append(key)
+
+    # Log skipped genomes
+    with open("skipped_genomes.txt", "w") as file:
+        for genome in skipped_genomes:
+            file.write(f"{genome}\n")
+            logger.info(f"Skipped genome: {genome}")
 
     return training_data
 
@@ -493,6 +505,9 @@ def prepare_data(
                 # extra and sort the keys with a lambda function 
                 this_keys = sorted([k for k in list(esm_vectors.keys()) if f"{g}_" in k], key=lambda x: int(x.split('_')[-1]))
                 this_vectors = [esm_vectors.get(k) for k in this_keys] 
+                if not this_vectors:
+                    removed.append(g)
+                    continue
            
 
             # merge these columns into a numpy array
@@ -510,6 +525,7 @@ def prepare_data(
         y.append(torch.tensor(this_categories))
 
     print("Numer of genomes removed: " + str(len(removed)))
+    logger.info(f"Genomes removed: {removed}")
     print("Numer of genomes kept: " + str(len(X)))
 
     # convert to dictionary inc the dictionary names
