@@ -280,7 +280,7 @@ class Seq2SeqTransformerClassifier(nn.Module):
         self.func_embedding = nn.Embedding(10, 16).to(device)
         self.strand_embedding = nn.Embedding(2, 4).to(device)
         self.length_embedding = nn.Linear(1, 8).to(device)
-        self.embedding_layer = nn.Linear(1280, hidden_dim - 28).to(device)
+        self.embedding_layer = nn.Linear(1280, hidden_dim - 28).to(device) #TODO maybe this needs to change is the vectors change size 
 
         self.dropout = nn.Dropout(dropout).to(device)  
 
@@ -363,7 +363,7 @@ def log_model_devices(model):
     logger.info(f"fc is on device: {model.fc.weight.device}")
 
 class RelativePositionAttention(nn.Module):
-    def __init__(self, d_model, num_heads, max_len=1000, batch_first=True, intialisation = 'random'):
+    def __init__(self, d_model, num_heads, max_len=1500, batch_first=True, intialisation = 'random'):
         """
         Initialize the Relative Position Attention module.
 
@@ -492,7 +492,7 @@ class RelativePositionAttention(nn.Module):
 
 class CustomTransformerEncoderLayer(nn.Module):
     def __init__(
-        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000, intialisation='random'
+        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1500, intialisation='random'
     ):
         """
         Initialize the Custom Transformer Encoder Layer.
@@ -558,7 +558,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         num_layers=2,
         hidden_dim=512,
         dropout=0.1,
-        max_len=1000,
+        max_len=1500,
         intialisation='random',
         output_dim=None  # Add output_dim parameter
     ):
@@ -647,7 +647,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
 
 
 class CircularRelativePositionAttention(nn.Module):
-    def __init__(self, d_model, num_heads, max_len=1000, batch_first=True, intialisation = 'random'):
+    def __init__(self, d_model, num_heads, max_len=1500, batch_first=True, intialisation = 'random'):
         """
         Initialize the Circular Relative Position Attention module.
 
@@ -787,7 +787,7 @@ class CircularRelativePositionAttention(nn.Module):
 
 class CircularTransformerEncoderLayer(nn.Module):
     def __init__(
-        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1000, initialisation='random'
+        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1500, initialisation='random'
     ):
         """
         Initialize the Circular Transformer Encoder Layer.
@@ -853,7 +853,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         num_layers=2,
         hidden_dim=512,
         dropout=0.1,
-        max_len=1000,
+        max_len=1500,
         intialisation='random',
         output_dim=None  # Add output_dim parameter
     ):
@@ -881,7 +881,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         self.length_embedding = nn.Linear(1,8).to(device) # linear embedding for the protein embedding
 
         # linear embedding for the protein embedding
-        self.embedding_layer = nn.Linear(1280, hidden_dim -28).to(device)
+        self.embedding_layer = nn.Linear(1280, hidden_dim -28).to(device) #maybe this needs to change if the embeddings change size 
 
         self.dropout = nn.Dropout(dropout).to(device)
         self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
@@ -1007,6 +1007,16 @@ def collate_fn(batch):
     masks_padded = pad_sequence(masks, batch_first=True, padding_value=-2)
     return embeddings_padded, categories_padded, masks_padded, idx
 
+def combine_loss_distillation(output, target, mask, attn_weights, idx, src_key_padding_mask, ignore_index=-1, alpha=0.5, lambda_penalty=0.1):
+
+    # compute the combined loss
+    penalised_loss, classification_loss = combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty) 
+
+    # now computed the distillation loss
+    penalised_loss + kl_loss(output.view(-1, num_classes), logits from teachers )
+
+    return penalised_loss, classification_loss  
+
 def combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask, lambda_penalty=0.1, ignore_index=-1):
     """
     Combine classification loss with a diagonal attention penalty.
@@ -1028,7 +1038,7 @@ def combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask,
     device = output.device
 
     # Flatten the batch and sequence dimensions
-    output_flat = output.view(-1, num_classes)
+    output_flat = output.view(-1, num_classes) #maybe this one 
     target_flat = target.view(-1)
     mask_flat = mask.view(-1)
 
@@ -1041,7 +1051,7 @@ def combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask,
 
     # Compute classification loss
     loss_fct = nn.CrossEntropyLoss(ignore_index=ignore_index, reduction="none").to(device)
-    classification_loss = loss_fct(output_flat, target_flat)
+    classification_loss = loss_fct(output_flat, target_flat) # output_flat these are the 10 class logits 
     classification_loss = classification_loss[idx_flat].sum() / len(idx_flat)
 
     # Check for NaN values in the classification loss
@@ -1642,118 +1652,46 @@ def train_crossValidation(
             gc.collect()
             torch.cuda.empty_cache()
 
-def evaluate(model, dataloader, phrog_integer, device, output_dir="metrics_output", save_lstm_output=False, save_transformer_output=False):
+def save_logits(model, dataloader, device, output_dir="logits_output"):
     """
-    Evaluate the model.
+    Evaluate the model and save the logits.
 
     Parameters:
     model (nn.Module): Model to evaluate.
     dataloader (DataLoader): DataLoader for evaluation data.
-    phrog_integer (dict): Dictionary mapping integer labels to categories.
     device (str): Device to evaluate on ('cuda' or 'cpu').
-    output_dir (str, optional): Directory to save evaluation metrics.
-    save_lstm_output (bool, optional): If True, save the output of the LSTM layer.
-    save_transformer_output (bool, optional): If True, save the output of the transformer layer.
+    output_dir (str, optional): Directory to save the logits.
 
     Returns:
     None
     """
     model.to(device)
     model.eval()
-    labels = list(phrog_integer.keys())
-    all_labels = []
-    all_probs = []
-    lstm_outputs = []
-    transformer_outputs = []
+    all_logits = []
 
     with torch.no_grad():
-        for embeddings, categories, masks, idx in dataloader:
-            embeddings, categories, masks = (
-                embeddings.to(device).float(),
-                categories.to(device).long(),
-                masks.to(device).float(),
-            )
-            src_key_padding_mask = masks == 0
-            outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask, save_lstm_output=save_lstm_output, save_transformer_output=save_transformer_output)
+        for batch in dataloader:
+            embeddings, categories, masks, idx = batch
+            embeddings = embeddings.to(device).float()
+            masks = masks.to(device).float()
+            src_key_padding_mask = (masks != -2).bool().to(device)
 
-            if save_lstm_output:
-                lstm_outputs.append(model.saved_lstm_output)
-            if save_transformer_output:
-                transformer_outputs.append(model.saved_transformer_output)
+            outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=False)
+            if model.output_dim == 9:
+                logits = outputs
+                #logger.info("Using raw outputs as logits")
+            else:
+                logits = F.softmax(outputs, dim=-1)
+                #logger.info("Using softmax outputs as logits")
+            all_logits.extend(logits.cpu().numpy())
 
-            # Apply softmax to get probabilities
-            probs = F.softmax(outputs, dim=2).detach().cpu().numpy()
-            categories = categories.detach().cpu().numpy()
-            masks = masks.detach().cpu().numpy()
+    all_logits = np.array(all_logits)
 
-            for i in range(probs.shape[0]):  # Iterate over the batch
-                valid_indices = np.where(masks[i] == 1)[0]
-                for idx in valid_indices:
-                    all_labels.append(categories[i][idx])
-                    all_probs.append(probs[i][idx])
+    # Create the output directory if it doesn't exist
+    if not os.path.exists(output_dir):
+        os.makedirs(output_dir)
+        logger.info(f"Directory created: {output_dir}")
 
-    all_labels = np.array(all_labels)
-    all_probs = np.array(all_probs)
-
-    for ii, label in enumerate(labels):
-        roc_probs = all_probs[:, ii]
-        roc_labels = (all_labels == ii).astype(int)
-        fpr, tpr, thresholds = roc_curve(roc_labels, roc_probs)
-        roc_auc = auc(fpr, tpr)
-        print("AUC for category " + phrog_integer[label] + ": " + str(roc_auc))
-
-        roc_df = pd.DataFrame({"FPR": fpr, "TPR": thresholds})
-        if not os.path.exists(output_dir):
-            os.makedirs(output_dir)
-
-        roc_df.to_csv(
-            os.path.join(output_dir, f"roc_curve_category_{phrog_integer[label]}.csv"),
-            index=False,
-        )
-
-    # Save LSTM and transformer outputs if specified
-    if save_lstm_output:
-        with open(os.path.join(output_dir, "lstm_outputs.pkl"), "wb") as f:
-            pickle.dump(lstm_outputs, f)
-    if save_transformer_output:
-        with open(os.path.join(output_dir, "transformer_outputs.pkl"), "wb") as f:
-            pickle.dump(transformer_outputs, f)
-
-    # Compute F1 score, precision, recall for each category
-    all_preds = np.argmax(all_probs, axis=1)
-    f1 = f1_score(all_labels, all_preds, average=None, zero_division=1)
-    precision = precision_score(all_labels, all_preds, average=None, zero_division=1)
-    recall = recall_score(all_labels, all_preds, average=None, zero_division=1)
-
-    print("f1")
-
-
-
-    print("f1")
-
-"""
-# Load the pre-trained model
-m = model_onehot.Seq2SeqTransformerClassifierRelativeAttention(
-    input_dim=1293, 
-    num_classes=num_classes, 
-    num_heads=4, 
-    hidden_dim=512, 
-    dropout=0.1
-)
-m.load_state_dict(torch.load(
-    f'/home/grig0076/GitHubs/Phynteny_transformer_15012025/Phynteny_transformer/_17012025_saveidx_inphared_avlogpenalty_lambda100_randomintialised_4heads_lr4_16batch_10epochs_allfolds/fold_{k+1}transformer.model',
-    map_location=torch.device('cpu')
-))
-m.eval()
-
-# Prepare your input data (example)
-input_data = torch.randn(1, 10, 1293)  # Example input tensor
-
-# Forward pass with save_lstm_output=True
-output = m(input_data, save_lstm_output=True)
-
-# Access the saved LSTM output
-lstm_output = m.saved_lstm_output
-print(lstm_output)
-
-"""
+    # Save the logits to a file
+    np.save(os.path.join(output_dir, "logits.npy"), all_logits)
+    logger.info("Logits saved successfully")
