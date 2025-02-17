@@ -138,6 +138,11 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         Returns:
         tuple: Tuple containing the masked category and masked indices.
         """
+
+        # logging lines 
+        logger.info(f'category: {category}' )
+        logger.info(f'mask: {mask}')
+
         try:
             # Check for NaN or infinite values in the mask tensor
             if torch.isnan(mask).any() or torch.isinf(mask).any():
@@ -1013,8 +1018,7 @@ def combine_loss_distillation(output, target, mask, attn_weights, idx, src_key_p
     penalised_loss, classification_loss = combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty) 
 
     # now computed the distillation loss
-    penalised_loss + kl_loss(output.view(-1, num_classes), 'logits from teachers' )
-    # not sure whether the output here should be the regular output or the flattened output 
+    #penalised_loss + kl_loss(output.view(-1, num_classes), logits from teachers )
 
     return penalised_loss, classification_loss  
 
