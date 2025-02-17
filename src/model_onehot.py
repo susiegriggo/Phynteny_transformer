@@ -285,7 +285,7 @@ class Seq2SeqTransformerClassifier(nn.Module):
         self.func_embedding = nn.Embedding(10, 16).to(device)
         self.strand_embedding = nn.Embedding(2, 4).to(device)
         self.length_embedding = nn.Linear(1, 8).to(device)
-        self.embedding_layer = nn.Linear(1280, hidden_dim - 28).to(device) #TODO maybe this needs to change is the vectors change size 
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)  # Use input_dim
 
         self.dropout = nn.Dropout(dropout).to(device)  
 
@@ -589,7 +589,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         self.func_embedding = nn.Embedding(10, 16).to(device)
         self.strand_embedding = nn.Embedding(2, 4).to(device)
         self.length_embedding = nn.Linear(1, 8).to(device)
-        self.embedding_layer = nn.Linear(1280, hidden_dim - 28).to(device) #maybe this minus 28 is causing problems 
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)  # Use input_dim
 
         self.dropout = nn.Dropout(dropout).to(device)
         self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
@@ -886,7 +886,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         self.length_embedding = nn.Linear(1,8).to(device) # linear embedding for the protein embedding
 
         # linear embedding for the protein embedding
-        self.embedding_layer = nn.Linear(1280, hidden_dim -28).to(device) #maybe this needs to change if the embeddings change size 
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim -28).to(device)  # Use input_dim
 
         self.dropout = nn.Dropout(dropout).to(device)
         self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
@@ -1397,7 +1397,7 @@ def train(
     gc.collect()
     torch.cuda.empty_cache()
 
-def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim):
+def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size):
     fold_logger = None
     try:
         device = torch.device(device_id)
@@ -1475,7 +1475,7 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             if attention == "circular":
                 kfold_transformer_model = (
                     Seq2SeqTransformerClassifierCircularRelativeAttention(
-                        input_dim=input_dim,
+                        input_dim=input_size,  # Use input_size
                         num_classes=num_classes,
                         num_heads=num_heads,
                         hidden_dim=hidden_dim,
@@ -1487,7 +1487,7 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                 )
             elif attention == "relative":
                 kfold_transformer_model = Seq2SeqTransformerClassifierRelativeAttention(
-                    input_dim=input_dim,
+                    input_dim=input_size,  # Use input_size
                     num_classes=num_classes,
                     num_heads=num_heads,
                     hidden_dim=hidden_dim,
@@ -1498,7 +1498,7 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                 ).to(device)
             elif attention == "absolute":
                 kfold_transformer_model = Seq2SeqTransformerClassifier(
-                    input_dim=input_dim,
+                    input_dim=input_size,  # Use input_size
                     num_classes=num_classes,
                     num_heads=num_heads,
                     hidden_dim=hidden_dim,
@@ -1564,7 +1564,8 @@ def train_crossValidation(
     num_layers=2, 
     random_seed=42,
     single_fold=None,
-    output_dim=None  # Add output_dim parameter
+    output_dim=None,  # Add output_dim parameter
+    input_size=None  # Add input_size parameter
 ):
     """
     Train the model using K-Fold cross-validation.
@@ -1612,9 +1613,9 @@ def train_crossValidation(
         logger.info(f"Training only fold {single_fold}")
         for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
             if fold == single_fold:
-                fold_logger = logger.bind(fold=fold)  # Ensure fold_logger is defined
+                # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device}")
-                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim)
+                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size)
                 break
     else:
         if parallel_kfolds:
@@ -1627,7 +1628,7 @@ def train_crossValidation(
             for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
                 device_id = (fold - 1) % num_gpus
                 logger.info(f"Training fold {fold} on device {device_id}")
-                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim))
+                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size))
                 p.start()
                 processes.append(p)
 
@@ -1649,9 +1650,9 @@ def train_crossValidation(
             num_gpus = torch.cuda.device_count()
             for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
                 device_id = (fold - 1) % num_gpus
-                fold_logger = logger.bind(fold=fold)  # Ensure fold_logger is defined
+                # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device_id}")
-                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim)
+                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size)
 
             # Clear cache after all folds finish
             gc.collect()
@@ -1684,13 +1685,14 @@ def save_logits(model, dataloader, device, output_dir="logits_output"):
             outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=False)
             if model.output_dim == 9:
                 logits = outputs
-                #logger.info("Using raw outputs as logits")
+                logger.info("Using raw outputs as logits")
             else:
                 logits = F.softmax(outputs, dim=-1)
-                #logger.info("Using softmax outputs as logits")
-            all_logits.extend(logits.cpu().numpy())
+                logger.info("Using softmax outputs as logits")
+            all_logits.append(logits.cpu().numpy())
 
-    all_logits = np.array(all_logits)
+    # Flatten the list of logits
+    all_logits = np.concatenate(all_logits, axis=0)
 
     # Create the output directory if it doesn't exist
     if not os.path.exists(output_dir):
