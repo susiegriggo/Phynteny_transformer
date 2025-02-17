@@ -140,8 +140,8 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         """
 
         # logging lines 
-        logger.info(f'category: {category}' )
-        logger.info(f'mask: {mask}')
+        #logger.info(f'category: {category}' )
+        #logger.info(f'mask: {mask}')
 
         try:
             # Check for NaN or infinite values in the mask tensor
