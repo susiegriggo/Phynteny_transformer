@@ -169,7 +169,7 @@ def main(
         y = pickle.load(open(y_path, "rb"))
         
         # Compute input size of embeddings
-        input_size = list(X.values())[0].shape[1] - 13  # 13 is the number of categories + strand info and gene length
+        input_size = list(X.values())[0].shape[1] - 3  # 3 is the number of  strand info and gene length
         logger.info(f"Computed input size of embeddings: {input_size}")
 
     except Exception as e:
