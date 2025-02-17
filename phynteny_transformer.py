@@ -2,6 +2,7 @@
 
 import sys
 import os
+import time
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
 from src import format_data
 from src import predictor
@@ -16,7 +17,7 @@ __author__ = "Susanna Grigson"
 __maintainer__ = "Susanna Grigson"
 __license__ = "MIT"
 __version__ = "0"
-__email__ = "susie.grigson@gmail.com"
+__email__ = "susie.grigson@flinders.edu.au"
 __status__ = "development"
 
 @click.command()
@@ -28,6 +29,14 @@ __status__ = "development"
     default="phynteny",
     help="output directory",
     required=True,
+)
+@click.option(
+    "--p",
+    "--prefix",
+    type=click.STRING,
+    default="phynteny",
+    help="output prefix",
+    required=False,
 )
 @click.option(
     "--esm_model",
@@ -50,11 +59,38 @@ __status__ = "development"
 @click.version_option(version=__version__)
 
 def main(infile, out, esm_model, models, force):
+
+    start_time = time.time()
+    # instantiate output directory 
     format_data.instantiate_output_directory(out, force)
     logger.add(out + "/phynteny.log", level="DEBUG")
     logger.info("Starting Phynteny")
 
+    # Check if the ESM model path exists
+    if not os.path.exists(esm_model):
+        logger.error(f"ESM model path does not exist: {esm_model}")
+        sys.exit(1)
+    else:
+        logger.info(f"ESM model path exists: {esm_model}")
+
+    # Check if the models directory exists
+    if not os.path.exists(models):
+        logger.error(f"Models directory does not exist: {models}")
+        sys.exit(1)
+    else:
+        logger.info(f"Models directory exists: {models}")
+
+    # read in needed info on PHROGS 
     category_dict, phrog_integer_category = format_data.read_annotations_information() # what this this method even doing? 
+
+    # preamble 
+    logger.info(f'Starting Phynteny transformer v{__version__}') 
+    logger.info(f'Command executed: in={infile}, out={out}, esm_model={esm_model}, models={models}, force={force}')
+    logger.info(f'Repository homepage is https://github.com/susiegriggo/Phynteny_transformer/tree/main')
+    logger.info(f"Written by {__author__}: {__email__}")
+
+
+    # read in genbank file
     gb_dict = format_data.read_genbank_file(infile, phrog_integer_category) # what categories the genes belong to is missing 
     logger.info("Genbank file read")
 
@@ -84,6 +120,9 @@ def main(infile, out, esm_model, models, force):
     table_file = out + "/phynteny.tsv"
     
     logger.info("Predictions completed")
+    end_time = time.time()
+    elapsed_time = end_time - start_time
+    logger.info(f"Total execution time: {elapsed_time:.2f} seconds")
 
 if __name__ == "__main__":
     main()
