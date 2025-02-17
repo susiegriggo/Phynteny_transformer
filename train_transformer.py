@@ -167,6 +167,11 @@ def main(
         logger.info("Reading in data")
         X = pickle.load(open(x_path, "rb"))
         y = pickle.load(open(y_path, "rb"))
+        
+        # Compute input size of embeddings
+        input_size = list(X.values())[0].shape[1] - 13  # 13 is the number of categories + strand info and gene length
+        logger.info(f"Computed input size of embeddings: {input_size}")
+
     except Exception as e:
         logger.error(f"Error reading input files: {e}")
         raise
@@ -222,7 +227,8 @@ def main(
             checkpoint_interval=checkpoint_interval,
             num_layers=num_layers,
             single_fold=fold_index,
-            output_dim=output_dim  # Pass output_dim
+            output_dim=output_dim,  # Pass output_dim
+            input_size=input_size  # Pass input_size
         )
     except Exception as e:
         logger.error(f"Error during training: {e}")
