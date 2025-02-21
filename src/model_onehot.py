@@ -41,8 +41,9 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
         mask_portion (float): Portion of tokens to mask during training.
         """
         try:
-            self.embeddings = [embedding.float() for embedding in embeddings]
-            self.categories = [category.long() for category in categories]
+            with torch.amp.autocast(device_type='cuda'):
+                self.embeddings = [embedding.float() for embedding in embeddings]
+                self.categories = [category.long() for category in categories]
             self.mask_token = mask_token
             self.num_classes = 10  # hard coded in for now
             self.mask_portion = mask_portion
@@ -281,80 +282,71 @@ class Seq2SeqTransformerClassifier(nn.Module):
         # check if cuda is available 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Embedding layers
-        self.func_embedding = nn.Embedding(10, 16).to(device)
-        self.strand_embedding = nn.Embedding(2, 4).to(device)
-        self.length_embedding = nn.Linear(1, 8).to(device)
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)  # Use input_dim
+        with torch.amp.autocast(device_type='cuda'):
+            # Embedding layers
+            self.func_embedding = nn.Embedding(10, 16).to(device)
+            self.strand_embedding = nn.Embedding(2, 4).to(device)
+            self.length_embedding = nn.Linear(1, 8).to(device)
+            self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)
 
-        self.dropout = nn.Dropout(dropout).to(device)  
+            self.dropout = nn.Dropout(dropout).to(device)  
 
-        # Positional Encoding (now learnable) -  could try using the fixed sinusoidal embeddings instead
-        logger.info(f"Initialising positional encoding with {intialisation} values")
-        if intialisation == 'random':
-            self.positional_encoding = nn.Parameter(
-                torch.randn(1000, hidden_dim)
+            # Positional Encoding (now learnable) -  could try using the fixed sinusoidal embeddings instead
+            logger.info(f"Initialising positional encoding with {intialisation} values")
+            if intialisation == 'random':
+                self.positional_encoding = nn.Parameter(
+                    torch.randn(1000, hidden_dim)
+                ).to(device)
+            elif intialisation == 'zeros':
+                self.positional_encoding = nn.Parameter(
+                    torch.zeros(1000, hidden_dim) 
+                ).to(device)
+            else: 
+                ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zeros'.")
+
+            # LSTM layer
+            self.lstm = nn.LSTM(
+                hidden_dim, hidden_dim, batch_first=True, bidirectional=True
             ).to(device)
-        elif intialisation == 'zeros':
-            self.positional_encoding = nn.Parameter(
-                torch.zeros(1000, hidden_dim) 
+
+            # Transformer Encoder
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=hidden_dim * 2, nhead=num_heads, batch_first=True
             ).to(device)
-        else: 
-            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zeros'.")
+            self.transformer_encoder = nn.TransformerEncoder(
+                encoder_layer, num_layers=num_layers
+            ).to(device)
 
-        # LSTM layer
-        self.lstm = nn.LSTM(
-            hidden_dim, hidden_dim, batch_first=True, bidirectional=True
-        ).to(device)
-
-        # Transformer Encoder
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim * 2, nhead=num_heads, batch_first=True
-        ).to(device)
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer, num_layers=num_layers
-        ).to(device)
-
-        # Final Classification Layer
-        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
-        self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
+            # Final Classification Layer
+            self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+            self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
-        """
-        Forward pass of the model.
+        with torch.amp.autocast(device_type='cuda'):
+            x = x.float()
+            func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
+            func_embeds = self.func_embedding(func_ids.argmax(-1))
+            strand_embeds = self.strand_embedding(strand_ids.argmax(-1))
+            length_embeds = self.length_embedding(gene_length)
+            protein_embeds = self.embedding_layer(protein_embeds)
 
-        Parameters:
-        x (torch.Tensor): Input tensor.
-        src_key_padding_mask (torch.Tensor, optional): Mask tensor for padding.
-        return_attn_weights (bool, optional): If True, return attention weights.
+            x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
+            x = x + self.positional_encoding[: x.size(1), :].to(x.device)
 
-        Returns:
-        torch.Tensor: Output tensor.
-        """
-        x = x.float()
-        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
-        func_embeds = self.func_embedding(func_ids.argmax(-1))
-        strand_embeds = self.strand_embedding(strand_ids.argmax(-1))
-        length_embeds = self.length_embedding(gene_length)
-        protein_embeds = self.embedding_layer(protein_embeds)
-
-        x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
-        x = x + self.positional_encoding[: x.size(1), :].to(x.device)
-
-        x = self.dropout(x)
-        x, _ = self.lstm(x)  # LSTM layer
-        if return_attn_weights:
-            x, attn_weights = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
-            x = self.fc(x)
-            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
-                x = F.softmax(x, dim=-1)
-            return x, attn_weights
-        else:
-            x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
-            x = self.fc(x)
-            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
-                x = F.softmax(x, dim=-1)
-            return x
+            x = self.dropout(x)
+            x, _ = self.lstm(x)  # LSTM layer
+            if return_attn_weights:
+                x, attn_weights = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                x = self.fc(x)
+                if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                    x = F.softmax(x, dim=-1)
+                return x, attn_weights
+            else:
+                x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
+                x = self.fc(x)
+                if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                    x = F.softmax(x, dim=-1)
+                return x
 
 # Add logging to check the device of various components
 def log_model_devices(model):
@@ -585,70 +577,61 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         # Check if CUDA is available
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Embedding layers
-        self.func_embedding = nn.Embedding(10, 16).to(device)
-        self.strand_embedding = nn.Embedding(2, 4).to(device)
-        self.length_embedding = nn.Linear(1, 8).to(device)
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)  # Use input_dim
+        with torch.amp.autocast(device_type='cuda'):
+            # Embedding layers
+            self.func_embedding = nn.Embedding(10, 16).to(device)
+            self.strand_embedding = nn.Embedding(2, 4).to(device)
+            self.length_embedding = nn.Linear(1, 8).to(device)
+            self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)
 
-        self.dropout = nn.Dropout(dropout).to(device)
-        self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
-        self.lstm = nn.LSTM(
-            hidden_dim, hidden_dim, batch_first=True, bidirectional=True
-        ).to(device)
+            self.dropout = nn.Dropout(dropout).to(device)
+            self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
+            self.lstm = nn.LSTM(
+                hidden_dim, hidden_dim, batch_first=True, bidirectional=True
+            ).to(device)
 
-        encoder_layers = CustomTransformerEncoderLayer(
-            d_model=hidden_dim * 2,
-            num_heads=num_heads,
-            dropout=dropout,
-            max_len=max_len,
-            intialisation=intialisation
-        )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layers, num_layers=num_layers
-        ).to(device)
+            encoder_layers = CustomTransformerEncoderLayer(
+                d_model=hidden_dim * 2,
+                num_heads=num_heads,
+                dropout=dropout,
+                max_len=max_len,
+                intialisation=intialisation
+            )
+            self.transformer_encoder = nn.TransformerEncoder(
+                encoder_layers, num_layers=num_layers
+            ).to(device)
 
-        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
-        self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
+            self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+            self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
-        """
-        Forward pass of the model.
+        with torch.amp.autocast(device_type='cuda'):
+            x = x.float()
+            func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
+            func_embeds = self.func_embedding(func_ids.argmax(-1))
+            strand_embeds = self.strand_embedding(strand_ids.argmax(-1))
+            length_embeds = self.length_embedding(gene_length)
+            protein_embeds = self.embedding_layer(protein_embeds)
 
-        Parameters:
-        x (torch.Tensor): Input tensor.
-        src_key_padding_mask (torch.Tensor, optional): Mask tensor for padding.
-        return_attn_weights (bool, optional): If True, return attention weights.
+            x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
+            x = x + self.positional_encoding[: x.size(1), :].to(x.device)
 
-        Returns:
-        torch.Tensor: Output tensor.
-        """
-        x = x.float()
-        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
-        func_embeds = self.func_embedding(func_ids.argmax(-1))
-        strand_embeds = self.strand_embedding(strand_ids.argmax(-1))
-        length_embeds = self.length_embedding(gene_length)
-        protein_embeds = self.embedding_layer(protein_embeds)
-
-        x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
-        x = x + self.positional_encoding[: x.size(1), :].to(x.device)
-
-        x = self.dropout(x)
-        x, _ = self.lstm(x)
-        if return_attn_weights:
-            x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
-            for layer in self.transformer_encoder.layers[1:]:
-                x = layer(x, src_key_padding_mask=src_key_padding_mask)
-            x = self.fc(x)
-            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
-                x = F.softmax(x, dim=-1)
-            return x, attn_weights
-        else:
-            x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
-            x = self.fc(x)
-            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
-                x = F.softmax(x, dim=-1)
-            return x
+            x = self.dropout(x)
+            x, _ = self.lstm(x)
+            if return_attn_weights:
+                x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                for layer in self.transformer_encoder.layers[1:]:
+                    x = layer(x, src_key_padding_mask=src_key_padding_mask)
+                x = self.fc(x)
+                if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                    x = F.softmax(x, dim=-1)
+                return x, attn_weights
+            else:
+                x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
+                x = self.fc(x)
+                if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                    x = F.softmax(x, dim=-1)
+                return x
 
 
 class CircularRelativePositionAttention(nn.Module):
@@ -880,79 +863,70 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         # Check if CUDA is available
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # try adding some embedding layers 
-        self.func_embedding = nn.Embedding(10, 16).to(device)
-        self.strand_embedding = nn.Embedding(2, 4).to(device)
-        self.length_embedding = nn.Linear(1,8).to(device) # linear embedding for the protein embedding
+        with torch.amp.autocast(device_type='cuda'):
+            # try adding some embedding layers 
+            self.func_embedding = nn.Embedding(10, 16).to(device)
+            self.strand_embedding = nn.Embedding(2, 4).to(device)
+            self.length_embedding = nn.Linear(1,8).to(device) # linear embedding for the protein embedding
 
-        # linear embedding for the protein embedding
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim -28).to(device)  # Use input_dim
+            # linear embedding for the protein embedding
+            self.embedding_layer = nn.Linear(input_dim, hidden_dim -28).to(device)  # Use input_dim
 
-        self.dropout = nn.Dropout(dropout).to(device)
-        self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
-        self.lstm = nn.LSTM(
-            hidden_dim, hidden_dim, batch_first=True, bidirectional=True
-        ).to(device)
+            self.dropout = nn.Dropout(dropout).to(device)
+            self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
+            self.lstm = nn.LSTM(
+                hidden_dim, hidden_dim, batch_first=True, bidirectional=True
+            ).to(device)
 
-        encoder_layers = CircularTransformerEncoderLayer(
-            d_model=hidden_dim * 2,  # Input to transformer encoder is 2 * hidden_dim
-            num_heads=num_heads,
-            dropout=dropout,
-            max_len=max_len,
-            initialisation=intialisation
-        )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layers, num_layers=num_layers
-        ).to(device)
+            encoder_layers = CircularTransformerEncoderLayer(
+                d_model=hidden_dim * 2,  # Input to transformer encoder is 2 * hidden_dim
+                num_heads=num_heads,
+                dropout=dropout,
+                max_len=max_len,
+                initialisation=intialisation
+            )
+            self.transformer_encoder = nn.TransformerEncoder(
+                encoder_layers, num_layers=num_layers
+            ).to(device)
 
-        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
-        self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
+            self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+            self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False, save_lstm_output=False, save_transformer_output=False):
-        """
-        Forward pass of the model.
+        with torch.amp.autocast(device_type='cuda'):
+            x = x.float()
+            func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
+            func_embeds = self.func_embedding(func_ids.argmax(-1))
+            strand_embeds = self.strand_embedding(strand_ids.argmax(-1))
+            length_embeds = self.length_embedding(gene_length)
+            protein_embeds = self.embedding_layer(protein_embeds)
 
-        Parameters:
-        x (torch.Tensor): Input tensor.
-        src_key_padding_mask (torch.Tensor, optional): Mask tensor for padding.
-        return_attn_weights (bool, optional): If True, return attention weights.
+            x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
+            x = x + self.positional_encoding[: x.size(1), :].to(x.device)
+            x = self.dropout(x)
+            x, _ = self.lstm(x)
 
-        Returns:
-        torch.Tensor: Output tensor.
-        """
-        x = x.float()
-        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
-        func_embeds = self.func_embedding(func_ids.argmax(-1))
-        strand_embeds = self.strand_embedding(strand_ids.argmax(-1))
-        length_embeds = self.length_embedding(gene_length)
-        protein_embeds = self.embedding_layer(protein_embeds)
+            if save_lstm_output:
+                self.saved_lstm_output = x.clone().detach().cpu().numpy()
 
-        x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
-        x = x + self.positional_encoding[: x.size(1), :].to(x.device)
-        x = self.dropout(x)
-        x, _ = self.lstm(x)
-
-        if save_lstm_output:
-            self.saved_lstm_output = x.clone().detach().cpu().numpy()
-
-        if return_attn_weights:
-            x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
-            for layer in self.transformer_encoder.layers[1:]:
-                x = layer(x, src_key_padding_mask=src_key_padding_mask)
-            x = self.fc(x)
-            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
-                x = F.softmax(x, dim=-1)
-            if save_transformer_output:
-                self.saved_transformer_output = x.clone().detach().cpu().numpy()
-            return x, attn_weights
-        else:
-            x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
-            x = self.fc(x)
-            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
-                x = F.softmax(x, dim=-1)
-            if save_transformer_output:
-                self.saved_transformer_output = x.clone().detach().cpu().numpy()
-            return x
+            if return_attn_weights:
+                x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                for layer in self.transformer_encoder.layers[1:]:
+                    x = layer(x, src_key_padding_mask=src_key_padding_mask)
+                x = self.fc(x)
+                if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                    x = F.softmax(x, dim=-1)
+                if save_transformer_output:
+                    self.saved_transformer_output = x.clone().detach().cpu().numpy()
+                return x, attn_weights
+            else:
+                x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
+                x = self.fc(x)
+                if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                    x = F.softmax(x, dim=-1)
+                if save_transformer_output:
+                    self.saved_transformer_output = x.clone().detach().cpu().numpy()
+                return x
 
 
 def masked_loss(output, target, mask, idx, ignore_index=-1):
@@ -1261,7 +1235,7 @@ def train(
             src_key_padding_mask = (masks != -2).bool().to(device) 
 
             # Forward pass
-            with autocast():
+            with torch.amp.autocast(device_type='cuda'):
                 outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
                 loss, _ = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty) 
                 accuracy = calculate_accuracy(outputs, categories, masks, idx)
@@ -1310,7 +1284,7 @@ def train(
                 src_key_padding_mask = (masks != -2).bool().to(device)  
                 
                 # Forward pass
-                with autocast():
+                with torch.amp.autocast(device_type='cuda'):
                     outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
                     val_loss, val_classification_loss = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty)
                     accuracy = calculate_accuracy(outputs, categories, masks, idx)
@@ -1455,7 +1429,7 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
         train_set = set(train_index)
         val_set = set(val_index)
         intersection = train_set.intersection(val_set)
-        if intersection:
+        if (intersection):
             fold_logger.error(f"Data leakage detected! Overlapping indices: {intersection}")
         else:
             fold_logger.info("No data leakage detected between training and validation sets.")
@@ -1472,9 +1446,22 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             input_dim = dataset[0][0].shape[1]
             num_classes = 9
             fold_logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}, output_dim={output_dim}")  # Log input_dim, num_classes, and output_dim
-            if attention == "circular":
-                kfold_transformer_model = (
-                    Seq2SeqTransformerClassifierCircularRelativeAttention(
+            with torch.amp.autocast(device_type='cuda'):
+                if attention == "circular":
+                    kfold_transformer_model = (
+                        Seq2SeqTransformerClassifierCircularRelativeAttention(
+                            input_dim=input_size,  # Use input_size
+                            num_classes=num_classes,
+                            num_heads=num_heads,
+                            hidden_dim=hidden_dim,
+                            dropout=dropout,
+                            intialisation=intialisation,
+                            num_layers=num_layers,
+                            output_dim=output_dim  # Pass output_dim
+                        ).to(device)
+                    )
+                elif attention == "relative":
+                    kfold_transformer_model = Seq2SeqTransformerClassifierRelativeAttention(
                         input_dim=input_size,  # Use input_size
                         num_classes=num_classes,
                         num_heads=num_heads,
@@ -1484,32 +1471,20 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                         num_layers=num_layers,
                         output_dim=output_dim  # Pass output_dim
                     ).to(device)
-                )
-            elif attention == "relative":
-                kfold_transformer_model = Seq2SeqTransformerClassifierRelativeAttention(
-                    input_dim=input_size,  # Use input_size
-                    num_classes=num_classes,
-                    num_heads=num_heads,
-                    hidden_dim=hidden_dim,
-                    dropout=dropout,
-                    intialisation=intialisation,
-                    num_layers=num_layers,
-                    output_dim=output_dim  # Pass output_dim
-                ).to(device)
-            elif attention == "absolute":
-                kfold_transformer_model = Seq2SeqTransformerClassifier(
-                    input_dim=input_size,  # Use input_size
-                    num_classes=num_classes,
-                    num_heads=num_heads,
-                    hidden_dim=hidden_dim,
-                    dropout=dropout,
-                    intialisation=intialisation,
-                    num_layers=num_layers,
-                    output_dim=output_dim  # Pass output_dim
-                ).to(device)
-            else:
-                fold_logger.error("Invalid attention type specified")
-                raise ValueError("Invalid attention type specified")
+                elif attention == "absolute":
+                    kfold_transformer_model = Seq2SeqTransformerClassifier(
+                        input_dim=input_size,  # Use input_size
+                        num_classes=num_classes,
+                        num_heads=num_heads,
+                        hidden_dim=hidden_dim,
+                        dropout=dropout,
+                        intialisation=intialisation,
+                        num_layers=num_layers,
+                        output_dim=output_dim  # Pass output_dim
+                    ).to(device)
+                else:
+                    fold_logger.error("Invalid attention type specified")
+                    raise ValueError("Invalid attention type specified")
         except Exception as e:
             fold_logger.error(f"Error initializing model: {e}")
             raise
@@ -1615,7 +1590,8 @@ def train_crossValidation(
             if fold == single_fold:
                 # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device}")
-                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size)
+                with torch.amp.autocast(device_type='cuda'):
+                    train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size)
                 break
     else:
         if parallel_kfolds:
@@ -1652,7 +1628,8 @@ def train_crossValidation(
                 device_id = (fold - 1) % num_gpus
                 # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device_id}")
-                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size)
+                with torch.amp.autocast(device_type='cuda'):
+                    train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size)
 
             # Clear cache after all folds finish
             gc.collect()

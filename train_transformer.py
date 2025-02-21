@@ -4,6 +4,7 @@ import random
 from loguru import logger
 from src import model_onehot
 import os
+import torch
 
 
 def validate_num_heads(ctx, param, value):
@@ -91,7 +92,7 @@ def validate_num_heads(ctx, param, value):
 )
 @click.option(
     "--checkpoint_interval",
-    default=20,  
+    default=5,  
     help="Number of epochs between saving checkpoints.",
     type=int,
 )
@@ -165,8 +166,9 @@ def main(
 
         # read in data
         logger.info("Reading in data")
-        X = pickle.load(open(x_path, "rb"))
-        y = pickle.load(open(y_path, "rb"))
+        with torch.amp.autocast(device_type=device):
+            X = pickle.load(open(x_path, "rb"))
+            y = pickle.load(open(y_path, "rb"))
         
         # Compute input size of embeddings
         input_size = list(X.values())[0].shape[1] - 3  # 3 is the number of  strand info and gene length
@@ -208,28 +210,29 @@ def main(
     logger.info("\nTraining model...")
 
     try:
-        model_onehot.train_crossValidation(
-            train_dataset,
-            attention,
-            n_splits=10,
-            batch_size=batch_size, # have changed this batch size to 16 
-            epochs=epochs,
-            lr=lr,
-            save_path=out,
-            num_heads=num_heads,
-            min_lr_ratio=min_lr_ratio,
-            hidden_dim=hidden_dim,
-            dropout=dropout,
-            device=device,
-            intialisation=intialisation, 
-            lambda_penalty=lambda_penalty,
-            parallel_kfolds=parallel_kfolds,
-            checkpoint_interval=checkpoint_interval,
-            num_layers=num_layers,
-            single_fold=fold_index,
-            output_dim=output_dim,  # Pass output_dim
-            input_size=input_size  # Pass input_size
-        )
+        with torch.amp.autocast(device_type=device):
+            model_onehot.train_crossValidation(
+                train_dataset,
+                attention,
+                n_splits=10,
+                batch_size=batch_size, # have changed this batch size to 16 
+                epochs=epochs,
+                lr=lr,
+                save_path=out,
+                num_heads=num_heads,
+                min_lr_ratio=min_lr_ratio,
+                hidden_dim=hidden_dim,
+                dropout=dropout,
+                device=device,
+                intialisation=intialisation, 
+                lambda_penalty=lambda_penalty,
+                parallel_kfolds=parallel_kfolds,
+                checkpoint_interval=checkpoint_interval,
+                num_layers=num_layers,
+                single_fold=fold_index,
+                output_dim=output_dim,  # Pass output_dim
+                input_size=input_size  # Pass input_size
+            )
     except Exception as e:
         logger.error(f"Error during training: {e}")
         raise
