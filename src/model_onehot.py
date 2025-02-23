@@ -1237,8 +1237,21 @@ def train(
     val_classification_losses = []
     final_validation_weights = []
     final_validation_attention = [] 
-    final_validation_masks = [] 
+    final_validation_masks = []
     diagonal_penalities = []
+
+    # Initialize DataFrame to store metrics
+    metrics_df = pd.DataFrame(
+        columns=[
+            "epoch",
+            "training losses",
+            "validation losses",
+            "diagonal_penalities",
+            "classification_losses",
+            "training accuracies",
+            "validation accuracies",
+        ]
+    )
 
     logger.info("Beginning training loop")
     for epoch in range(epochs):
@@ -1366,6 +1379,23 @@ def train(
             checkpoint_path = os.path.join(save_path, f"checkpoint_epoch_{epoch + 1}.pt")
             torch.save(model.state_dict(), checkpoint_path)
             logger.info(f"Checkpoint saved: {checkpoint_path}")
+
+        # Append metrics to DataFrame
+        metrics_df = metrics_df.append(
+            {
+                "epoch": epoch,
+                "training losses": avg_train_loss,
+                "validation losses": avg_val_loss,
+                "diagonal_penalities": avg_diagonal_penalty,
+                "classification_losses": avg_val_classification_loss,
+                "training accuracies": avg_train_accuracy,
+                "validation accuracies": avg_val_accuracy,
+            },
+            ignore_index=True,
+        )
+
+        # Save the metrics DataFrame to CSV after each epoch
+        metrics_df.to_csv(os.path.join(save_path, "metrics.csv"), index=False)
 
     # Save the model
     torch.save(model.state_dict(), save_path + "transformer.model")
