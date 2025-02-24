@@ -9,6 +9,7 @@ import torch.nn.functional as F
 import os
 import numpy as np 
 from loguru import logger
+from sklearn.neighbors import KernelDensity
 
 class Predictor: 
 
@@ -76,33 +77,28 @@ class Predictor:
         return all_scores
 
     def read_model(self, model_path): 
-
         # Read in the model 
         model = torch.load(model_path, map_location=torch.device(self.device))
 
-        # build the model into a predictor object 
-        #input_dim = model.get('func_embedding.weight').shape[1] + model.get('strand_embedding.weight').shape[1] + model.get('length_embedding.weight')[1] + model.get('embedding_layer.weight').shape[1]
-        input_dim = 1293 # this is hardcoded for now - I can't figure out any other way around it 
+        # Dynamically determine input_dim from the model
+        input_dim = model.get('embedding_layer.weight').shape[1]
         num_classes = model.get('fc.weight').shape[0]
         hidden_dim = model.get('lstm.weight_hh_l0').shape[1]
-        d_model = hidden_dim*2 # because the lstm layer is bidirectional
-        num_heads = d_model // model.get('transformer_encoder.layers.0.self_attn.relative_position_k').shape[1] 
-        dropout = 0.1 # set this to an arbitrary value - doesn't matter if the model isn't in training mode 
-        print(f"Model parameters: input_dim: {input_dim}, num_classes: {num_classes}, hidden_dim: {hidden_dim}, num_heads: {num_heads}, dropout: {dropout}")
-        
-        # Check if dropout layer exists
-        #if 'transformer.encoder.layers.0.self_attn.dropout' in model:
-        #    dropout = model.get('transformer.encoder.layers.0.self_attn.dropout').item()
-        #else:
-        #    raise ValueError("Dropout layer not found in the model")
+        d_model = hidden_dim * 2  # because the lstm layer is bidirectional
+        num_heads = d_model // model.get('transformer_encoder.layers.0.self_attn.relative_position_k').shape[1]
+        dropout = 0.1  # set this to an arbitrary value - doesn't matter if the model isn't in training mode
+        max_len = model.get('transformer_encoder.layers.1.self_attn.relative_position_k').shape[0]
+
+        print(f"Model parameters: input_dim: {input_dim}, num_classes: {num_classes}, hidden_dim: {hidden_dim}, num_heads: {num_heads}, dropout: {dropout}, max_len: {max_len}")
 
         # Create the predictor option 
-        predictor = model_onehot.Seq2SeqTransformerClassifierCircularRelativeAttention( # Could change to read in different types of models as well 
+        predictor = model_onehot.Seq2SeqTransformerClassifierCircularRelativeAttention(
             input_dim=input_dim, 
             num_classes=num_classes, 
             num_heads=num_heads, 
             hidden_dim=hidden_dim, 
             dropout=dropout, 
+            max_len=max_len  # Specify max_len
         )
     
         predictor.load_state_dict(model)
@@ -124,7 +120,10 @@ class Predictor:
 ########
 # Confidence scoring functions
 ########
-
+def count_critical_points(arr):
+    return np.sum(np.diff(np.sign(np.diff(arr))) != 0)
+ 
+ 
 def build_confidence_dict(label, prediction, scores, bandwidth, categories):
 
     # range over values to compute kernel density over

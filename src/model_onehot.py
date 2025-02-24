@@ -858,7 +858,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         num_layers=2,
         hidden_dim=512,
         dropout=0.1,
-        max_len=1500,
+        max_len=1500,  # Add max_len parameter
         intialisation='random',
         output_dim=None  # Add output_dim parameter
     ):
