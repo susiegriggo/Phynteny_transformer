@@ -1380,19 +1380,21 @@ def train(
             torch.save(model.state_dict(), checkpoint_path)
             logger.info(f"Checkpoint saved: {checkpoint_path}")
 
-        # Append metrics to DataFrame
-        metrics_df = metrics_df.append(
+        # Create a DataFrame for the current epoch's metrics
+        epoch_metrics = pd.DataFrame(
             {
-                "epoch": epoch,
-                "training losses": avg_train_loss,
-                "validation losses": avg_val_loss,
-                "diagonal_penalities": avg_diagonal_penalty,
-                "classification_losses": avg_val_classification_loss,
-                "training accuracies": avg_train_accuracy,
-                "validation accuracies": avg_val_accuracy,
-            },
-            ignore_index=True,
+                "epoch": [epoch],
+                "training losses": [avg_train_loss],
+                "validation losses": [avg_val_loss],
+                "diagonal_penalities": [avg_diagonal_penalty],
+                "classification_losses": [avg_val_classification_loss],
+                "training accuracies": [avg_train_accuracy],
+                "validation accuracies": [avg_val_accuracy],
+            }
         )
+
+        # Concatenate the current epoch's metrics with the overall metrics DataFrame
+        metrics_df = pd.concat([metrics_df, epoch_metrics], ignore_index=True)
 
         # Save the metrics DataFrame to CSV after each epoch
         metrics_df.to_csv(os.path.join(save_path, "metrics.csv"), index=False)
