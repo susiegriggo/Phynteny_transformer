@@ -123,7 +123,7 @@ class Predictor:
 def count_critical_points(arr):
     return np.sum(np.diff(np.sign(np.diff(arr))) != 0)
  
- 
+
 def build_confidence_dict(label, prediction, scores, bandwidth, categories):
 
     # range over values to compute kernel density over
@@ -134,7 +134,7 @@ def build_confidence_dict(label, prediction, scores, bandwidth, categories):
 
     # loop through the categories
     print("Computing kernel denisty for each category...")
-    for cat in range(1, 10):
+    for cat in range(0, 9):
         print("processing " + str(cat))
 
         # fetch the true labels of the predictions of this category
@@ -190,7 +190,7 @@ def compute_confidence(scores, confidence_dict, categories):
     predictions_out = np.zeros(len(scores))
 
     # loop through each of potential categories
-    for i in range(1, 10):
+    for i in range(0, 9):
         # get the scores relevant to the current category
         cat_scores = np.array(scores)[score_predictions == i]
 

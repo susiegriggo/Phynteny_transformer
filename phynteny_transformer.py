@@ -31,7 +31,6 @@ __status__ = "development"
     required=True,
 )
 @click.option(
-    "--p",
     "--prefix",
     type=click.STRING,
     default="phynteny",
@@ -40,8 +39,14 @@ __status__ = "development"
 )
 @click.option(
     "--esm_model",
-    default = "esm2_t33_650M_UR50D",
-    type=str,
+    default="facebook/esm2_t33_650M_UR50D",
+    type=click.Choice([
+        "facebook/esm2_t48_15B_UR50D",
+        "facebook/esm2_t6_8M_UR50D",
+        "facebook/esm2_t12_35M_UR50D",
+        "facebook/esm2_t30_150M_UR50D",
+        "facebook/esm2_t33_650M_UR50D"
+    ], case_sensitive=True),
     help="Specify path to esm model if not the default",
     required=False,
 )
@@ -58,20 +63,13 @@ __status__ = "development"
 
 @click.version_option(version=__version__)
 
-def main(infile, out, esm_model, models, force):
+def main(infile, out, esm_model, models, force, prefix):
 
     start_time = time.time()
     # instantiate output directory 
     format_data.instantiate_output_directory(out, force)
     logger.add(out + "/phynteny.log", level="DEBUG")
     logger.info("Starting Phynteny")
-
-    # Check if the ESM model path exists
-    if not os.path.exists(esm_model):
-        logger.error(f"ESM model path does not exist: {esm_model}")
-        sys.exit(1)
-    else:
-        logger.info(f"ESM model path exists: {esm_model}")
 
     # Check if the models directory exists
     if not os.path.exists(models):
