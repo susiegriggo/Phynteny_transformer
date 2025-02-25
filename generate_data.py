@@ -96,6 +96,12 @@ import transformers
     default=False,
     help="Only generate the y object without the embeddings or the X arrays"
 )
+@click.option(
+    "--checkpoint_path",
+    type=click.Path(exists=True),
+    help="Path to the model checkpoint",
+    required=False,
+)
 def main(
     input_data,
     include_genomes,
@@ -110,6 +116,7 @@ def main(
     data_only,
     tokens_per_batch,
     y_only,
+    checkpoint_path,
 ):
     # Set the cache directory for HuggingFace transformers
     cache_dir = "/path/to/cache"  # Update this path to your desired cache directory
@@ -121,7 +128,7 @@ def main(
     # read in information for the phrog annotations
     # read in annotation file
     phrogs = pd.read_csv(
-        "~/susie_scratch/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/phrog_annot_v4.tsv",
+        "phynteny_utils/phrog_annot_v4.tsv",
         sep="\t",
     )
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
@@ -129,7 +136,7 @@ def main(
     # read in integer encoding of the categories - #TODO try to automate this weird step
     phrog_integer = pickle.load(
         open(
-            "/scratch/pawsey1018/grig0076/GitHubs/Phynteny/phynteny_utils/phrog_annotation_info/integer_category.pkl",
+            "phynteny_utils/integer_category.pkl",
             "rb",
         )
     )
@@ -208,7 +215,9 @@ def main(
         # Extract the embeddings from the outputted fasta files
         logger.info("Computing ESM embeddings")
         logger.info("... if step is being slow consider using GPU!")
-        embeddings = format_data.extract_embeddings(fasta_out, out, model_name=model, tokens_per_batch=tokens_per_batch)
+        embeddings = format_data.extract_embeddings(
+            fasta_out, out, model_name=model, tokens_per_batch=tokens_per_batch, checkpoint_path=checkpoint_path
+        )
 
         # move on to create training and testing data
         if extra_features:

@@ -15,6 +15,7 @@ import os
 import pandas as pd
 import sys
 from transformers import EsmModel, EsmTokenizer
+from transformers import EsmForMaskedLM
 
 
 def get_dict(dict_path):
@@ -306,7 +307,7 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
             if maximum_genes == False:
                 if len(categories_present) >= gene_categories:
                     # update dictionary with this entry
-                    g = re.split(",|\.", re.split("/", genbank.strip())[-1])[0]
+                    g = re.split(r",|\.", re.split("/", genbank.strip())[-1])[0]
                     training_data[g + "_" + key] = phage_dict
                 else:
                     skipped_genomes.append(key)
@@ -318,7 +319,7 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
                     and len(categories_present) >= gene_categories
                 ):
                     # update dictionary with this entry
-                    g = re.split(",|\.", re.split("/", genbank.strip())[-1])[0]
+                    g = re.split(r",|\.", re.split("/", genbank.strip())[-1])[0]
                     training_data[key] = phage_dict
                 else:
                     skipped_genomes.append(key)
@@ -388,28 +389,57 @@ def batch_sequences(sequences, tokens_per_batch, tokenizer):
 
     return batches
 
+def load_model_from_checkpoint(checkpoint_path, base_model_name):
+    """
+    Load a model from a specified checkpoint.
+
+    :param checkpoint_path: Path to the checkpoint file
+    :param base_model_name: Name of the base model
+    :return: Loaded model and tokenizer
+    """
+    checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
+    model = EsmForMaskedLM.from_pretrained(base_model_name)
+    tokenizer = EsmTokenizer.from_pretrained(base_model_name)
+    new_state_dict = {k.replace("module.", ""): v for k, v in checkpoint["model_state_dict"].items()}
+    model.load_state_dict(new_state_dict, strict=False)
+    return model, tokenizer
+
 def extract_embeddings(
     fasta_file,
     output_dir,
     model_name="facebook/esm2_t33_650M_UR50D",
     tokens_per_batch=4096,
     max_length=1024,
+    checkpoint_path=None
 ):
     """
     Extract ESM2 embeddings using HuggingFace
-    """
 
-    # Load the specified ESM model and tokenizer from HuggingFace
-    tokenizer = EsmTokenizer.from_pretrained(model_name)
-    model = EsmModel.from_pretrained(model_name)
+    :param fasta_file: Path to the fasta file
+    :param output_dir: Directory to save the embeddings
+    :param model_name: Name of the base model
+    :param tokens_per_batch: Maximum number of tokens per batch
+    :param max_length: Maximum length of the sequences
+    :param checkpoint_path: Path to the model checkpoint
+    :return: Dictionary of embeddings
+    """
+    if checkpoint_path:
+        model, tokenizer = load_model_from_checkpoint(checkpoint_path, model_name)
+        logger.info(f"Loaded model: {model_name}")
+        logger.info(f"Loaded model from checkpoint: {checkpoint_path}") 
+    else:
+        tokenizer = EsmTokenizer.from_pretrained(model_name)
+        model = EsmModel.from_pretrained(model_name)
+        logger.info(f"Loaded model: {model_name}")
+        logger.info(f"Loaded model without checkpoint")
     model.eval()
 
     # Move model to GPU if available
     if torch.cuda.is_available():
         model = model.cuda()
-        print("USING CUDA :)")
+        logger.info("USING CUDA :)")
     else:
-        print("NO CUDA :()")
+        logger.info("NO CUDA :()")
 
     # Read and batch the fasta file
     headers, sequences = read_fasta(fasta_file)
@@ -435,8 +465,15 @@ def extract_embeddings(
 
             # Extract embeddings
             try:
-                outputs = model(**inputs)
-                token_representations = outputs.last_hidden_state
+                
+                if checkpoint_path is None:
+                    outputs = model(**inputs)
+                    token_representations = outputs.last_hidden_state
+                
+                else: 
+                    outputs = model(**inputs, output_hidden_states=True)
+                    token_representations = outputs.hidden_states[-1]
+                    
                 #pooled_representations = outputs.pooler_output
 
                 # Update this to save dictionary for an entire fasta file
