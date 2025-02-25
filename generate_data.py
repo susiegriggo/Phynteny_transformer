@@ -102,6 +102,13 @@ import transformers
     help="Path to the model checkpoint",
     required=False,
 )
+@click.option(
+    "--cache_dir",
+    type=click.Path(exists=True),
+    help="Specify the cache directory for HuggingFace transformers",
+    required=False,
+    default="cache",    
+)
 def main(
     input_data,
     include_genomes,
@@ -117,13 +124,13 @@ def main(
     tokens_per_batch,
     y_only,
     checkpoint_path,
+    cache_dir,
 ):
     # Set the cache directory for HuggingFace transformers
-    cache_dir = "/path/to/cache"  # Update this path to your desired cache directory
+    os.environ["TRANSFORMERS_CACHE"] = cache_dir
     transformers.utils.logging.set_verbosity_info()
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
-    os.environ["TRANSFORMERS_CACHE"] = cache_dir
 
     # read in information for the phrog annotations
     # read in annotation file
