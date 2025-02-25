@@ -1,8 +1,11 @@
-# Phynteny Transformer
+# Phynteny-Transformer
+![Phynteny Transformer Logo](phynteny_logo.png)
 
-### Overview
+`phynteny` is annotation tool for bacteriophage genomes that integrates protein language models and synteny. 
 
-The Phynteny Transformer is a deep learning model designed to predict the missing functions of genes in phage genomes. It leverages a transformer architecture with attention mechanisms and long short term memory model to capture the positional information of genes.
+`phynteny` leverages a transformer architecture with attention mechanisms and long short term memory to capture the positional information of genes.
+
+`phynteny` takes a genbank file with PHROG annotations as input. If you haven't already annotaated your phage(s) with [Pharokka](https://github.com/gbouras13/pharokka) and [phold](https://github.com/gbouras13/phold) go do that and come back here! 
 
 ### Dependencies 
 
@@ -16,7 +19,7 @@ The Phynteny Transformer is a deep learning model designed to predict the missin
 ### Running Phynteny 
 
 
-
+### Containers 
 
 
 ### Model Architecture
@@ -104,5 +107,5 @@ To generate the data required for training the model, follow these steps:
 ## Bugs and Suggestions 
 If you break Phynteny or would like to make any suggestions please open an issue or email me at susie.grigson@gmail.com and I'll try to get back to you. 
 
-## Wow how can I cite this? 
-
+## Wow! how can I cite this?
+Preprint available at ... 

@@ -92,7 +92,7 @@ class Predictor:
         print(f"Model parameters: input_dim: {input_dim}, num_classes: {num_classes}, hidden_dim: {hidden_dim}, num_heads: {num_heads}, dropout: {dropout}, max_len: {max_len}")
 
         # Create the predictor option 
-        predictor = model_onehot.Seq2SeqTransformerClassifierCircularRelativeAttention(
+        predictor = model_onehot.TransformerClassifierCircularRelativeAttention(
             input_dim=input_dim, 
             num_classes=num_classes, 
             num_heads=num_heads, 

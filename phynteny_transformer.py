@@ -69,7 +69,6 @@ def main(infile, out, esm_model, models, force, prefix):
     # instantiate output directory 
     format_data.instantiate_output_directory(out, force)
     logger.add(out + "/phynteny.log", level="DEBUG")
-    logger.info("Starting Phynteny")
 
     # Check if the models directory exists
     if not os.path.exists(models):
