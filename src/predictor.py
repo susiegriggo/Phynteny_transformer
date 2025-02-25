@@ -83,20 +83,21 @@ class Predictor:
         # Dynamically determine input_dim from the model
         input_dim = model.get('embedding_layer.weight').shape[1]
         num_classes = model.get('fc.weight').shape[0]
-        hidden_dim = model.get('lstm.weight_hh_l0').shape[1]
-        d_model = hidden_dim * 2  # because the lstm layer is bidirectional
+        lstm_hidden_dim = model.get('lstm.weight_hh_l0').shape[1]  # Read lstm_hidden_dim
+        d_model = lstm_hidden_dim * 2  # because the lstm layer is bidirectional
         num_heads = d_model // model.get('transformer_encoder.layers.0.self_attn.relative_position_k').shape[1]
         dropout = 0.1  # set this to an arbitrary value - doesn't matter if the model isn't in training mode
         max_len = model.get('transformer_encoder.layers.1.self_attn.relative_position_k').shape[0]
 
-        print(f"Model parameters: input_dim: {input_dim}, num_classes: {num_classes}, hidden_dim: {hidden_dim}, num_heads: {num_heads}, dropout: {dropout}, max_len: {max_len}")
+        print(f"Model parameters: input_dim: {input_dim}, num_classes: {num_classes}, lstm_hidden_dim: {lstm_hidden_dim}, num_heads: {num_heads}, dropout: {dropout}, max_len: {max_len}")
 
         # Create the predictor option 
         predictor = model_onehot.TransformerClassifierCircularRelativeAttention(
             input_dim=input_dim, 
             num_classes=num_classes, 
             num_heads=num_heads, 
-            hidden_dim=hidden_dim, 
+            hidden_dim=lstm_hidden_dim,  # Use lstm_hidden_dim
+            lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
             dropout=dropout, 
             max_len=max_len  # Specify max_len
         )

@@ -64,6 +64,12 @@ def create_dataloader(embeddings, categories, validation_categories):
     logger.info("Creating the dataset and dataloader.")
     conf_dataset = model_onehot.EmbeddingDataset(
         list(embeddings.values()), list(categories.values()), mask_portion=0)
+    
+    # remove these lines later 
+    logger.info("Removing categories not in validation set.")
+    include_keys = list(categories.keys())
+    validation_categories = {k: v for k, v in validation_categories.items() if k in include_keys}
+
     conf_dataset.set_validation(list(validation_categories.values()))
     conf_dataset_loader = DataLoader(conf_dataset, batch_size=16, collate_fn=model_onehot.collate_fn)
     return conf_dataset_loader

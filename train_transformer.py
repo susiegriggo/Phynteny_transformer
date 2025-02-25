@@ -5,12 +5,38 @@ from loguru import logger
 from src import model_onehot
 import os
 
+def setup_output_directory(out, force):
+    try:
+        if not os.path.exists(out):
+            os.makedirs(out)
+            print(f"Directory created: {out}")
+        else:
+            if not force:
+                print(f"Warning: Directory {out} already exists.")
+                raise Exception(f"Directory {out} already exists.")
+    except Exception as e:
+        logger.error(f"Error creating output directory: {e}")
+        raise
+
+def load_data(x_path, y_path):
+    try:
+        logger.info("Reading in data")
+        X = pickle.load(open(x_path, "rb"))
+        y = pickle.load(open(y_path, "rb"))
+
+        # Compute input size of embeddings
+        input_size = list(X.values())[0].shape[1] - 3  # 3 is the number of strand info and gene length
+        logger.info(f"Computed input size of embeddings: {input_size}")
+
+        return X, y, input_size
+    except Exception as e:
+        logger.error(f"Error reading input files: {e}")
+        raise
 
 def validate_num_heads(ctx, param, value):
     if value % 4 != 0:
         raise click.BadParameter("Number of attention heads must be divisible by 4.")
     return value
- 
 
 @click.command()
 @click.option("--x_path", "-x", help="File path to X training data")
@@ -107,6 +133,15 @@ def validate_num_heads(ctx, param, value):
     help="Specify the output dimension for the model.",
     type=int,
 )
+@click.option(
+    "--lstm_hidden_dim",
+    default=512,
+    help="Hidden dimension size for the LSTM layer.",
+    type=int,
+)
+@click.option(
+    "-f", "--force", is_flag=True, help="Overwrite output directory if it exists."
+)
 def main(
     x_path,
     y_path,
@@ -129,58 +164,23 @@ def main(
     fold_index,
     checkpoint_interval,
     output_dim,  # Add output_dim parameter
+    lstm_hidden_dim,  # Add lstm_hidden_dim parameter
+    force  # Add force parameter
 ):
-    try:
-        # Create the output directory if it doesn't exist
-        if not os.path.exists(out):
-            os.makedirs(out)
-            print(f"Directory created: {out}")
-        else:
-            print(f"Warning: Directory {out} already exists.")
-    except Exception as e:
-        logger.error(f"Error creating output directory: {e}")
-        raise
+    setup_output_directory(out, force)
 
     # generate loguru object
     logger.add(out + "/trainer.log", level="DEBUG")
 
     # Log parameter values
-    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}")  # Log output_dim
+    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}")  # Log lstm_hidden_dim
 
-    try:
-        # Input phrog info
-        logger.info("Loading phrog info")
-        phrog_integer = pickle.load(
-            open(
-                "/home/grig0076/GitHubs/Phynteny_transformer/phynteny_utils/integer_category.pkl",
-                "rb",
-            )
-        )
-        phrog_integer = dict(
-            zip(
-                [i - 1 for i in list(phrog_integer.keys())],
-                [i for i in list(phrog_integer.values())],
-            )
-        )  # shuffling the keys down by one
-
-        # read in data
-        logger.info("Reading in data")
-        X = pickle.load(open(x_path, "rb"))
-        y = pickle.load(open(y_path, "rb"))
-        
-        # Compute input size of embeddings
-        input_size = list(X.values())[0].shape[1] - 3  # 3 is the number of  strand info and gene length
-        logger.info(f"Computed input size of embeddings: {input_size}")
-
-    except Exception as e:
-        logger.error(f"Error reading input files: {e}")
-        raise
+    X, y, input_size = load_data(x_path, y_path)
 
     # Shuffle if specified
     if shuffle:
         logger.info("Shuffling gene orders...")
         for key in list(X.keys()):
-
             logger.info(f"Before shuffling: {X.get(key)}")
             logger.info(f"Before shuffling: {y.get(key)}")
             # generate indices for shuffling
@@ -188,17 +188,13 @@ def main(
             random.Random(4).shuffle(indices)  # shuffle with a random seed of 4
             X[key] = X[key][indices]
             y[key] = y[key][indices]
-
             logger.info(f"After shuffling: {X.get(key)}")
             logger.info(f"After shuffling: {y.get(key)}")
-
         logger.info("\t Done shuffling gene orders")
     else:
         logger.info("Gene orders not shuffled!")
 
     # Produce the dataset object
-    # note that this is a very small training size
-    
     train_dataset = model_onehot.EmbeddingDataset(
         list(X.values()), list(y.values()), mask_portion=mask_portion
     )
@@ -212,7 +208,7 @@ def main(
             train_dataset,
             attention,
             n_splits=10,
-            batch_size=batch_size, # have changed this batch size to 16 
+            batch_size=batch_size,  # have changed this batch size to 16 
             epochs=epochs,
             lr=lr,
             save_path=out,
@@ -228,19 +224,14 @@ def main(
             num_layers=num_layers,
             single_fold=fold_index,
             output_dim=output_dim,  # Pass output_dim
-            input_size=input_size  # Pass input_size
+            input_size=input_size,  # Pass input_size
+            lstm_hidden_dim=lstm_hidden_dim  # Pass lstm_hidden_dim
         )
     except Exception as e:
         logger.error(f"Error during training: {e}")
         raise
 
-    # Evaluate the model
-    # print('Evaluating the model', flush=True)
-    # model_onehot.evaluate(transformer_model, test_dataloader)
-
     logger.info("FINISHED! :D")
 
-
-# Press the green button in the gutter to run the script.
 if __name__ == "__main__":
     main()

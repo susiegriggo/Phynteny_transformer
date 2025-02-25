@@ -29,7 +29,7 @@ resource.setrlimit(resource.RLIMIT_NOFILE, (min(soft * 2, hard), hard))
 torch.multiprocessing.set_sharing_strategy('file_system')
 
 
-class VariableSeq2SeqEmbeddingDataset(Dataset):
+class EmbeddingDataset(Dataset):
     def __init__(self, embeddings, categories, mask_token=-1, mask_portion=0.15):
         """
         Initialize the dataset with embeddings and categories.
@@ -47,7 +47,7 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
             self.num_classes = 10  # hard coded in for now
             self.mask_portion = mask_portion
         except Exception as e:
-            logger.error(f"Error initializing VariableSeq2SeqEmbeddingDataset: {e}")
+            logger.error(f"Error initializing EmbeddingDataset: {e}")
             raise
 
     def __len__(self):
@@ -249,7 +249,7 @@ class VariableSeq2SeqEmbeddingDataset(Dataset):
             indices.append(idx)
         return embeddings, categories, masks, indices
 
-class Seq2SeqTransformerClassifier(nn.Module):
+class TransformerClassifier(nn.Module):
     def __init__(
         self,
         input_dim,
@@ -257,12 +257,13 @@ class Seq2SeqTransformerClassifier(nn.Module):
         num_heads=4,
         num_layers=2,
         hidden_dim=512,
+        lstm_hidden_dim=512,  # Add lstm_hidden_dim parameter
         dropout=0.1,
         intialisation='random',
         output_dim=None  # Add output_dim parameter
     ):
         """
-        Initialize the Seq2Seq Transformer Classifier.
+        Initialize the Transformer Classifier.
 
         Parameters:
         input_dim (int): Input dimension size.
@@ -273,7 +274,7 @@ class Seq2SeqTransformerClassifier(nn.Module):
         dropout (float): Dropout rate.
         intialisation (str): Initialization method for positional encoding ('random' or 'zero').
         """
-        super(Seq2SeqTransformerClassifier, self).__init__()
+        super(TransformerClassifier, self).__init__()
         """
         Difference is between the position of the LSTM layer and the the type of positional encoding that is used
         """
@@ -283,7 +284,7 @@ class Seq2SeqTransformerClassifier(nn.Module):
 
         # Embedding layers
         self.func_embedding = nn.Embedding(10, 16).to(device)
-        self.strand_embedding = nn.Embedding(2, 4).to(device)
+        self.strand_embedding = nn.Linear(2, 4).to(device)  # Change to linear layer
         self.length_embedding = nn.Linear(1, 8).to(device)
         self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)  # Use input_dim
 
@@ -304,12 +305,12 @@ class Seq2SeqTransformerClassifier(nn.Module):
 
         # LSTM layer
         self.lstm = nn.LSTM(
-            hidden_dim, hidden_dim, batch_first=True, bidirectional=True
+            hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True  # Use lstm_hidden_dim
         ).to(device)
 
         # Transformer Encoder
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_dim * 2, nhead=num_heads, batch_first=True
+            d_model=lstm_hidden_dim * 2, nhead=num_heads, batch_first=True  # Use lstm_hidden_dim
         ).to(device)
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer, num_layers=num_layers
@@ -317,7 +318,7 @@ class Seq2SeqTransformerClassifier(nn.Module):
 
         # Final Classification Layer
         self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
-        self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
+        self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)  # Use lstm_hidden_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
@@ -334,7 +335,7 @@ class Seq2SeqTransformerClassifier(nn.Module):
         x = x.float()
         func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
-        strand_embeds = self.strand_embedding(strand_ids.argmax(-1))
+        strand_embeds = self.strand_embedding(strand_ids.float())  # Change to linear layer
         length_embeds = self.length_embedding(gene_length)
         protein_embeds = self.embedding_layer(protein_embeds)
 
@@ -554,7 +555,7 @@ class CustomTransformerEncoderLayer(nn.Module):
             return src
 
 
-class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
+class TransformerClassifierRelativeAttention(nn.Module):
     def __init__(
         self,
         input_dim,
@@ -562,13 +563,14 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         num_heads=4,
         num_layers=2,
         hidden_dim=512,
+        lstm_hidden_dim=512,  # Add lstm_hidden_dim parameter
         dropout=0.1,
         max_len=1500,
         intialisation='random',
         output_dim=None  # Add output_dim parameter
     ):
         """
-        Initialize the Seq2Seq Transformer Classifier with Relative Attention.
+        Initialize the Transformer Classifier with Relative Attention.
 
         Parameters:
         input_dim (int): Input dimension size.
@@ -580,25 +582,25 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         max_len (int): Maximum sequence length.
         intialisation (str): Initialization method for positional encoding ('random' or 'zero').
         """
-        super(Seq2SeqTransformerClassifierRelativeAttention, self).__init__()
+        super(TransformerClassifierRelativeAttention, self).__init__()
 
         # Check if CUDA is available
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Embedding layers
         self.func_embedding = nn.Embedding(10, 16).to(device)
-        self.strand_embedding = nn.Embedding(2, 4).to(device)
+        self.strand_embedding = nn.Linear(2, 4).to(device)  # Change to linear layer
         self.length_embedding = nn.Linear(1, 8).to(device)
         self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)  # Use input_dim
 
         self.dropout = nn.Dropout(dropout).to(device)
         self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
         self.lstm = nn.LSTM(
-            hidden_dim, hidden_dim, batch_first=True, bidirectional=True
+            hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True  # Use lstm_hidden_dim
         ).to(device)
 
         encoder_layers = CustomTransformerEncoderLayer(
-            d_model=hidden_dim * 2,
+            d_model=lstm_hidden_dim * 2,  # Use lstm_hidden_dim
             num_heads=num_heads,
             dropout=dropout,
             max_len=max_len,
@@ -609,7 +611,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         ).to(device)
 
         self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
-        self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
+        self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)  # Use lstm_hidden_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
@@ -626,7 +628,7 @@ class Seq2SeqTransformerClassifierRelativeAttention(nn.Module):
         x = x.float()
         func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
-        strand_embeds = self.strand_embedding(strand_ids.argmax(-1))
+        strand_embeds = self.strand_embedding(strand_ids.float())  # Change to linear layer
         length_embeds = self.length_embedding(gene_length)
         protein_embeds = self.embedding_layer(protein_embeds)
 
@@ -849,7 +851,7 @@ class CircularTransformerEncoderLayer(nn.Module):
             return src
             
 
-class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
+class TransformerClassifierCircularRelativeAttention(nn.Module):
     def __init__(
         self,
         input_dim,
@@ -857,13 +859,14 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         num_heads=4,
         num_layers=2,
         hidden_dim=512,
+        lstm_hidden_dim=512,  # Add lstm_hidden_dim parameter
         dropout=0.1,
         max_len=1500,  # Add max_len parameter
         intialisation='random',
         output_dim=None  # Add output_dim parameter
     ):
         """
-        Initialize the Seq2Seq Transformer Classifier with Circular Relative Attention.
+        Initialize the Transformer Classifier with Circular Relative Attention.
 
         Parameters:
         input_dim (int): Input dimension size.
@@ -871,18 +874,19 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         num_heads (int): Number of attention heads.
         num_layers (int): Number of transformer layers.
         hidden_dim (int): Hidden dimension size.
+        lstm_hidden_dim (int): Hidden dimension size for the LSTM layer.
         dropout (float): Dropout rate.
         max_len (int): Maximum sequence length.
         intialisation (str): Initialization method for positional encoding ('random' or 'zero').
         """
-        super(Seq2SeqTransformerClassifierCircularRelativeAttention, self).__init__()
+        super(TransformerClassifierCircularRelativeAttention, self).__init__()
 
         # Check if CUDA is available
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # try adding some embedding layers 
         self.func_embedding = nn.Embedding(10, 16).to(device)
-        self.strand_embedding = nn.Embedding(2, 4).to(device)
+        self.strand_embedding = nn.Linear(2, 4).to(device)  # Change to linear layer
         self.length_embedding = nn.Linear(1,8).to(device) # linear embedding for the protein embedding
 
         # linear embedding for the protein embedding
@@ -891,11 +895,11 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         self.dropout = nn.Dropout(dropout).to(device)
         self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
         self.lstm = nn.LSTM(
-            hidden_dim, hidden_dim, batch_first=True, bidirectional=True
+            hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True  # Use lstm_hidden_dim
         ).to(device)
 
         encoder_layers = CircularTransformerEncoderLayer(
-            d_model=hidden_dim * 2,  # Input to transformer encoder is 2 * hidden_dim
+            d_model=lstm_hidden_dim * 2,  # Input to transformer encoder is 2 * lstm_hidden_dim
             num_heads=num_heads,
             dropout=dropout,
             max_len=max_len,
@@ -906,7 +910,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         ).to(device)
 
         self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
-        self.fc = nn.Linear(2 * hidden_dim, self.output_dim).to(device)  # Use output_dim
+        self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)  # Use lstm_hidden_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False, save_lstm_output=False, save_transformer_output=False):
         """
@@ -923,7 +927,7 @@ class Seq2SeqTransformerClassifierCircularRelativeAttention(nn.Module):
         x = x.float()
         func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
-        strand_embeds = self.strand_embedding(strand_ids.argmax(-1))
+        strand_embeds = self.strand_embedding(strand_ids.float())  # Change to linear layer
         length_embeds = self.length_embedding(gene_length)
         protein_embeds = self.embedding_layer(protein_embeds)
 
@@ -1429,7 +1433,7 @@ def train(
     gc.collect()
     torch.cuda.empty_cache()
 
-def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size):
+def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size):
     fold_logger = None
     try:
         device = torch.device(device_id)
@@ -1506,11 +1510,12 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             fold_logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}, output_dim={output_dim}")  # Log input_dim, num_classes, and output_dim
             if attention == "circular":
                 kfold_transformer_model = (
-                    Seq2SeqTransformerClassifierCircularRelativeAttention(
+                    TransformerClassifierCircularRelativeAttention(
                         input_dim=input_size,  # Use input_size
                         num_classes=num_classes,
                         num_heads=num_heads,
                         hidden_dim=hidden_dim,
+                        lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
                         dropout=dropout,
                         intialisation=intialisation,
                         num_layers=num_layers,
@@ -1518,22 +1523,24 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                     ).to(device)
                 )
             elif attention == "relative":
-                kfold_transformer_model = Seq2SeqTransformerClassifierRelativeAttention(
+                kfold_transformer_model = TransformerClassifierRelativeAttention(
                     input_dim=input_size,  # Use input_size
                     num_classes=num_classes,
                     num_heads=num_heads,
                     hidden_dim=hidden_dim,
+                    lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
                     dropout=dropout,
                     intialisation=intialisation,
                     num_layers=num_layers,
                     output_dim=output_dim  # Pass output_dim
                 ).to(device)
             elif attention == "absolute":
-                kfold_transformer_model = Seq2SeqTransformerClassifier(
+                kfold_transformer_model = TransformerClassifier(
                     input_dim=input_size,  # Use input_size
                     num_classes=num_classes,
                     num_heads=num_heads,
                     hidden_dim=hidden_dim,
+                    lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
                     dropout=dropout,
                     intialisation=intialisation,
                     num_layers=num_layers,
@@ -1587,6 +1594,7 @@ def train_crossValidation(
     save_path="out",
     num_heads=4,
     hidden_dim=512,
+    lstm_hidden_dim=512,  # Add lstm_hidden_dim parameter
     device="cuda",
     dropout=0.1,
     checkpoint_interval=10, 
@@ -1647,7 +1655,7 @@ def train_crossValidation(
             if fold == single_fold:
                 # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device}")
-                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size)
+                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size)
                 break
     else:
         if parallel_kfolds:
@@ -1660,7 +1668,7 @@ def train_crossValidation(
             for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
                 device_id = (fold - 1) % num_gpus
                 logger.info(f"Training fold {fold} on device {device_id}")
-                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size))
+                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size))
                 p.start()
                 processes.append(p)
 
@@ -1684,7 +1692,7 @@ def train_crossValidation(
                 device_id = (fold - 1) % num_gpus
                 # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device_id}")
-                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size)
+                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size)
 
             # Clear cache after all folds finish
             gc.collect()
