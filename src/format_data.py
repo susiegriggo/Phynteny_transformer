@@ -389,17 +389,21 @@ def batch_sequences(sequences, tokens_per_batch, tokenizer):
 
     return batches
 
-def load_model_from_checkpoint(checkpoint_path, base_model_name):
+def load_model_from_checkpoint(checkpoint_path, base_model_name, cache_dir="/path/to/your/cache/directory"):
     """
     Load a model from a specified checkpoint.
 
     :param checkpoint_path: Path to the checkpoint file
     :param base_model_name: Name of the base model
+    :param cache_dir: Directory to use for caching models and other files
     :return: Loaded model and tokenizer
     """
+    # Set the cache directory
+    os.environ['TRANSFORMERS_CACHE'] = cache_dir
+
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    model = EsmForMaskedLM.from_pretrained(base_model_name)
-    tokenizer = EsmTokenizer.from_pretrained(base_model_name)
+    model = EsmForMaskedLM.from_pretrained(base_model_name, cache_dir=cache_dir)
+    tokenizer = EsmTokenizer.from_pretrained(base_model_name, cache_dir=cache_dir)
     new_state_dict = {k.replace("module.", ""): v for k, v in checkpoint["model_state_dict"].items()}
     model.load_state_dict(new_state_dict, strict=False)
     return model, tokenizer
@@ -429,7 +433,7 @@ def extract_embeddings(
     os.environ['TRANSFORMERS_CACHE'] = cache_dir
 
     if checkpoint_path:
-        model, tokenizer = load_model_from_checkpoint(checkpoint_path, model_name)
+        model, tokenizer = load_model_from_checkpoint(checkpoint_path, model_name, cache_dir)
         logger.info(f"Loaded model: {model_name}")
         logger.info(f"Loaded model from checkpoint: {checkpoint_path}") 
     else:
