@@ -228,7 +228,7 @@ def main(
 
         # move on to create training and testing data
         if extra_features:
-            X, y = format_data.prepare_data(
+            X, y = format_data.prepare_dataq(
                 embeddings, data, exclude_embedding=exclude_embedding
             )
 

@@ -410,7 +410,8 @@ def extract_embeddings(
     model_name="facebook/esm2_t33_650M_UR50D",
     tokens_per_batch=4096,
     max_length=1024,
-    checkpoint_path=None
+    checkpoint_path=None,
+    cache_dir="/path/to/your/cache/directory"  # Add cache_dir parameter
 ):
     """
     Extract ESM2 embeddings using HuggingFace
@@ -421,15 +422,19 @@ def extract_embeddings(
     :param tokens_per_batch: Maximum number of tokens per batch
     :param max_length: Maximum length of the sequences
     :param checkpoint_path: Path to the model checkpoint
+    :param cache_dir: Directory to use for caching models and other files
     :return: Dictionary of embeddings
     """
+    # Set the cache directory
+    os.environ['TRANSFORMERS_CACHE'] = cache_dir
+
     if checkpoint_path:
         model, tokenizer = load_model_from_checkpoint(checkpoint_path, model_name)
         logger.info(f"Loaded model: {model_name}")
         logger.info(f"Loaded model from checkpoint: {checkpoint_path}") 
     else:
-        tokenizer = EsmTokenizer.from_pretrained(model_name)
-        model = EsmModel.from_pretrained(model_name)
+        tokenizer = EsmTokenizer.from_pretrained(model_name, cache_dir=cache_dir)
+        model = EsmModel.from_pretrained(model_name, cache_dir=cache_dir)
         logger.info(f"Loaded model: {model_name}")
         logger.info(f"Loaded model without checkpoint")
     model.eval()

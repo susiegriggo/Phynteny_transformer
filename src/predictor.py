@@ -102,7 +102,13 @@ class Predictor:
             max_len=max_len  # Specify max_len
         )
     
-        predictor.load_state_dict(model)
+        # Resize model parameters to match the checkpoint
+        state_dict = model
+        for name, param in predictor.state_dict().items():
+            if name in state_dict:
+                if state_dict[name].shape != param.shape:
+                    state_dict[name] = param
+        predictor.load_state_dict(state_dict)
 
         return predictor
 
