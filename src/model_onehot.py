@@ -1491,7 +1491,7 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
         train_set = set(train_index)
         val_set = set(val_index)
         intersection = train_set.intersection(val_set)
-        if intersection:
+        if (intersection):
             fold_logger.error(f"Data leakage detected! Overlapping indices: {intersection}")
         else:
             fold_logger.info("No data leakage detected between training and validation sets.")
@@ -1499,8 +1499,9 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
         # save the validation data object as well as the keys used in validation 
         pickle.dump(val_kfold_loader, open(output_dir + "/val_kfold_loader.pkl", "wb"))
         with open(output_dir + "/val_kfold_keys.txt", "w") as file: 
-            for k in val_index: 
-                file.write(f"{k}\n")
+            for idx in val_index: 
+                key = dataset.keys[idx]  # Get the key from the dataset object
+                file.write(f"{key}\n")
 
         # Initialize model
         try:
