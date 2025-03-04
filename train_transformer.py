@@ -28,7 +28,7 @@ def load_data(x_path, y_path):
         input_size = list(X.values())[0].shape[1] - 3  # 3 is the number of strand info and gene length
         logger.info(f"Computed input size of embeddings: {input_size}")
 
-        return X, y, input_size, list(X.keys())  # Return keys as well
+        return X, y, input_size, list(X.keys())  # Return keys as labels
     except Exception as e:
         logger.error(f"Error reading input files: {e}")
         raise
@@ -175,7 +175,7 @@ def main(
     # Log parameter values
     logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}")  # Log lstm_hidden_dim
 
-    X, y, input_size, keys = load_data(x_path, y_path)  # Get keys
+    X, y, input_size, labels = load_data(x_path, y_path)  # Get labels
 
     # Shuffle if specified
     if shuffle:
@@ -196,10 +196,9 @@ def main(
 
     # Produce the dataset object
     train_dataset = model_onehot.EmbeddingDataset(
-        list(X.values()), list(y.values()), mask_portion=mask_portion
+        list(X.values()), list(y.values()), labels, mask_portion=mask_portion  # Pass labels
     )
     train_dataset.set_training(True)
-    train_dataset.keys = keys  # Add keys to the dataset object
     logger.info(f"Total dataset size: {len(train_dataset)} samples")
 
     logger.info("\nTraining model...")

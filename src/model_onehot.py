@@ -30,19 +30,21 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 class EmbeddingDataset(Dataset):
-    def __init__(self, embeddings, categories, mask_token=-1, mask_portion=0.15):
+    def __init__(self, embeddings, categories, labels, mask_token=-1, mask_portion=0.15):
         """
-        Initialize the dataset with embeddings and categories.
+        Initialize the dataset with embeddings, categories, and labels.
 
         Parameters:
         embeddings (list of torch.Tensor): List of embedding tensors.
         categories (list of torch.Tensor): List of category tensors.
+        labels (list of str): List of labels associated with the data.
         mask_token (int): Token used for masking.
         mask_portion (float): Portion of tokens to mask during training.
         """
         try:
             self.embeddings = [embedding.float() for embedding in embeddings]
             self.categories = [category.long() for category in categories]
+            self.labels = labels  # Add labels attribute
             self.mask_token = mask_token
             self.num_classes = 10  # hard coded in for now
             self.mask_portion = mask_portion
@@ -198,14 +200,14 @@ class EmbeddingDataset(Dataset):
     def shuffle_rows(self):
         """
         Shuffle rows within each instance in the dataset.
-        This modifies the code in place
+        This modifies the code in place.
         """
-
-        zipped_data = list(zip(self.embeddings, self.categories))
+        zipped_data = list(zip(self.embeddings, self.categories, self.labels))
         random.shuffle(zipped_data)
-        self.embeddings, self.categories = zip(*zipped_data)
+        self.embeddings, self.categories, self.labels = zip(*zipped_data)
         self.embeddings = list(self.embeddings)
         self.categories = list(self.categories)
+        self.labels = list(self.labels)
 
     def custom_one_hot_encode(self, data):
         """
@@ -1496,12 +1498,12 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
         else:
             fold_logger.info("No data leakage detected between training and validation sets.")
 
-        # save the validation data object as well as the keys used in validation 
+        # save the validation data object as well as the labels used in validation 
         pickle.dump(val_kfold_loader, open(output_dir + "/val_kfold_loader.pkl", "wb"))
-        with open(output_dir + "/val_kfold_keys.txt", "w") as file: 
+        with open(output_dir + "/val_kfold_labels.txt", "w") as file: 
             for idx in val_index: 
-                key = dataset.keys[idx]  # Get the key from the dataset object
-                file.write(f"{key}\n")
+                label = dataset.labels[idx]  # Get the label from the dataset object
+                file.write(f"{label}\n")
 
         # Initialize model
         try:
@@ -1509,20 +1511,18 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             input_dim = dataset[0][0].shape[1]
             num_classes = 9
             fold_logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}, output_dim={output_dim}")  # Log input_dim, num_classes, and output_dim
-            if attention == "circular":
-                kfold_transformer_model = (
-                    TransformerClassifierCircularRelativeAttention(
-                        input_dim=input_size,  # Use input_size
-                        num_classes=num_classes,
-                        num_heads=num_heads,
-                        hidden_dim=hidden_dim,
-                        lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
-                        dropout=dropout,
-                        intialisation=intialisation,
-                        num_layers=num_layers,
-                        output_dim=output_dim  # Pass output_dim
-                    ).to(device)
-                )
+            if (attention == "circular"):
+                kfold_transformer_model = TransformerClassifierCircularRelativeAttention(
+                    input_dim=input_size,  # Use input_size
+                    num_classes=num_classes,
+                    num_heads=num_heads,
+                    hidden_dim=hidden_dim,
+                    lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
+                    dropout=dropout,
+                    intialisation=intialisation,
+                    num_layers=num_layers,
+                    output_dim=output_dim  # Pass output_dim
+                ).to(device)
             elif attention == "relative":
                 kfold_transformer_model = TransformerClassifierRelativeAttention(
                     input_dim=input_size,  # Use input_size

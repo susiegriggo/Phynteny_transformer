@@ -26,7 +26,9 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     logger.info("Starting the computation of confidence scores.")
     embeddings, categories, validation_categories, phrog_integer = load_data(embeddings_path, categories_path, validation_categories_path, integer_category_path)
     p = create_predictor(model_directory, device)
+    logger.info("Creating the dataset and dataloader.")
     conf_dataset_loader = create_dataloader(embeddings, categories, validation_categories)
+    logger.info("Processing batches.")
     all_probs, all_categories, all_labels = process_batches(p, conf_dataset_loader)
     c_dict = compute_confidence_dict(all_categories, all_labels, all_probs, phrog_integer)
     save_confidence_dict(c_dict, output_path)
@@ -62,14 +64,21 @@ def create_predictor(model_directory, device):
 
 def create_dataloader(embeddings, categories, validation_categories):
     logger.info("Creating the dataset and dataloader.")
+    
+    
+    # only include data that occurs in both sets 
+    logger.info("Removing categories not in validation set.")
+    include_keys = list(set(categories.keys()).intersection(set(validation_categories.keys())))
+    validation_categories = dict(zip(include_keys, [validation_categories.get(k) for k in include_keys]))
+    categories = dict(zip(include_keys, [categories.get(k) for k in include_keys]))
+    embeddings = dict(zip(include_keys, [embeddings.get(k) for k in include_keys]))
+    
+    # create the dataset
     conf_dataset = model_onehot.EmbeddingDataset(
         list(embeddings.values()), list(categories.values()), mask_portion=0)
     
-    # remove these lines later 
-    logger.info("Removing categories not in validation set.")
-    include_keys = list(categories.keys())
-    validation_categories = {k: v for k, v in validation_categories.items() if k in include_keys}
-
+    # set the validation set
+    logger.info("Setting the validation set.")
     conf_dataset.set_validation(list(validation_categories.values()))
     conf_dataset_loader = DataLoader(conf_dataset, batch_size=16, collate_fn=model_onehot.collate_fn)
     return conf_dataset_loader

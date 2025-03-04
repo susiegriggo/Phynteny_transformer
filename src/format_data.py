@@ -308,7 +308,12 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
                 if len(categories_present) >= gene_categories:
                     # update dictionary with this entry
                     g = re.split(r",|\.", re.split("/", genbank.strip())[-1])[0]
-                    training_data[g + "_" + key] = phage_dict
+                    logger.info(f"g: {g}")
+                    logger.info(f"genbank.strip(): {genbank.strip()}")
+                    logger.info(f're.split("/", genbank.strip())[-1]: {re.split("/", genbank.strip())[-1]}')
+                    
+                    training_data[key] = phage_dict
+                    #training_data[f"{g}_{key}"] = phage_dict
                 else:
                     skipped_genomes.append(key)
 
@@ -320,7 +325,13 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
                 ):
                     # update dictionary with this entry
                     g = re.split(r",|\.", re.split("/", genbank.strip())[-1])[0]
+                    logger.info(f"g: {g}")
+                    logger.info(f"genbank.strip(): {genbank.strip()}")
+                    logger.info(f're.split("/", genbank.strip())[-1]: {re.split("/", genbank.strip())[-1]}')
+                    
+
                     training_data[key] = phage_dict
+                    #training_data[f"{g}_{key}"] = phage_dict
                 else:
                     skipped_genomes.append(key)
 
@@ -331,7 +342,6 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
             logger.info(f"Skipped genome: {genome}")
 
     return training_data
-
 
 
 ### this code seems to batch from a fasta file better from the code later
@@ -415,7 +425,7 @@ def extract_embeddings(
     tokens_per_batch=4096,
     max_length=1024,
     checkpoint_path=None,
-    cache_dir="/path/to/your/cache/directory"  # Add cache_dir parameter
+    cache_dir="cache/"  # Add cache_dir parameter
 ):
     """
     Extract ESM2 embeddings using HuggingFace
@@ -555,7 +565,6 @@ def prepare_data(
                     removed.append(g)
                     continue
            
-
             # merge these columns into a numpy array
             embedding = np.hstack( #TODO change the shapping of this vectors 
                 (strand1, strand2, gene_lengths, np.array(this_vectors).reshape(len(this_vectors),len(this_vectors[0])))
@@ -570,9 +579,6 @@ def prepare_data(
         # y.append(torch.tensor(np.array(this_categories)))
         y.append(torch.tensor(this_categories))
 
-    print("Numer of genomes removed: " + str(len(removed)))
-    logger.info(f"Genomes removed: {removed}")
-    print("Numer of genomes kept: " + str(len(X)))
 
     # convert to dictionary inc the dictionary names
     X = dict(zip(genomes, X))
@@ -674,7 +680,7 @@ def read_genbank_file(infile, phrog_integer):
         click.echo("Error: no sequences found in genbank file")
         logger.critcal("No sequences found in genbank file. Nothing to annotate")
         sys.exit()
-    logger.info("Genbank file keys`")
+    logger.info("Genbank file keys")
     logger.info(gb_dict.keys())
     return gb_dict
 
