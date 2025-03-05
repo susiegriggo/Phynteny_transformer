@@ -196,7 +196,7 @@ def main(
 
     # Produce the dataset object
     train_dataset = model_onehot.EmbeddingDataset(
-        list(X.values()), list(y.values()), labels, mask_portion=mask_portion  # Pass labels
+        list(X.values()), list(y.values()), list(y.keys()), mask_portion=mask_portion  # Pass labels
     )
     train_dataset.set_training(True)
     logger.info(f"Total dataset size: {len(train_dataset)} samples")

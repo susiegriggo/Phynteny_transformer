@@ -10,6 +10,7 @@ import os
 import numpy as np 
 from loguru import logger
 from sklearn.neighbors import KernelDensity
+from Bio import SeqIO  # Add this import
 
 class Predictor: 
 
@@ -18,7 +19,13 @@ class Predictor:
         self.models = []
 
     def predict_batch(self, embeddings, src_key_padding_mask):
+        """
+        Predict the scores for a batch of embeddings.
 
+        :param embeddings: Tensor of input embeddings
+        :param src_key_padding_mask: Mask tensor for padding in the input sequences
+        :return: Dictionary of predicted scores
+        """
         self.models = [model.to(self.device) for model in self.models]
         for model in self.models:
             model.eval()
@@ -74,9 +81,28 @@ class Predictor:
                     else:
                         all_scores[key] += outputs[i].cpu().numpy()
 
-        return all_scores
+        self.scores = all_scores
+        return all_scores  # Remove the TODO comment if the return statement is necessary
+    
+    def write_genbank(self,  gb_dict, out):
+        """
+        Write the predicted scores to a Genbank file.
+
+        :param gb_dict: Dictionary of Genbank records
+        :param out: Output directory
+        """
+        for key in self.scores.keys():
+            record = gb_dict[key]
+            record.annotations["phynteny score"] = self.scores[key]
+            SeqIO.write(record, os.path.join(out, key + ".gb"), "genbank")
 
     def read_model(self, model_path): 
+        """
+        Read and load a model from the given path.
+
+        :param model_path: Path to the model file
+        :return: Loaded model
+        """
         # Read in the model 
         model = torch.load(model_path, map_location=torch.device(self.device))
 
@@ -113,7 +139,11 @@ class Predictor:
         return predictor
 
     def read_models_from_directory(self, directory_path):
+        """
+        Read and load all models from the given directory.
 
+        :param directory_path: Path to the directory containing model files
+        """
         print('Reading models from directory: ', directory_path)
 
         for filename in os.listdir(directory_path):
@@ -122,17 +152,78 @@ class Predictor:
                 model = self.read_model(model_path)
                 self.models.append(model)
 
+    def compute_confidence(self, scores, confidence_dict, categories):
+        """
+        Compute the confidence of a Phynteny prediction.
+
+        :param scores: List of Phynteny scores
+        :param confidence_dict: Dictionary containing confidence information
+        :param categories: Dictionary of categories
+        :return: Tuple of predictions and confidence scores
+        """
+        # get the prediction for each score
+        score_predictions = np.array([np.argmax(score) for idx, score in enumerate(scores)])
+
+        # make an array to store the confidence of each prediction
+        confidence_out = np.zeros(len(scores))
+        predictions_out = np.zeros(len(scores))
+
+        # loop through each of potential categories
+        for i in range(0, 9):
+            # get the scores relevant to the current category
+            cat_scores = np.array(scores)[score_predictions == i]
+
+            if len(cat_scores) > 0:
+                # compute the kernel density estimates
+                e_TP = np.exp(
+                    confidence_dict.get(categories.get(i))
+                    .get("kde_TP")
+                    .score_samples(cat_scores[:, i].reshape(-1, 1))
+                )
+                e_FP = np.exp(
+                    confidence_dict.get(categories.get(i))
+                    .get("kde_FP")
+                    .score_samples(cat_scores[:, i].reshape(-1, 1))
+                )
+
+                # fetch the number of TP and FP
+                num_TP = confidence_dict.get(categories.get(i)).get("num_TP")
+                num_FP = confidence_dict.get(categories.get(i)).get("num_FP")
+
+                # compute the confidence scores
+                conf_kde = (e_TP * num_TP) / (e_TP * num_TP + e_FP * num_FP)
+
+                # save the scores to the output vector
+                confidence_out[score_predictions == i] = conf_kde
+                predictions_out[score_predictions == i] = [i for k in range(len(conf_kde))]
+
+        return predictions_out, confidence_out
 
 
 ########
 # Confidence scoring functions
 ########
 def count_critical_points(arr):
+    """
+    Count the number of critical points in an array.
+
+    :param arr: Input array
+    :return: Number of critical points
+    """
     return np.sum(np.diff(np.sign(np.diff(arr))) != 0)
  
 
 def build_confidence_dict(label, prediction, scores, bandwidth, categories):
+    """
+    Build a dictionary containing confidence information for each category.
 
+    :param label: Array of true labels
+    :param prediction: Array of predicted labels
+    :param scores: Array of scores
+    :param bandwidth: List of bandwidth values for kernel density estimation
+    :param categories: Dictionary of categories
+    :return: Dictionary containing confidence information
+    """
     # range over values to compute kernel density over
     vals = np.arange(1.5, 10, 0.001)
 
@@ -182,50 +273,6 @@ def build_confidence_dict(label, prediction, scores, bandwidth, categories):
         }
 
     return confidence_dict
-
-def compute_confidence(scores, confidence_dict, categories):
-    """
-    Function which computes the confidence of a Phynteny prediction
-    Input is a vector of Phynteny scores
-    """
-
-    # get the prediction for each score
-    score_predictions = np.array([np.argmax(score) for idx, score in enumerate(scores)])
-
-    # make an array to store the confidence of each prediction
-    confidence_out = np.zeros(len(scores))
-    predictions_out = np.zeros(len(scores))
-
-    # loop through each of potential categories
-    for i in range(0, 9):
-        # get the scores relevant to the current category
-        cat_scores = np.array(scores)[score_predictions == i]
-
-        if len(cat_scores) > 0:
-            # compute the kernel density estimates
-            e_TP = np.exp(
-                confidence_dict.get(categories.get(i))
-                .get("kde_TP")
-                .score_samples(cat_scores[:, i].reshape(-1, 1))
-            )
-            e_FP = np.exp(
-                confidence_dict.get(categories.get(i))
-                .get("kde_FP")
-                .score_samples(cat_scores[:, i].reshape(-1, 1))
-            )
-
-            # fetch the number of TP and FP
-            num_TP = confidence_dict.get(categories.get(i)).get("num_TP")
-            num_FP = confidence_dict.get(categories.get(i)).get("num_FP")
-
-            # compute the confidence scores
-            conf_kde = (e_TP * num_TP) / (e_TP * num_TP + e_FP * num_FP)
-
-            # save the scores to the output vector
-            confidence_out[score_predictions == i] = conf_kde
-            predictions_out[score_predictions == i] = [i for k in range(len(conf_kde))]
-
-    return predictions_out, confidence_out
 
 
 
