@@ -142,6 +142,12 @@ def validate_num_heads(ctx, param, value):
 @click.option(
     "-f", "--force", is_flag=True, help="Overwrite output directory if it exists."
 )
+@click.option(
+    "--use_lstm",
+    is_flag=True,
+    default=False,
+    help="Include LSTM layers in the model.",
+)
 def main(
     x_path,
     y_path,
@@ -165,7 +171,8 @@ def main(
     checkpoint_interval,
     output_dim,  # Add output_dim parameter
     lstm_hidden_dim,  # Add lstm_hidden_dim parameter
-    force  # Add force parameter
+    force,  # Add force parameter
+    use_lstm  # Add use_lstm parameter
 ):
     setup_output_directory(out, force)
 
@@ -173,24 +180,27 @@ def main(
     logger.add(out + "/trainer.log", level="DEBUG")
 
     # Log parameter values
-    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}")  # Log lstm_hidden_dim
+    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}, use_lstm={use_lstm}")  # Log use_lstm
 
     X, y, input_size, labels = load_data(x_path, y_path)  # Get labels
+
+    shuffled_data = {}  # Dictionary to save shuffled data
 
     # Shuffle if specified
     if shuffle:
         logger.info("Shuffling gene orders...")
         for key in list(X.keys()):
-            logger.info(f"Before shuffling: {X.get(key)}")
-            logger.info(f"Before shuffling: {y.get(key)}")
             # generate indices for shuffling
             indices = list(range(len(X.get(key))))
             random.Random(4).shuffle(indices)  # shuffle with a random seed of 4
             X[key] = X[key][indices]
             y[key] = y[key][indices]
-            logger.info(f"After shuffling: {X.get(key)}")
-            logger.info(f"After shuffling: {y.get(key)}")
+        shuffled_data['X'] = X  # Save shuffled X
+        shuffled_data['y'] = y  # Save shuffled y
         logger.info("\t Done shuffling gene orders")
+        # Save shuffled data to a file
+        with open(os.path.join(out, "shuffled_data.pkl"), "wb") as f:
+            pickle.dump(shuffled_data, f)
     else:
         logger.info("Gene orders not shuffled!")
 
@@ -225,7 +235,8 @@ def main(
             single_fold=fold_index,
             output_dim=output_dim,  # Pass output_dim
             input_size=input_size,  # Pass input_size
-            lstm_hidden_dim=lstm_hidden_dim  # Pass lstm_hidden_dim
+            lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
+            use_lstm=use_lstm  # Pass use_lstm
         )
     except Exception as e:
         logger.error(f"Error during training: {e}")
