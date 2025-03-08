@@ -398,11 +398,12 @@ def load_model_from_checkpoint(checkpoint_path, base_model_name, cache_dir="/pat
     :param cache_dir: Directory to use for caching models and other files
     :return: Loaded model and tokenizer
     """
-    # Set the cache directory
-    os.environ['TRANSFORMERS_CACHE'] = cache_dir
+    ## Set the cache directory
+    #os.environ['TRANSFORMERS_CACHE'] = cache_dir
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
-    model = EsmForMaskedLM.from_pretrained(base_model_name, cache_dir=cache_dir)
+    model = EsmModel.from_pretrained(base_model_name, cache_dir=cache_dir)
+    #model = EsmForMaskedLM.from_pretrained(base_model_name, cache_dir=cache_dir)
     tokenizer = EsmTokenizer.from_pretrained(base_model_name, cache_dir=cache_dir)
     new_state_dict = {k.replace("module.", ""): v for k, v in checkpoint["model_state_dict"].items()}
     model.load_state_dict(new_state_dict, strict=False)
@@ -415,7 +416,7 @@ def extract_embeddings(
     tokens_per_batch=4096,
     max_length=1024,
     checkpoint_path=None,
-    cache_dir="/path/to/your/cache/directory"  # Add cache_dir parameter
+    cache_dir=None  # Update cache_dir parameter to None by default
 ):
     """
     Extract ESM2 embeddings using HuggingFace
@@ -429,15 +430,17 @@ def extract_embeddings(
     :param cache_dir: Directory to use for caching models and other files
     :return: Dictionary of embeddings
     """
-    # Set the cache directory
-    os.environ['TRANSFORMERS_CACHE'] = cache_dir
+    # Set the cache directory if provided
+    #if cache_dir:
+    #    os.environ['TRANSFORMERS_CACHE'] = cache_dir
 
     if checkpoint_path:
         model, tokenizer = load_model_from_checkpoint(checkpoint_path, model_name, cache_dir)
         logger.info(f"Loaded model: {model_name}")
         logger.info(f"Loaded model from checkpoint: {checkpoint_path}") 
     else:
-        tokenizer = EsmTokenizer.from_pretrained(model_name, cache_dir=cache_dir)
+        #tokenizer = EsmTokenizer.from_pretrained(model_name, cache_dir=cache_dir)
+        tokenizer = EsmTokenizer.from_pretrained(model_name)
         model = EsmModel.from_pretrained(model_name, cache_dir=cache_dir)
         logger.info(f"Loaded model: {model_name}")
         logger.info(f"Loaded model without checkpoint")

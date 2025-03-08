@@ -107,7 +107,7 @@ import transformers
     type=click.Path(exists=True),
     help="Specify the cache directory for HuggingFace transformers",
     required=False,
-    default="cache",    
+    default=None,  # Update default to None
 )
 def main(
     input_data,
@@ -126,8 +126,9 @@ def main(
     checkpoint_path,
     cache_dir,
 ):
-    # Set the cache directory for HuggingFace transformers
-    os.environ["TRANSFORMERS_CACHE"] = cache_dir
+    # Set the cache directory for HuggingFace transformers if provided
+    if cache_dir:
+        os.environ["TRANSFORMERS_CACHE"] = cache_dir
     transformers.utils.logging.set_verbosity_info()
     transformers.utils.logging.enable_default_handler()
     transformers.utils.logging.enable_explicit_format()
@@ -135,7 +136,7 @@ def main(
     # read in information for the phrog annotations
     # read in annotation file
     phrogs = pd.read_csv(
-        "phynteny_utils/phrog_annot_v4.tsv",
+        "/scratch/pawsey1018/grig0076/GitHubs/Phynteny_transformer/phynteny_utils/phrog_annot_v4.tsv",
         sep="\t",
     )
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
@@ -143,7 +144,7 @@ def main(
     # read in integer encoding of the categories - #TODO try to automate this weird step
     phrog_integer = pickle.load(
         open(
-            "phynteny_utils/integer_category.pkl",
+            "/scratch/pawsey1018/grig0076/GitHubs/Phynteny_transformer/phynteny_utils/integer_category.pkl",
             "rb",
         )
     )
@@ -223,12 +224,12 @@ def main(
         logger.info("Computing ESM embeddings")
         logger.info("... if step is being slow consider using GPU!")
         embeddings = format_data.extract_embeddings(
-            fasta_out, out, model_name=model, tokens_per_batch=tokens_per_batch, checkpoint_path=checkpoint_path
+            fasta_out, out, model_name=model, tokens_per_batch=tokens_per_batch, checkpoint_path=checkpoint_path, cache_dir=cache_dir
         )
 
         # move on to create training and testing data
         if extra_features:
-            X, y = format_data.prepare_dataq(
+            X, y = format_data.prepare_data(
                 embeddings, data, exclude_embedding=exclude_embedding
             )
 
