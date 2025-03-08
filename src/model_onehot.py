@@ -30,22 +30,28 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 class EmbeddingDataset(Dataset):
-    def __init__(self, embeddings, categories, mask_token=-1, mask_portion=0.15):
+    def __init__(self, embeddings, categories, labels, mask_token=-1, mask_portion=0.15, shuffle_features=False, noise_std=0):
         """
-        Initialize the dataset with embeddings and categories.
+        Initialize the dataset with embeddings, categories, and labels.
 
         Parameters:
         embeddings (list of torch.Tensor): List of embedding tensors.
         categories (list of torch.Tensor): List of category tensors.
+        labels (list of str): List of labels associated with the data.
         mask_token (int): Token used for masking.
         mask_portion (float): Portion of tokens to mask during training.
+        shuffle_features (bool): If True, shuffle the embedding features during training.
+        noise_std (float): Standard deviation of the Gaussian noise to add to the embeddings.
         """
         try:
             self.embeddings = [embedding.float() for embedding in embeddings]
             self.categories = [category.long() for category in categories]
+            self.labels = labels  # Add labels attribute
             self.mask_token = mask_token
             self.num_classes = 10  # hard coded in for now
             self.mask_portion = mask_portion
+            self.shuffle_features = shuffle_features  # Add shuffle_features attribute
+            self.noise_std = noise_std  # Add noise_std attribute
         except Exception as e:
             logger.error(f"Error initializing EmbeddingDataset: {e}")
             raise
@@ -83,9 +89,11 @@ class EmbeddingDataset(Dataset):
             # select a random category to mask if training
             if self.training:
                 masked_category, idx = self.category_mask(category, mask)
+                if self.shuffle_features:
+                    embedding = self.shuffle_masked_features(embedding, idx)  # Shuffle only masked features
+                if self.noise_std > 0:
+                    embedding = self.add_gaussian_noise(embedding, idx, std=self.noise_std)  # Add Gaussian noise to masked features
             elif self.validation:
-                masked_category, idx  = self.validation_mask(category, idx) 
-            else:
                 masked_category = category
 
             # use the masked category to generate a one-hot encoding
@@ -198,14 +206,14 @@ class EmbeddingDataset(Dataset):
     def shuffle_rows(self):
         """
         Shuffle rows within each instance in the dataset.
-        This modifies the code in place
+        This modifies the code in place.
         """
-
-        zipped_data = list(zip(self.embeddings, self.categories))
+        zipped_data = list(zip(self.embeddings, self.categories, self.labels))
         random.shuffle(zipped_data)
-        self.embeddings, self.categories = zip(*zipped_data)
+        self.embeddings, self.categories, self.labels = zip(*zipped_data)
         self.embeddings = list(self.embeddings)
         self.categories = list(self.categories)
+        self.labels = list(self.labels)
 
     def custom_one_hot_encode(self, data):
         """
@@ -249,6 +257,79 @@ class EmbeddingDataset(Dataset):
             indices.append(idx)
         return embeddings, categories, masks, indices
 
+    def shuffle_embedding_features(self, embedding):
+        """
+        Shuffle the embedding features.
+
+        Parameters:
+        embedding (torch.Tensor): Embedding tensor to shuffle.
+
+        Returns:
+        torch.Tensor: Shuffled embedding tensor.
+        """
+        indices = torch.randperm(embedding.size(0))
+        return embedding[indices]
+
+    def shuffle_masked_features(self, embedding, idx):
+        """
+        Shuffle only the masked features in the embedding.
+
+        Parameters:
+        embedding (torch.Tensor): Embedding tensor to shuffle.
+        idx (torch.Tensor): Indices of masked features.
+
+        Returns:
+        torch.Tensor: Embedding tensor with shuffled masked features.
+        """
+        original_features = embedding.clone() # copy to check if the embedding has been shuffled
+        masked_features = embedding[idx].clone()
+        masked_features[:, 13:] = torch.stack([row[torch.randperm(row.size(0))] for row in masked_features[:,13:]])
+        embedding[idx] = masked_features
+
+        if torch.equal(embedding, original_features): 
+            raise Exception("Shuffling did not change the embedding features.")
+
+        return embedding
+
+    def add_gaussian_noise(self, embedding, idx, mean=0.0, std=0.1):
+        """
+        Add Gaussian noise to the masked features in the embedding.
+
+        Parameters:
+        embedding (torch.Tensor): Embedding tensor to add noise to.
+        idx (torch.Tensor): Indices of masked features.
+        mean (float): Mean of the Gaussian noise.
+        std (float): Standard deviation of the Gaussian noise.
+
+        Returns:
+        torch.Tensor: Embedding tensor with added Gaussian noise.
+        """
+        masked_features = embedding[idx].clone()
+        noise = torch.normal(mean, std, size=masked_features[:, 13:].size())
+        masked_features[:, 13:] += noise
+        embedding[idx] = masked_features
+
+        return embedding
+
+def fourier_positional_encoding(seq_len, d_model, device):
+    """
+    Generate Fourier positional encoding.
+
+    Parameters:
+    seq_len (int): Sequence length.
+    d_model (int): Dimension of the model.
+    device (torch.device): Device to create the tensor on.
+
+    Returns:
+    torch.Tensor: Fourier positional encoding tensor.
+    """
+    position = torch.arange(seq_len, dtype=torch.float, device=device).unsqueeze(1)
+    div_term = torch.exp(torch.arange(0, d_model, 2, device=device) * -(np.log(10000.0) / d_model))
+    pe = torch.zeros(seq_len, d_model, device=device)
+    pe[:, 0::2] = torch.sin(position * div_term)
+    pe[:, 1::2] = torch.cos(position * div_term)
+    return pe
+
 class TransformerClassifier(nn.Module):
     def __init__(
         self,
@@ -260,7 +341,10 @@ class TransformerClassifier(nn.Module):
         lstm_hidden_dim=512,  # Add lstm_hidden_dim parameter
         dropout=0.1,
         intialisation='random',
-        output_dim=None  # Add output_dim parameter
+        output_dim=None,  # Add output_dim parameter
+        use_lstm=False,  # Add use_lstm parameter
+        positional_encoding=fourier_positional_encoding,  # Use Fourier positional encoding
+        use_positional_encoding=True  # Add use_positional_encoding parameter
     ):
         """
         Initialize the Transformer Classifier.
@@ -303,22 +387,30 @@ class TransformerClassifier(nn.Module):
         else: 
             ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zeros'.")
 
-        # LSTM layer
-        self.lstm = nn.LSTM(
-            hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True  # Use lstm_hidden_dim
-        ).to(device)
+        # Final Classification Layer
+        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+        if use_lstm:
+            self.lstm = nn.LSTM(
+                hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True  # Use lstm_hidden_dim
+            ).to(device)
+            self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)  # Use lstm_hidden_dim
+            d_model = lstm_hidden_dim * 2  # Use lstm_hidden_dim
+        else:
+            self.lstm = None  # Ensure lstm attribute exists
+            self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)  # Use hidden_dim directly
+            d_model = hidden_dim  # Use hidden_dim directly
 
         # Transformer Encoder
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=lstm_hidden_dim * 2, nhead=num_heads, batch_first=True  # Use lstm_hidden_dim
+            d_model=d_model, nhead=num_heads, batch_first=True  # Use d_model
         ).to(device)
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layer, num_layers=num_layers
         ).to(device)
-
-        # Final Classification Layer
-        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
-        self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)  # Use lstm_hidden_dim
+        if use_positional_encoding:
+            self.positional_encoding = positional_encoding(1000, hidden_dim, device).to(device)
+        else:
+            self.positional_encoding = None
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
@@ -340,10 +432,12 @@ class TransformerClassifier(nn.Module):
         protein_embeds = self.embedding_layer(protein_embeds)
 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
-        x = x + self.positional_encoding[: x.size(1), :].to(x.device)
+        if self.positional_encoding is not None:
+            x = x + self.positional_encoding[: x.size(1), :].to(x.device)
 
         x = self.dropout(x)
-        x, _ = self.lstm(x)  # LSTM layer
+        if self.lstm:
+            x, _ = self.lstm(x)  # LSTM layer
         if return_attn_weights:
             x, attn_weights = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
             x = self.fc(x)
@@ -363,8 +457,12 @@ def log_model_devices(model):
     logger.info(f"strand_embedding is on device: {model.strand_embedding.weight.device}")
     logger.info(f"length_embedding is on device: {model.length_embedding.weight.device}")
     logger.info(f"embedding_layer is on device: {model.embedding_layer.weight.device}")
-    logger.info(f"positional_encoding is on device: {model.positional_encoding.device}")
-    logger.info(f"lstm is on device: {next(model.lstm.parameters()).device}")
+    if model.positional_encoding is not None:
+        logger.info(f"positional_encoding is on device: {model.positional_encoding.device}")
+    else:
+        logger.info("positional_encoding is not used")
+    if model.lstm:
+        logger.info(f"lstm is on device: {next(model.lstm.parameters()).device}")
     logger.info(f"transformer_encoder is on device: {next(model.transformer_encoder.parameters()).device}")
     logger.info(f"fc is on device: {model.fc.weight.device}")
 
@@ -567,7 +665,10 @@ class TransformerClassifierRelativeAttention(nn.Module):
         dropout=0.1,
         max_len=1500,
         intialisation='random',
-        output_dim=None  # Add output_dim parameter
+        output_dim=None,  # Add output_dim parameter
+        use_lstm=False,  # Add use_lstm parameter
+        positional_encoding=fourier_positional_encoding,  # Use Fourier positional encoding
+        use_positional_encoding=True  # Add use_positional_encoding parameter
     ):
         """
         Initialize the Transformer Classifier with Relative Attention.
@@ -594,13 +695,21 @@ class TransformerClassifierRelativeAttention(nn.Module):
         self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)  # Use input_dim
 
         self.dropout = nn.Dropout(dropout).to(device)
-        self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
-        self.lstm = nn.LSTM(
-            hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True  # Use lstm_hidden_dim
-        ).to(device)
+        self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device)
+        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+        if use_lstm:
+            self.lstm = nn.LSTM(
+                hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True  # Use lstm_hidden_dim
+            ).to(device)
+            self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)  # Use lstm_hidden_dim
+            d_model = lstm_hidden_dim * 2  # Use lstm_hidden_dim
+        else:
+            self.lstm = None  # Ensure lstm attribute exists
+            self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)  # Use hidden_dim directly
+            d_model = hidden_dim  # Use hidden_dim directly
 
         encoder_layers = CustomTransformerEncoderLayer(
-            d_model=lstm_hidden_dim * 2,  # Use lstm_hidden_dim
+            d_model=d_model,  # Use d_model
             num_heads=num_heads,
             dropout=dropout,
             max_len=max_len,
@@ -609,9 +718,11 @@ class TransformerClassifierRelativeAttention(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layers, num_layers=num_layers
         ).to(device)
+        if use_positional_encoding:
+            self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device)
+        else:
+            self.positional_encoding = None
 
-        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
-        self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)  # Use lstm_hidden_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False):
         """
@@ -633,10 +744,12 @@ class TransformerClassifierRelativeAttention(nn.Module):
         protein_embeds = self.embedding_layer(protein_embeds)
 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
-        x = x + self.positional_encoding[: x.size(1), :].to(x.device)
+        if self.positional_encoding is not None:
+            x = x + self.positional_encoding[: x.size(1), :].to(x.device)
 
         x = self.dropout(x)
-        x, _ = self.lstm(x)
+        if self.lstm:
+            x, _ = self.lstm(x)
         if return_attn_weights:
             x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
             for layer in self.transformer_encoder.layers[1:]:
@@ -863,7 +976,10 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         dropout=0.1,
         max_len=1500,  # Add max_len parameter
         intialisation='random',
-        output_dim=None  # Add output_dim parameter
+        output_dim=None,  # Add output_dim parameter
+        use_lstm=False,  # Add use_lstm parameter
+        positional_encoding=fourier_positional_encoding,  # Use Fourier positional encoding
+        use_positional_encoding=True  # Add use_positional_encoding parameter
     ):
         """
         Initialize the Transformer Classifier with Circular Relative Attention.
@@ -893,13 +1009,21 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         self.embedding_layer = nn.Linear(input_dim, hidden_dim -28).to(device)  # Use input_dim
 
         self.dropout = nn.Dropout(dropout).to(device)
-        self.positional_encoding = sinusoidal_positional_encoding(max_len, hidden_dim, device).to(device)
-        self.lstm = nn.LSTM(
-            hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True  # Use lstm_hidden_dim
-        ).to(device)
+        self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device)
+        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+        if use_lstm:
+            self.lstm = nn.LSTM(
+                hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True  # Use lstm_hidden_dim
+            ).to(device)
+            self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)  # Use lstm_hidden_dim
+            d_model = lstm_hidden_dim * 2  # Use lstm_hidden_dim
+        else:
+            self.lstm = None  # Ensure lstm attribute exists
+            self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)  # Use hidden_dim directly
+            d_model = hidden_dim  # Use hidden_dim directly
 
         encoder_layers = CircularTransformerEncoderLayer(
-            d_model=lstm_hidden_dim * 2,  # Input to transformer encoder is 2 * lstm_hidden_dim
+            d_model=d_model,  # Use d_model
             num_heads=num_heads,
             dropout=dropout,
             max_len=max_len,
@@ -908,9 +1032,11 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         self.transformer_encoder = nn.TransformerEncoder(
             encoder_layers, num_layers=num_layers
         ).to(device)
+        if use_positional_encoding:
+            self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device)
+        else:
+            self.positional_encoding = None
 
-        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
-        self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)  # Use lstm_hidden_dim
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False, save_lstm_output=False, save_transformer_output=False):
         """
@@ -932,12 +1058,13 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         protein_embeds = self.embedding_layer(protein_embeds)
 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
-        x = x + self.positional_encoding[: x.size(1), :].to(x.device)
+        if self.positional_encoding is not None:
+            x = x + self.positional_encoding[: x.size(1), :].to(x.device)
         x = self.dropout(x)
-        x, _ = self.lstm(x)
-
-        if save_lstm_output:
-            self.saved_lstm_output = x.clone().detach().cpu().numpy()
+        if self.lstm:
+            x, _ = self.lstm(x)
+            if save_lstm_output:
+                self.saved_lstm_output = x.clone().detach().cpu().numpy()
 
         if return_attn_weights:
             x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
@@ -1433,7 +1560,7 @@ def train(
     gc.collect()
     torch.cuda.empty_cache()
 
-def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size):
+def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding=fourier_positional_encoding, use_positional_encoding=True, noise_std=0.0):
     fold_logger = None
     try:
         device = torch.device(device_id)
@@ -1496,12 +1623,12 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
         else:
             fold_logger.info("No data leakage detected between training and validation sets.")
 
-        # save the validation data object as well as the keys used in validation 
+        # save the validation data object as well as the labels used in validation 
         pickle.dump(val_kfold_loader, open(output_dir + "/val_kfold_loader.pkl", "wb"))
-        with open(output_dir + "/val_kfold_keys.txt", "w") as file: 
+        with open(output_dir + "/val_kfold_labels.txt", "w") as file: 
             for idx in val_index: 
-                key = dataset.keys[idx]  # Get the key from the dataset object
-                file.write(f"{key}\n")
+                label = dataset.labels[idx]  # Get the label from the dataset object
+                file.write(f"{label}\n")
 
         # Initialize model
         try:
@@ -1509,20 +1636,21 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             input_dim = dataset[0][0].shape[1]
             num_classes = 9
             fold_logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}, output_dim={output_dim}")  # Log input_dim, num_classes, and output_dim
-            if attention == "circular":
-                kfold_transformer_model = (
-                    TransformerClassifierCircularRelativeAttention(
-                        input_dim=input_size,  # Use input_size
-                        num_classes=num_classes,
-                        num_heads=num_heads,
-                        hidden_dim=hidden_dim,
-                        lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
-                        dropout=dropout,
-                        intialisation=intialisation,
-                        num_layers=num_layers,
-                        output_dim=output_dim  # Pass output_dim
-                    ).to(device)
-                )
+            if (attention == "circular"):
+                kfold_transformer_model = TransformerClassifierCircularRelativeAttention(
+                    input_dim=input_size,  # Use input_size
+                    num_classes=num_classes,
+                    num_heads=num_heads,
+                    hidden_dim=hidden_dim,
+                    lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
+                    dropout=dropout,
+                    intialisation=intialisation,
+                    num_layers=num_layers,
+                    output_dim=output_dim,  # Pass output_dim
+                    use_lstm=use_lstm,  # Pass use_lstm
+                    positional_encoding=positional_encoding,  # Use Fourier positional encoding
+                    use_positional_encoding=use_positional_encoding  # Pass use_positional_encoding
+                ).to(device)
             elif attention == "relative":
                 kfold_transformer_model = TransformerClassifierRelativeAttention(
                     input_dim=input_size,  # Use input_size
@@ -1533,7 +1661,10 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                     dropout=dropout,
                     intialisation=intialisation,
                     num_layers=num_layers,
-                    output_dim=output_dim  # Pass output_dim
+                    output_dim=output_dim,  # Pass output_dim
+                    use_lstm=use_lstm,  # Pass use_lstm
+                    positional_encoding=positional_encoding,  # Use Fourier positional encoding
+                    use_positional_encoding=use_positional_encoding  # Pass use_positional_encoding
                 ).to(device)
             elif attention == "absolute":
                 kfold_transformer_model = TransformerClassifier(
@@ -1545,7 +1676,10 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                     dropout=dropout,
                     intialisation=intialisation,
                     num_layers=num_layers,
-                    output_dim=output_dim  # Pass output_dim
+                    output_dim=output_dim,  # Pass output_dim
+                    use_lstm=use_lstm,  # Pass use_lstm
+                    positional_encoding=positional_encoding,  # Use Fourier positional encoding
+                    use_positional_encoding=use_positional_encoding  # Pass use_positional_encoding
                 ).to(device)
             else:
                 fold_logger.error("Invalid attention type specified")
@@ -1606,7 +1740,11 @@ def train_crossValidation(
     random_seed=42,
     single_fold=None,
     output_dim=None,  # Add output_dim parameter
-    input_size=None  # Add input_size parameter
+    input_size=None,  # Add input_size parameter
+    use_lstm=False,  # Add use_lstm parameter
+    positional_encoding=fourier_positional_encoding,  # Use Fourier positional encoding
+    use_positional_encoding=True,  # Add use_positional_encoding parameter
+    noise_std=0.0  # Add noise_std parameter
 ):
     """
     Train the model using K-Fold cross-validation.
@@ -1639,7 +1777,7 @@ def train_crossValidation(
     logger.add(save_path + "trainer.log", level="DEBUG")
 
     # Log the parameters being used to train the model
-    logger.info(f"Training parameters: attention={attention}, n_splits={n_splits}, batch_size={batch_size}, epochs={epochs}, lr={lr}, min_lr_ratio={min_lr_ratio}, save_path={save_path}, num_heads={num_heads}, hidden_dim={hidden_dim}, device={device}, dropout={dropout}, checkpoint_interval={checkpoint_interval}, intialisation={intialisation},lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, output_dim={output_dim}")
+    logger.info(f"Training parameters: attention={attention}, n_splits={n_splits}, batch_size={batch_size}, epochs={epochs}, lr={lr}, min_lr_ratio={min_lr_ratio}, save_path={save_path}, num_heads={num_heads}, hidden_dim={hidden_dim}, device={device}, dropout={dropout}, checkpoint_interval={checkpoint_interval}, intialisation={intialisation},lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, output_dim={output_dim}, positional_encoding={positional_encoding}, use_positional_encoding={use_positional_encoding}, noise_std={noise_std}")
 
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_seed)
     fold = 1
@@ -1656,7 +1794,7 @@ def train_crossValidation(
             if fold == single_fold:
                 # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device}")
-                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size)
+                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, noise_std)
                 break
     else:
         if parallel_kfolds:
@@ -1669,7 +1807,7 @@ def train_crossValidation(
             for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
                 device_id = (fold - 1) % num_gpus
                 logger.info(f"Training fold {fold} on device {device_id}")
-                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size))
+                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, noise_std))
                 p.start()
                 processes.append(p)
 
@@ -1693,7 +1831,7 @@ def train_crossValidation(
                 device_id = (fold - 1) % num_gpus
                 # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device_id}")
-                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size)
+                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, noise_std)
 
             # Clear cache after all folds finish
             gc.collect()

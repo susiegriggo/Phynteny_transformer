@@ -39,7 +39,10 @@ def get_dict(dict_path):
 
 def instantiate_dir(output_dir, force):
     """
-    Generate output directory releative to whether force has been specififed
+    Generate output directory relative to whether force has been specified
+
+    :param output_dir: path to the output directory
+    :param force: boolean indicating whether to force overwrite existing directory
     """
 
     # remove the existing outdir on force
@@ -66,13 +69,10 @@ def instantiate_dir(output_dir, force):
 
 def is_gzip_file(f):
     """
-    Method copied from Phispy see https://github.com/linsalrob/PhiSpy/blob/master/PhiSpyModules/helper_functions.py
+    Check if a file is gzip compressed
 
-    This is an elegant solution to test whether a file is gzipped by reading the first two characters.
-    I also use a version of this in fastq_pair if you want a C version :)
-    See https://stackoverflow.com/questions/3703276/how-to-tell-if-a-file-is-gzip-compressed for inspiration
     :param f: the file to test
-    :return: True if the file is gzip compressed else false
+    :return: True if the file is gzip compressed, else False
     """
     with open(f, "rb") as i:
         return binascii.hexlify(i.read(2)) == b"1f8b"
@@ -111,6 +111,12 @@ def get_genbank(genbank):
 
 
 def get_fasta(input_data, out_dir):
+    """
+    Convert genbank files listed in input_data to fasta format and save to out_dir
+
+    :param input_data: path to a text file containing paths to genbank files
+    :param out_dir: directory to save the fasta files
+    """
     with open(input_data, "r", errors="replace") as file:
         genbank_files = file.readlines()
 
@@ -142,6 +148,10 @@ def get_fasta(input_data, out_dir):
 def phrog_to_integer(phrog_annot, phrog_integer):
     """
     Converts phrog annotation to its integer representation
+
+    :param phrog_annot: list of phrog annotations
+    :param phrog_integer: dictionary mapping phrog annotations to integers
+    :return: list of integer representations of phrog annotations
     """
 
     return [phrog_integer.get(i) for i in phrog_annot]
@@ -151,8 +161,9 @@ def extract_features(this_phage, key):
     """
     Extract the required features and format as a dictionary
 
-    param this_phage: phage genome extracted from genbank file
-    return: dictionary with the features for this specific phage
+    :param this_phage: phage genome extracted from genbank file
+    :param key: unique identifier for the phage
+    :return: dictionary with the features for this specific phage
     """
 
     phage_length = len(this_phage.seq)
@@ -213,9 +224,9 @@ def encode_strand(strand):
 
 def encode_length(gene_positions):
     """
-    Extract the length of each of each gene so that it can be included in the embedding
+    Extract the length of each gene so that it can be included in the embedding
 
-    :param gene_positions: list of start and end position of each gene
+    :param gene_positions: list of start and end positions of each gene
     :return: length of each gene
     """
 
@@ -255,6 +266,8 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
 
     :param input_data: path to a text file or a single genbank path
     :param gene_categories: number of gene categories which must be included
+    :param phrog_integer: dictionary mapping phrog annotations to integers
+    :param maximum_genes: maximum number of genes to include, default is False
     :return: curated data dictionary
     """
 
@@ -308,7 +321,9 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
                 if len(categories_present) >= gene_categories:
                     # update dictionary with this entry
                     g = re.split(r",|\.", re.split("/", genbank.strip())[-1])[0]
-                    training_data[g + "_" + key] = phage_dict
+
+                    training_data[key] = phage_dict
+                    #training_data[f"{g}_{key}"] = phage_dict
                 else:
                     skipped_genomes.append(key)
 
@@ -320,7 +335,13 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
                 ):
                     # update dictionary with this entry
                     g = re.split(r",|\.", re.split("/", genbank.strip())[-1])[0]
+                    logger.info(f"g: {g}")
+                    logger.info(f"genbank.strip(): {genbank.strip()}")
+                    logger.info(f're.split("/", genbank.strip())[-1]: {re.split("/", genbank.strip())[-1]}')
+                    
+
                     training_data[key] = phage_dict
+                    #training_data[f"{g}_{key}"] = phage_dict
                 else:
                     skipped_genomes.append(key)
 
@@ -331,7 +352,6 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
             logger.info(f"Skipped genome: {genome}")
 
     return training_data
-
 
 
 ### this code seems to batch from a fasta file better from the code later
@@ -416,7 +436,7 @@ def extract_embeddings(
     tokens_per_batch=4096,
     max_length=1024,
     checkpoint_path=None,
-    cache_dir=None  # Update cache_dir parameter to None by default
+    cache_dir="cache/"  # Add cache_dir parameter
 ):
     """
     Extract ESM2 embeddings using HuggingFace
@@ -513,7 +533,13 @@ def prepare_data(
     esm_vectors, genome_details, extra_features=True, exclude_embedding=False
 ):
     """
-    frame as a supervised learning problem
+    Frame as a supervised learning problem
+
+    :param esm_vectors: dictionary of ESM vectors
+    :param genome_details: dictionary with genome details
+    :param extra_features: boolean indicating whether to include extra features
+    :param exclude_embedding: boolean indicating whether to exclude embeddings
+    :return: tuple of X and y data
     """
 
     genomes = list(genome_details.keys())
@@ -558,7 +584,6 @@ def prepare_data(
                     removed.append(g)
                     continue
            
-
             # merge these columns into a numpy array
             embedding = np.hstack( #TODO change the shapping of this vectors 
                 (strand1, strand2, gene_lengths, np.array(this_vectors).reshape(len(this_vectors),len(this_vectors[0])))
@@ -573,9 +598,6 @@ def prepare_data(
         # y.append(torch.tensor(np.array(this_categories)))
         y.append(torch.tensor(this_categories))
 
-    print("Numer of genomes removed: " + str(len(removed)))
-    logger.info(f"Genomes removed: {removed}")
-    print("Numer of genomes kept: " + str(len(X)))
 
     # convert to dictionary inc the dictionary names
     X = dict(zip(genomes, X))
@@ -612,6 +634,9 @@ def prepare_y_data(genome_details):
 def derep_data(data):
     """
     Deduplicate repeated gene orders for a phynteny dictionary
+
+    :param data: dictionary with phynteny data
+    :return: deduplicated data dictionary
     """
 
     # get the training keys and encodings
@@ -633,9 +658,20 @@ def derep_data(data):
 
 
 def instantiate_output_directory(out, force):
+    """
+    Instantiate the output directory
+
+    :param out: path to the output directory
+    :param force: boolean indicating whether to force overwrite existing directory
+    """
     instantiate_dir(out, force)
 
 def read_annotations_information():
+    """
+    Read annotations information
+
+    :return: tuple of category_dict and phrog_integer_category
+    """
     phrogs = pd.read_csv(
         "src/phrog_annotation_info/phrog_annot_v4.tsv",
         sep="\t",
@@ -669,6 +705,13 @@ def read_annotations_information():
     return category_dict, phrog_integer_category
 
 def read_genbank_file(infile, phrog_integer):
+    """
+    Read genbank file
+
+    :param infile: path to the genbank file
+    :param phrog_integer: dictionary mapping phrog annotations to integers
+    :return: genbank dictionary
+    """
     logger.info("Reading genbank file!")
     #gb_dict = get_genbank(infile)
     logger.info("Infile: " + infile)
@@ -677,11 +720,18 @@ def read_genbank_file(infile, phrog_integer):
         click.echo("Error: no sequences found in genbank file")
         logger.critcal("No sequences found in genbank file. Nothing to annotate")
         sys.exit()
-    logger.info("Genbank file keys`")
-    logger.info(gb_dict.keys())
+    logger.info("Genbank file keys")
     return gb_dict
 
 def extract_features_and_embeddings(gb_dict, out, esm_model):
+    """
+    Extract features and embeddings
+
+    :param gb_dict: dictionary with genbank data
+    :param out: output directory
+    :param esm_model: name of the ESM model
+    :return: dictionary of extracted embeddings
+    """
     logger.info('Extracting protein sequences as a fasta')
     keys = list(gb_dict.keys())
 
@@ -700,6 +750,12 @@ def extract_features_and_embeddings(gb_dict, out, esm_model):
     return  extracted_embeddings
 
 def pad_sequence(y):
+    """
+    Pad sequences to the same length
+
+    :param y: list of sequences
+    :return: padded sequences
+    """
     max_length = np.max([len(i) for i in y]) 
     src_key_padding = np.zeros((len(y), max_length)) - 2 
     for i in range(len(y)):
@@ -711,12 +767,9 @@ def custom_one_hot_encode(data, num_classes=10):
     """
     Generate a one-hot encoding for the given data.
 
-    Parameters:
-    data (torch.Tensor): Data tensor to encode.
-    num_classes (int): Number of classes to encode.
-
-    Returns:
-    np.array: One-hot encoded array.
+    :param data: Data tensor to encode
+    :param num_classes: Number of classes to encode
+    :return: One-hot encoded array
     """
 
     one_hot_encoded = []

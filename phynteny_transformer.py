@@ -11,6 +11,8 @@ from loguru import logger
 import numpy as np 
 import torch 
 from importlib_resources import files
+import pickle
+from Bio import SeqIO
 
 
 __author__ = "Susanna Grigson"
@@ -91,9 +93,25 @@ def main(infile, out, esm_model, models, force, prefix):
     gb_dict = format_data.read_genbank_file(infile, phrog_integer_category) # what categories the genes belong to is missing 
     logger.info("Genbank file read")
 
-    logger.info("Extracting features and embeddings")
-    embeddings = format_data.extract_features_and_embeddings(gb_dict, out, esm_model)
-    X, y = format_data.process_data(embeddings, gb_dict) # Think these here are missing the categories
+    # Extract fasta from the genbank files
+    logger.info("Extracting fasta from genbank")
+    data_keys = list(gb_dict.keys())
+    fasta_out = os.path.join(out, f"{prefix}.fasta")
+    records = [gb_dict.get(k).get("sequence") for k in data_keys]
+    with open(fasta_out, "w") as output_handle:
+        for r in records:
+            SeqIO.write(r, output_handle, "fasta")
+    output_handle.close()
+
+    # Extract the embeddings from the outputted fasta files
+    logger.info("Computing ESM embeddings")
+    logger.info("... if step is being slow consider using GPU!")
+    embeddings = format_data.extract_embeddings(
+        fasta_out, out, model_name=esm_model
+    )
+
+    # Prepare data
+    X, y = format_data.prepare_data(embeddings, gb_dict)
     src_key_padding = format_data.pad_sequence(list(y.values()))
 
     # Need to add a one-hot encoding of the categories to the X data
@@ -106,9 +124,22 @@ def main(infile, out, esm_model, models, force, prefix):
     logger.info(f"Reading models from directory: {models}")
     p.read_models_from_directory(models)
 
+    # Read the confidence_dict from a pickled file
+    confidence_dict_path = os.path.join(models, "confidence_dict.pkl")
+    if os.path.exists(confidence_dict_path):
+        with open(confidence_dict_path, 'rb') as f:
+            confidence_dict = pickle.load(f)
+        logger.info("Loaded confidence dictionary")
+    else:
+        logger.error(f"Confidence dictionary file does not exist: {confidence_dict_path}")
+        sys.exit(1)
+
     logger.info("Making predictions")
     scores = p.predict(X_one_hot, src_key_padding)
     logger.info(f"f{scores}")
+
+    logger.info("Calculating confidence scores")
+    predictions, confidence_scores = p.compute_confidence(scores, confidence_dict, phrog_integer_category)
 
     logger.info("Writing predictions to genbank file")
     genbank_file = out + "/phynteny.gbk"

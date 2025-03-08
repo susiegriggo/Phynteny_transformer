@@ -3,6 +3,7 @@ import click
 import random
 from loguru import logger
 from src import model_onehot
+from src.model_onehot import fourier_positional_encoding  # Add import for Fourier positional encoding
 import os
 
 def setup_output_directory(out, force):
@@ -28,7 +29,7 @@ def load_data(x_path, y_path):
         input_size = list(X.values())[0].shape[1] - 3  # 3 is the number of strand info and gene length
         logger.info(f"Computed input size of embeddings: {input_size}")
 
-        return X, y, input_size, list(X.keys())  # Return keys as well
+        return X, y, input_size, list(X.keys())  # Return keys as labels
     except Exception as e:
         logger.error(f"Error reading input files: {e}")
         raise
@@ -142,6 +143,24 @@ def validate_num_heads(ctx, param, value):
 @click.option(
     "-f", "--force", is_flag=True, help="Overwrite output directory if it exists."
 )
+@click.option(
+    "--use_lstm",
+    is_flag=True,
+    default=False,
+    help="Include LSTM layers in the model.",
+)
+@click.option(
+    "--use_positional_encoding",
+    is_flag=True,
+    default=True,
+    help="Include positional encoding in the model.",
+)
+@click.option(
+    "--noise_std",
+    default=0.0,
+    help="Standard deviation of the Gaussian noise to add to the embeddings.",
+    type=float,
+)
 def main(
     x_path,
     y_path,
@@ -165,7 +184,10 @@ def main(
     checkpoint_interval,
     output_dim,  # Add output_dim parameter
     lstm_hidden_dim,  # Add lstm_hidden_dim parameter
-    force  # Add force parameter
+    force,  # Add force parameter
+    use_lstm,  # Add use_lstm parameter
+    use_positional_encoding,  # Add use_positional_encoding parameter
+    noise_std  # Add noise_std parameter
 ):
     setup_output_directory(out, force)
 
@@ -173,33 +195,35 @@ def main(
     logger.add(out + "/trainer.log", level="DEBUG")
 
     # Log parameter values
-    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}")  # Log lstm_hidden_dim
+    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}, use_lstm={use_lstm}, use_positional_encoding={use_positional_encoding}, noise_std={noise_std}")  # Log use_lstm
 
-    X, y, input_size, keys = load_data(x_path, y_path)  # Get keys
+    X, y, input_size, labels = load_data(x_path, y_path)  # Get labels
+
+    shuffled_data = {}  # Dictionary to save shuffled data
 
     # Shuffle if specified
     if shuffle:
         logger.info("Shuffling gene orders...")
         for key in list(X.keys()):
-            logger.info(f"Before shuffling: {X.get(key)}")
-            logger.info(f"Before shuffling: {y.get(key)}")
             # generate indices for shuffling
             indices = list(range(len(X.get(key))))
             random.Random(4).shuffle(indices)  # shuffle with a random seed of 4
             X[key] = X[key][indices]
             y[key] = y[key][indices]
-            logger.info(f"After shuffling: {X.get(key)}")
-            logger.info(f"After shuffling: {y.get(key)}")
+        shuffled_data['X'] = X  # Save shuffled X
+        shuffled_data['y'] = y  # Save shuffled y
         logger.info("\t Done shuffling gene orders")
+        # Save shuffled data to a file
+        with open(os.path.join(out, "shuffled_data.pkl"), "wb") as f:
+            pickle.dump(shuffled_data, f)
     else:
         logger.info("Gene orders not shuffled!")
 
     # Produce the dataset object
     train_dataset = model_onehot.EmbeddingDataset(
-        list(X.values()), list(y.values()), mask_portion=mask_portion
+        list(X.values()), list(y.values()), list(y.keys()), mask_portion=mask_portion, noise_std=noise_std  # Pass labels and noise_std
     )
     train_dataset.set_training(True)
-    train_dataset.keys = keys  # Add keys to the dataset object
     logger.info(f"Total dataset size: {len(train_dataset)} samples")
 
     logger.info("\nTraining model...")
@@ -226,7 +250,11 @@ def main(
             single_fold=fold_index,
             output_dim=output_dim,  # Pass output_dim
             input_size=input_size,  # Pass input_size
-            lstm_hidden_dim=lstm_hidden_dim  # Pass lstm_hidden_dim
+            lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
+            use_lstm=use_lstm,  # Pass use_lstm
+            positional_encoding=fourier_positional_encoding,  # Use Fourier positional encoding
+            use_positional_encoding=use_positional_encoding,  # Pass use_positional_encoding
+            noise_std=noise_std  # Pass noise_std
         )
     except Exception as e:
         logger.error(f"Error during training: {e}")
