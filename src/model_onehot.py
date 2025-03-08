@@ -30,7 +30,7 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 class EmbeddingDataset(Dataset):
-    def __init__(self, embeddings, categories, labels, mask_token=-1, mask_portion=0.15):
+    def __init__(self, embeddings, categories, labels, mask_token=-1, mask_portion=0.15, shuffle_features=True):
         """
         Initialize the dataset with embeddings, categories, and labels.
 
@@ -40,6 +40,7 @@ class EmbeddingDataset(Dataset):
         labels (list of str): List of labels associated with the data.
         mask_token (int): Token used for masking.
         mask_portion (float): Portion of tokens to mask during training.
+        shuffle_features (bool): If True, shuffle the embedding features during training.
         """
         try:
             self.embeddings = [embedding.float() for embedding in embeddings]
@@ -48,6 +49,7 @@ class EmbeddingDataset(Dataset):
             self.mask_token = mask_token
             self.num_classes = 10  # hard coded in for now
             self.mask_portion = mask_portion
+            self.shuffle_features = shuffle_features  # Add shuffle_features attribute
         except Exception as e:
             logger.error(f"Error initializing EmbeddingDataset: {e}")
             raise
@@ -85,6 +87,8 @@ class EmbeddingDataset(Dataset):
             # select a random category to mask if training
             if self.training:
                 masked_category, idx = self.category_mask(category, mask)
+                if self.shuffle_features:
+                    embedding = self.shuffle_masked_features(embedding, idx)  # Shuffle only masked features
             elif self.validation:
                 masked_category, idx  = self.validation_mask(category, idx) 
             else:
@@ -250,6 +254,40 @@ class EmbeddingDataset(Dataset):
             masks.append(mask)
             indices.append(idx)
         return embeddings, categories, masks, indices
+
+    def shuffle_embedding_features(self, embedding):
+        """
+        Shuffle the embedding features.
+
+        Parameters:
+        embedding (torch.Tensor): Embedding tensor to shuffle.
+
+        Returns:
+        torch.Tensor: Shuffled embedding tensor.
+        """
+        indices = torch.randperm(embedding.size(0))
+        return embedding[indices]
+
+    def shuffle_masked_features(self, embedding, idx):
+        """
+        Shuffle only the masked features in the embedding.
+
+        Parameters:
+        embedding (torch.Tensor): Embedding tensor to shuffle.
+        idx (torch.Tensor): Indices of masked features.
+
+        Returns:
+        torch.Tensor: Embedding tensor with shuffled masked features.
+        """
+        original_features = embedding.clone() # copy to check if the embedding has been shuffled
+        masked_features = embedding[idx].clone()
+        masked_features[:, 13:] = torch.stack([row[torch.randperm(row.size(0))] for row in masked_features[:,13:]])
+        embedding[idx] = masked_features
+
+        if torch.equal(embedding, original_features): 
+            raise Exception("Shuffling did not change the embedding features.")
+
+        return embedding
 
 def fourier_positional_encoding(seq_len, d_model, device):
     """
