@@ -155,6 +155,12 @@ def validate_num_heads(ctx, param, value):
     default=True,
     help="Include positional encoding in the model.",
 )
+@click.option(
+    "--noise_std",
+    default=0.0,
+    help="Standard deviation of the Gaussian noise to add to the embeddings.",
+    type=float,
+)
 def main(
     x_path,
     y_path,
@@ -180,7 +186,8 @@ def main(
     lstm_hidden_dim,  # Add lstm_hidden_dim parameter
     force,  # Add force parameter
     use_lstm,  # Add use_lstm parameter
-    use_positional_encoding  # Add use_positional_encoding parameter
+    use_positional_encoding,  # Add use_positional_encoding parameter
+    noise_std  # Add noise_std parameter
 ):
     setup_output_directory(out, force)
 
@@ -188,7 +195,7 @@ def main(
     logger.add(out + "/trainer.log", level="DEBUG")
 
     # Log parameter values
-    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}, use_lstm={use_lstm}, use_positional_encoding={use_positional_encoding}")  # Log use_lstm
+    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}, use_lstm={use_lstm}, use_positional_encoding={use_positional_encoding}, noise_std={noise_std}")  # Log use_lstm
 
     X, y, input_size, labels = load_data(x_path, y_path)  # Get labels
 
@@ -214,7 +221,7 @@ def main(
 
     # Produce the dataset object
     train_dataset = model_onehot.EmbeddingDataset(
-        list(X.values()), list(y.values()), list(y.keys()), mask_portion=mask_portion  # Pass labels
+        list(X.values()), list(y.values()), list(y.keys()), mask_portion=mask_portion, noise_std=noise_std  # Pass labels and noise_std
     )
     train_dataset.set_training(True)
     logger.info(f"Total dataset size: {len(train_dataset)} samples")
@@ -246,7 +253,8 @@ def main(
             lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
             use_lstm=use_lstm,  # Pass use_lstm
             positional_encoding=fourier_positional_encoding,  # Use Fourier positional encoding
-            use_positional_encoding=use_positional_encoding  # Pass use_positional_encoding
+            use_positional_encoding=use_positional_encoding,  # Pass use_positional_encoding
+            noise_std=noise_std  # Pass noise_std
         )
     except Exception as e:
         logger.error(f"Error during training: {e}")
