@@ -48,7 +48,7 @@ class EmbeddingDataset(Dataset):
             self.categories = [category.long() for category in categories]
             self.labels = labels  # Add labels attribute
             self.mask_token = mask_token
-            self.num_classes = 10  # hard coded in for now
+            self.num_classes = 9 # hard coded in for now
             self.mask_portion = mask_portion
             self.shuffle_features = shuffle_features  # Add shuffle_features attribute
             self.noise_std = noise_std  # Add noise_std attribute
@@ -350,7 +350,7 @@ class TransformerClassifier(nn.Module):
         Initialize the Transformer Classifier.
 
         Parameters:
-        input_dim (int): Input dimension size.
+        input_dim (int): Input dimension size of the ESM2 embeddings
         num_classes (int): Number of output classes.
         num_heads (int): Number of attention heads.
         num_layers (int): Number of transformer layers.
@@ -366,8 +366,11 @@ class TransformerClassifier(nn.Module):
         # check if cuda is available 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # set the number of classes 
+        self.num_classes = num_classes   
+
         # Embedding layers
-        self.func_embedding = nn.Embedding(10, 16).to(device)
+        self.func_embedding = nn.Embedding(num_classes, 16).to(device)
         self.strand_embedding = nn.Linear(2, 4).to(device)  # Change to linear layer
         self.length_embedding = nn.Linear(1, 8).to(device)
         self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)  # Use input_dim
@@ -425,7 +428,7 @@ class TransformerClassifier(nn.Module):
         torch.Tensor: Output tensor.
         """
         x = x.float()
-        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
+        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:self.num_classes], x[:,:,self.num_classes:self.num_classes+2], x[:,:,self.num_classes+2:self.num_classes+3], x[:,:,self.num_classes+3:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
         strand_embeds = self.strand_embedding(strand_ids.float())  # Change to linear layer
         length_embeds = self.length_embedding(gene_length)
@@ -688,8 +691,11 @@ class TransformerClassifierRelativeAttention(nn.Module):
         # Check if CUDA is available
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # Set the number of classes
+        self.num_classes = num_classes
+
         # Embedding layers
-        self.func_embedding = nn.Embedding(10, 16).to(device)
+        self.func_embedding = nn.Embedding(self.num_classes, 16).to(device)
         self.strand_embedding = nn.Linear(2, 4).to(device)  # Change to linear layer
         self.length_embedding = nn.Linear(1, 8).to(device)
         self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)  # Use input_dim
@@ -737,7 +743,7 @@ class TransformerClassifierRelativeAttention(nn.Module):
         torch.Tensor: Output tensor.
         """
         x = x.float()
-        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
+        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:self.num_classes], x[:,:,self.num_classes:self.num_classes + 2], x[:,:,self.num_classes+2:self.num_classes+3], x[:,:,self.num_classes+3:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
         strand_embeds = self.strand_embedding(strand_ids.float())  # Change to linear layer
         length_embeds = self.length_embedding(gene_length)
@@ -1000,8 +1006,11 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         # Check if CUDA is available
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+        # Set the number of classes
+        self.num_classes = num_classes
+
         # try adding some embedding layers 
-        self.func_embedding = nn.Embedding(10, 16).to(device)
+        self.func_embedding = nn.Embedding(self.num_classes, 16).to(device)
         self.strand_embedding = nn.Linear(2, 4).to(device)  # Change to linear layer
         self.length_embedding = nn.Linear(1,8).to(device) # linear embedding for the protein embedding
 
@@ -1051,7 +1060,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         torch.Tensor: Output tensor.
         """
         x = x.float()
-        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:10], x[:,:,10:12], x[:,:,12:13], x[:,:,13:]
+        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:self.num_classes], x[:,:,self.num_classes:self.num_classes+2], x[:,:,self.num_classes+2:self.num_classes+3], x[:,:,self.num_classes+3:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
         strand_embeds = self.strand_embedding(strand_ids.float())  # Change to linear layer
         length_embeds = self.length_embedding(gene_length)
