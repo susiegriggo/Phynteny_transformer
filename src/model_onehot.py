@@ -69,7 +69,7 @@ class EmbeddingDataset(Dataset):
             logger.error(f"Error getting length of dataset: {e}")
             raise
 
-    def __getitem__(self, idx):
+    def __getitem__(self, i):
         """
         Get a single viruses from the dataset at the specified index.
 
@@ -80,8 +80,8 @@ class EmbeddingDataset(Dataset):
         tuple: Tuple containing the embedding, category, mask, and masked indices.
         """
         try:
-            embedding = self.embeddings[idx]
-            category = self.categories[idx]
+            embedding = self.embeddings[i]
+            category = self.categories[i]
             mask = (
                 category != self.mask_token
             ).float()  # 1 for valid, 0 for missing - this indicates which rows to consider when training
@@ -90,11 +90,14 @@ class EmbeddingDataset(Dataset):
             if self.training:
                 masked_category, idx = self.category_mask(category, mask)
                 if self.shuffle_features:
-                    embedding = self.shuffle_masked_features(embedding, idx)  # Shuffle only masked features
+                    embedding = self.shuffle_masked_features(embedding, i)  # Shuffle only masked features
                 if self.noise_std > 0:
-                    embedding = self.add_gaussian_noise(embedding, idx, std=self.noise_std)  # Add Gaussian noise to masked features
+                    embedding = self.add_gaussian_noise(embedding, i, std=self.noise_std)  # Add Gaussian noise to masked features
             elif self.validation:
+                masked_category, idx = self.validation_mask(category, i)
+            else:
                 masked_category = category
+                idx = [] 
 
             # use the masked category to generate a one-hot encoding
             one_hot = self.custom_one_hot_encode(masked_category)
@@ -104,7 +107,9 @@ class EmbeddingDataset(Dataset):
 
             return embedding_one_hot, category, mask, idx
         except Exception as e:
-            logger.error(f"Error getting item from dataset at index {idx}: {e}")
+            logger.error(f"Error getting item from dataset at index {i}: {e}")
+            logger.error(f"Category at index {i}: {category}")
+            logger.error(f"mask_token: {self.mask_token}")
             raise
 
     def set_training(self, training=True):
