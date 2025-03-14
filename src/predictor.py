@@ -7,8 +7,7 @@ from src import format_data
 import torch
 import torch.nn.functional as F
 import os
-import numpy as np 
-from loguru import logger
+import numpy  as np 
 from sklearn.neighbors import KernelDensity
 from Bio import SeqIO  # Add this import
 
@@ -109,11 +108,12 @@ class Predictor:
         # Dynamically determine input_dim from the model
         input_dim = model.get('embedding_layer.weight').shape[1]
         num_classes = model.get('fc.weight').shape[0]
-        lstm_hidden_dim = model.get('lstm.weight_hh_l0').shape[1]  # Read lstm_hidden_dim
-        d_model = lstm_hidden_dim * 2  # because the lstm layer is bidirectional
+        lstm_hidden_dim = model.get('lstm.weight_hh_l0').shape[1] if 'lstm.weight_hh_l0' in model else None
+        d_model = lstm_hidden_dim * 2 if lstm_hidden_dim else model.get('transformer_encoder.layers.0.self_attn.relative_position_k').shape[1] * model.get('transformer_encoder.layers.0.self_attn.num_heads')
         num_heads = d_model // model.get('transformer_encoder.layers.0.self_attn.relative_position_k').shape[1]
         dropout = 0.1  # set this to an arbitrary value - doesn't matter if the model isn't in training mode
         max_len = model.get('transformer_encoder.layers.1.self_attn.relative_position_k').shape[0]
+        use_lstm = lstm_hidden_dim is not None  # Set this based on whether the model uses an LSTM layer
 
         print(f"Model parameters: input_dim: {input_dim}, num_classes: {num_classes}, lstm_hidden_dim: {lstm_hidden_dim}, num_heads: {num_heads}, dropout: {dropout}, max_len: {max_len}")
 
@@ -122,10 +122,11 @@ class Predictor:
             input_dim=input_dim, 
             num_classes=num_classes, 
             num_heads=num_heads, 
-            hidden_dim=lstm_hidden_dim,  # Use lstm_hidden_dim
+            hidden_dim=lstm_hidden_dim if lstm_hidden_dim else d_model,  # Use lstm_hidden_dim if available
             lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
             dropout=dropout, 
-            max_len=max_len  # Specify max_len
+            max_len=max_len,  # Specify max_len
+            use_lstm=use_lstm
         )
     
         # Resize model parameters to match the checkpoint

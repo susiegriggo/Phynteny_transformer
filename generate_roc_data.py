@@ -8,6 +8,8 @@ from sklearn.preprocessing import label_binarize
 from sklearn.metrics import precision_recall_curve, average_precision_score, roc_curve, auc
 from src import model_onehot
 from loguru import logger
+import os
+import shutil
 
 @click.command()
 @click.option('--pharokka_x_path', required=True, type=click.Path(exists=True), help='Path to pharokka X data.')
@@ -15,7 +17,21 @@ from loguru import logger
 @click.option('--phold_y_path', required=True, type=click.Path(exists=True), help='Path to phold y data.')
 @click.option('--model_dir', required=True, type=click.Path(exists=True), help='Directory containing the models.')
 @click.option('--output_dir', required=True, type=click.Path(), help='Directory to save the ROC data.')
-def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir):
+@click.option('--force', is_flag=True, help='Force overwrite the output directory if it exists.')
+def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, force):
+    # Create output directory if it does not exist, or clear it if force is specified
+    if os.path.exists(output_dir):
+        if force:
+            for filename in os.listdir(output_dir):
+                file_path = os.path.join(output_dir, filename)
+                if os.path.isfile(file_path) or os.path.islink(file_path):
+                    os.unlink(file_path)
+                elif os.path.isdir(file_path):
+                    shutil.rmtree(file_path)
+        else:
+            raise FileExistsError(f"Output directory {output_dir} already exists. Use --force to overwrite.")
+    else:
+        os.makedirs(output_dir)
     
     # Load data
     logger.info(f"Parameters: pharokka_x_path={pharokka_x_path}, pharokka_y_path={pharokka_y_path}, phold_y_path={phold_y_path}, model_dir={model_dir}, output_dir={output_dir}")
