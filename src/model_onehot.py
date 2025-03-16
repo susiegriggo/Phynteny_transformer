@@ -20,6 +20,7 @@ import os
 import gc
 import torch.multiprocessing as mp
 import resource
+from tqdm import tqdm  # Add import for tqdm
 
 # Increase the limit of open files
 soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
@@ -30,7 +31,7 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 class EmbeddingDataset(Dataset):
-    def __init__(self, embeddings, categories, labels, mask_token=-1, mask_portion=0.15, shuffle_features=False, noise_std=0):
+    def __init__(self, embeddings, categories, labels, num_classes = 9, mask_token=-1, mask_portion=0.15, shuffle_features=False, noise_std=0):
         """
         Initialize the dataset with embeddings, categories, and labels.
 
@@ -48,14 +49,34 @@ class EmbeddingDataset(Dataset):
             self.categories = [category.long() for category in categories]
             self.labels = labels  # Add labels attribute
             self.mask_token = mask_token
-            self.num_classes = 9 # hard coded in for now
+            self.num_classes = num_classes # hard coded in for now
             self.mask_portion = mask_portion
             self.shuffle_features = shuffle_features  # Add shuffle_features attribute
             self.noise_std = noise_std  # Add noise_std attribute
+            self.class_weights = self.calculate_class_weights()
+            logger.info(f"Computed class weights: {self.class_weights}")
         except Exception as e:
             logger.error(f"Error initializing EmbeddingDataset: {e}")
             raise
 
+    def calculate_class_weights(self):
+
+        # Calculate the frequency of each class 
+        class_counts = torch.zeros(self.num_classes)
+        for category in self.categories:
+            valid_indices = category != self.mask_token # Get the indices of valid categories
+            unique, counts = torch.unique(category[valid_indices], return_counts=True)
+            class_counts[unique] += counts
+
+
+        # Compute the inverse frequency weights
+        class_weights = 1.0 / class_counts
+        #logger.info(f"Class weights: {class_weights}")
+        class_weights /= class_weights.sum()  # Normalize the weights
+        #logger.info(f"Normalized class weights: {class_weights}")
+        return class_weights
+
+        
     def __len__(self):
         """
         Return the length of the dataset.
@@ -69,7 +90,7 @@ class EmbeddingDataset(Dataset):
             logger.error(f"Error getting length of dataset: {e}")
             raise
 
-    def __getitem__(self, idx):
+    def __getitem__(self, i):
         """
         Get a single viruses from the dataset at the specified index.
 
@@ -80,8 +101,8 @@ class EmbeddingDataset(Dataset):
         tuple: Tuple containing the embedding, category, mask, and masked indices.
         """
         try:
-            embedding = self.embeddings[idx]
-            category = self.categories[idx]
+            embedding = self.embeddings[i]
+            category = self.categories[i]
             mask = (
                 category != self.mask_token
             ).float()  # 1 for valid, 0 for missing - this indicates which rows to consider when training
@@ -94,7 +115,10 @@ class EmbeddingDataset(Dataset):
                 if self.noise_std > 0:
                     embedding = self.add_gaussian_noise(embedding, idx, std=self.noise_std)  # Add Gaussian noise to masked features
             elif self.validation:
+                masked_category, idx = self.validation_mask(category, i)
+            else:
                 masked_category = category
+                idx = [] 
 
             # use the masked category to generate a one-hot encoding
             one_hot = self.custom_one_hot_encode(masked_category)
@@ -104,7 +128,9 @@ class EmbeddingDataset(Dataset):
 
             return embedding_one_hot, category, mask, idx
         except Exception as e:
-            logger.error(f"Error getting item from dataset at index {idx}: {e}")
+            logger.error(f"Error getting item from dataset at index {i}: {e}")
+            logger.error(f"Category at index {i}: {category}")
+            logger.error(f"mask_token: {self.mask_token}")
             raise
 
     def set_training(self, training=True):
@@ -147,10 +173,6 @@ class EmbeddingDataset(Dataset):
         tuple: Tuple containing the masked category and masked indices.
         """
 
-        # logging lines 
-        #logger.info(f'category: {category}' )
-        #logger.info(f'mask: {mask}')
-
         try:
             # Check for NaN or infinite values in the mask tensor
             if torch.isnan(mask).any() or torch.isinf(mask).any():
@@ -164,6 +186,7 @@ class EmbeddingDataset(Dataset):
             num_tokens_to_mask = max(
                 1, int(self.mask_portion * num_maskable_tokens)
             )  # Ensure at least 1 token is masked
+            #logger.info(f"Number of tokens to mask: {num_tokens_to_mask}")
 
             # Validate inputs before sampling
             if num_tokens_to_mask > probability_distribution.size(-1):
@@ -171,9 +194,24 @@ class EmbeddingDataset(Dataset):
                 raise ValueError(f"Cannot sample {num_tokens_to_mask} tokens from a distribution of size {probability_distribution.size(-1)}")
 
             # Sample tokens to mask
+            class_weights = self.class_weights
+            weighted_probability_distribution = probability_distribution * class_weights[category]  # Fix method call
+            weighted_probability_distribution /= weighted_probability_distribution.sum() # normalize the weights
+
+            # Check for invalid values in the weighted probability distribution
+            if torch.isnan(weighted_probability_distribution).any() or torch.isinf(weighted_probability_distribution).any() or (weighted_probability_distribution < 0).any():
+                logger.info(f"Weighted probability distribution: {weighted_probability_distribution}")
+                logger.info(f"probability_distribution: {probability_distribution}")
+                logger.info(f"Class weights: {class_weights}")
+                logger.info(f"Category: {category}")
+                logger.error(f"Invalid values found in weighted probability distribution: {weighted_probability_distribution}")
+                raise ValueError("Weighted probability distribution contains invalid values")
+
+            # sample the indices to mask
             idx = torch.multinomial(
-                probability_distribution, num_samples=num_tokens_to_mask, replacement=False
+                weighted_probability_distribution, num_samples=num_tokens_to_mask, replacement=False
             )
+            #logger.info(f"Indices to mask: {idx}")
 
             # generate masked versions
             masked_category = category.clone()
@@ -305,6 +343,10 @@ class EmbeddingDataset(Dataset):
         torch.Tensor: Embedding tensor with added Gaussian noise.
         """
         masked_features = embedding[idx].clone()
+        #logger.info(f"idx: {idx}")
+        #logger.info(f"masked_features: {masked_features}")
+        #logger.info(f"masked_feature.shape: {masked_features.shape}")   
+        #logger.info(f"masked_features[:,13:].size(): {masked_features[:,13:]}")
         noise = torch.normal(mean, std, size=masked_features[:, 13:].size())
         masked_features[:, 13:] += noise
         embedding[idx] = masked_features
@@ -366,8 +408,8 @@ class TransformerClassifier(nn.Module):
         # check if cuda is available 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # set the number of classes 
-        self.num_classes = num_classes   
+        # Set the number of classes
+        self.num_classes = num_classes
 
         # Embedding layers
         self.func_embedding = nn.Embedding(num_classes, 16).to(device)
@@ -743,7 +785,7 @@ class TransformerClassifierRelativeAttention(nn.Module):
         torch.Tensor: Output tensor.
         """
         x = x.float()
-        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:self.num_classes], x[:,:,self.num_classes:self.num_classes + 2], x[:,:,self.num_classes+2:self.num_classes+3], x[:,:,self.num_classes+3:]
+        func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:self.num_classes], x[:,:,self.num_classes:self.num_classes+2], x[:,:,self.num_classes+2:self.num_classes+3], x[:,:,self.num_classes+3:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
         strand_embeds = self.strand_embedding(strand_ids.float())  # Change to linear layer
         length_embeds = self.length_embedding(gene_length)
@@ -978,91 +1020,55 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         num_heads=4,
         num_layers=2,
         hidden_dim=512,
-        lstm_hidden_dim=512,  # Add lstm_hidden_dim parameter
+        lstm_hidden_dim=512,
         dropout=0.1,
-        max_len=1500,  # Add max_len parameter
+        max_len=1500,
         intialisation='random',
-        output_dim=None,  # Add output_dim parameter
-        use_lstm=False,  # Add use_lstm parameter
-        positional_encoding=fourier_positional_encoding,  # Use Fourier positional encoding
-        use_positional_encoding=True  # Add use_positional_encoding parameter
+        output_dim=None,
+        use_lstm=False,
+        positional_encoding=fourier_positional_encoding,
+        use_positional_encoding=True
     ):
-        """
-        Initialize the Transformer Classifier with Circular Relative Attention.
-
-        Parameters:
-        input_dim (int): Input dimension size.
-        num_classes (int): Number of output classes.
-        num_heads (int): Number of attention heads.
-        num_layers (int): Number of transformer layers.
-        hidden_dim (int): Hidden dimension size.
-        lstm_hidden_dim (int): Hidden dimension size for the LSTM layer.
-        dropout (float): Dropout rate.
-        max_len (int): Maximum sequence length.
-        intialisation (str): Initialization method for positional encoding ('random' or 'zero').
-        """
         super(TransformerClassifierCircularRelativeAttention, self).__init__()
 
-        # Check if CUDA is available
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Set the number of classes
         self.num_classes = num_classes
 
-        # try adding some embedding layers 
+        # Embedding layers
         self.func_embedding = nn.Embedding(self.num_classes, 16).to(device)
-        self.strand_embedding = nn.Linear(2, 4).to(device)  # Change to linear layer
-        self.length_embedding = nn.Linear(1,8).to(device) # linear embedding for the protein embedding
-
-        # linear embedding for the protein embedding
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim -28).to(device)  # Use input_dim
+        self.strand_embedding = nn.Linear(2, 4).to(device)
+        self.length_embedding = nn.Linear(1, 8).to(device)
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)
 
         self.dropout = nn.Dropout(dropout).to(device)
-        self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device)
-        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
+        self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device) if use_positional_encoding else None
+        self.output_dim = output_dim if output_dim else num_classes
+
         if use_lstm:
-            self.lstm = nn.LSTM(
-                hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True  # Use lstm_hidden_dim
-            ).to(device)
-            self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)  # Use lstm_hidden_dim
-            d_model = lstm_hidden_dim * 2  # Use lstm_hidden_dim
+            self.lstm = nn.LSTM(hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True).to(device)
+            self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)
+            d_model = lstm_hidden_dim * 2
         else:
-            self.lstm = None  # Ensure lstm attribute exists
-            self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)  # Use hidden_dim directly
-            d_model = hidden_dim  # Use hidden_dim directly
+            self.lstm = None
+            self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)
+            d_model = hidden_dim
 
         encoder_layers = CircularTransformerEncoderLayer(
-            d_model=d_model,  # Use d_model
+            d_model=d_model,
             num_heads=num_heads,
             dropout=dropout,
             max_len=max_len,
             initialisation=intialisation
         )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layers, num_layers=num_layers
-        ).to(device)
-        if use_positional_encoding:
-            self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device)
-        else:
-            self.positional_encoding = None
-
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers).to(device)
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False, save_lstm_output=False, save_transformer_output=False):
-        """
-        Forward pass of the model.
-
-        Parameters:
-        x (torch.Tensor): Input tensor.
-        src_key_padding_mask (torch.Tensor, optional): Mask tensor for padding.
-        return_attn_weights (bool, optional): If True, return attention weights.
-
-        Returns:
-        torch.Tensor: Output tensor.
-        """
         x = x.float()
         func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:self.num_classes], x[:,:,self.num_classes:self.num_classes+2], x[:,:,self.num_classes+2:self.num_classes+3], x[:,:,self.num_classes+3:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
-        strand_embeds = self.strand_embedding(strand_ids.float())  # Change to linear layer
+        strand_embeds = self.strand_embedding(strand_ids.float())
         length_embeds = self.length_embedding(gene_length)
         protein_embeds = self.embedding_layer(protein_embeds)
 
@@ -1080,7 +1086,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
             for layer in self.transformer_encoder.layers[1:]:
                 x = layer(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
-            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+            if self.output_dim != 9:
                 x = F.softmax(x, dim=-1)
             if save_transformer_output:
                 self.saved_transformer_output = x.clone().detach().cpu().numpy()
@@ -1088,7 +1094,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         else:
             x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
-            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+            if self.output_dim != 9:
                 x = F.softmax(x, dim=-1)
             if save_transformer_output:
                 self.saved_transformer_output = x.clone().detach().cpu().numpy()
@@ -1334,7 +1340,8 @@ def train(
     save_path="model",
     device="cuda",
     checkpoint_interval=1, 
-    lambda_penalty=0.1
+    lambda_penalty=0.1,
+    num_classes=9  # Add num_classes parameter
 ):
     """
     Train the model.
@@ -1350,9 +1357,7 @@ def train(
     device (str, optional): Device to train on ('cuda' or 'cpu').
     checkpoint_interval (int, optional): Interval for saving checkpoints.
     lambda_penalty (float, optional): Penalty for diagonal attention.
-
-    Returns:
-    None
+    num_classes (int, optional): Number of classes.
     """
     logger.info("Training on " + str(device)) 
     model.to(device)
@@ -1399,9 +1404,11 @@ def train(
         total_loss = 0
         total_correct = 0
         total_samples = 0
+        class_counts = torch.zeros(num_classes, device=device)
+        predicted_counts = torch.zeros(num_classes, device=device)
   
         logger.info(f"Starting epoch {epoch + 1}/{epochs}")
-        for embeddings, categories, masks, idx in train_dataloader:
+        for embeddings, categories, masks, idx in tqdm(train_dataloader, desc=f"Training Epoch {epoch + 1}/{epochs}"):
             embeddings, categories, masks = (
                 embeddings.to(device).float(),
                 categories.to(device).long(),
@@ -1414,7 +1421,7 @@ def train(
             src_key_padding_mask = (masks != -2).bool().to(device) 
 
             # Forward pass
-            with autocast():
+            with torch.amp.autocast('cuda'):
                 outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
                 loss, _ = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty) 
                 accuracy = calculate_accuracy(outputs, categories, masks, idx)
@@ -1428,6 +1435,17 @@ def train(
             total_loss += loss.item()
             total_correct += accuracy * len(idx)
             total_samples += len(idx)
+
+            # Update class counts 
+            #logger.info('Calculating class counts')
+            #all_categories = torch.cat([categories[e][i].view(-1) for e, i in enumerate(idx)])
+            #all_predictions = torch.cat([outputs.argmax(dim=-1)[e][i].view(-1) for e, i in enumerate(idx)])
+            #class_counts += torch.bincount(all_categories, minlength=num_classes)
+            #predicted_counts += torch.bincount(all_predictions, minlength=num_classes)
+
+        # Log class counts
+        #logger.info(f"Epoch {epoch + 1}/{epochs}, Class Counts: {class_counts.cpu().numpy()}")
+        #logger.info(f"Epoch {epoch + 1}/{epochs}, Predicted Counts: {predicted_counts.cpu().numpy()}")
 
         # Calculate average training loss and accuracy for the epoch
         avg_train_loss = total_loss / len(train_dataloader)
@@ -1452,7 +1470,9 @@ def train(
         final_validation_categories = []  # List to store categories for each validation instance
 
         with torch.no_grad(): # No need to calculate gradients for validation
-            for embeddings, categories, masks, idx in test_dataloader:
+            class_counts = torch.zeros(num_classes, device=device)
+            predicted_counts = torch.zeros(num_classes, device=device)
+            for embeddings, categories, masks, idx in tqdm(test_dataloader, desc=f"Validation Epoch {epoch + 1}/{epochs}"):
                 embeddings, categories, masks = (
                     embeddings.to(device).float(),
                     categories.to(device).long(),
@@ -1463,7 +1483,7 @@ def train(
                 src_key_padding_mask = (masks != -2).bool().to(device)  
                 
                 # Forward pass
-                with autocast():
+                with torch.amp.autocast('cuda'):
                     outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
                     val_loss, val_classification_loss = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty)
                     accuracy = calculate_accuracy(outputs, categories, masks, idx)
@@ -1484,6 +1504,16 @@ def train(
                     final_validation_attention.append(attn_weights.cpu().detach().numpy())
                     final_validation_categories.append(categories.cpu().detach().numpy())  # Store categories
                     final_validation_masks.append(masks.cpu().detach().numpy())  # Store masks
+
+                # Update class counts
+                #all_categories = torch.cat([categories[e][i].view(-1) for e, i in enumerate(idx)])
+                #all_predictions = torch.cat([outputs.argmax(dim=-1)[e][i].view(-1) for e, i in enumerate(idx)])
+                #class_counts += torch.bincount(all_categories, minlength=num_classes)
+                #predicted_counts += torch.bincount(all_predictions, minlength=num_classes)
+
+            # Log class counts
+            #logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Class Counts: {class_counts.cpu().numpy()}")
+            #logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Predicted Counts: {predicted_counts.cpu().numpy()}")
 
         # Calculate average validation loss and accuracy
         avg_val_loss = total_val_loss / len(test_dataloader)
@@ -1643,7 +1673,7 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
         try:
             fold_logger.info("Initializing model")
             input_dim = dataset[0][0].shape[1]
-            num_classes = 9
+            num_classes = 9 # TODO FIX THIS hardcoded value
             fold_logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}, output_dim={output_dim}")  # Log input_dim, num_classes, and output_dim
             if (attention == "circular"):
                 kfold_transformer_model = TransformerClassifierCircularRelativeAttention(
@@ -1712,7 +1742,8 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             save_path=output_dir,
             device=device,
             checkpoint_interval=checkpoint_interval,
-            lambda_penalty=lambda_penalty
+            lambda_penalty=lambda_penalty,
+            num_classes=num_classes  # Pass num_classes
         )
 
         fold_logger.info(f"FOLD: {fold} - Training completed")
