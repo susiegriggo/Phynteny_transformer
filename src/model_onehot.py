@@ -55,6 +55,7 @@ class EmbeddingDataset(Dataset):
             self.noise_std = noise_std  # Add noise_std attribute
             self.class_weights = self.calculate_class_weights()
             logger.info(f"Computed class weights: {self.class_weights}")
+            self.masked_category_counts = torch.zeros(num_classes)  # Add masked_category_counts attribute
         except Exception as e:
             logger.error(f"Error initializing EmbeddingDataset: {e}")
             raise
@@ -110,6 +111,7 @@ class EmbeddingDataset(Dataset):
             # select a random category to mask if training
             if self.training:
                 masked_category, idx = self.category_mask(category, mask)
+                self.update_masked_category_counts(category, idx)  # Update masked category counts
                 if self.shuffle_features:
                     embedding = self.shuffle_masked_features(embedding, idx)  # Shuffle only masked features
                 if self.noise_std > 0:
@@ -179,25 +181,14 @@ class EmbeddingDataset(Dataset):
                 logger.error(f"NaN or infinite values found in mask tensor at index: {idx}")
 
             # Define a probability distribution over maskable tokens
-            probability_distribution = mask.float() / mask.sum()
+            probability_distribution = mask.float() * self.mask_portion
 
-            # Calculate the number of tokens to mask based on input length
-            num_maskable_tokens = mask.sum().item()  # Count of maskable tokens
-            num_tokens_to_mask = max(
-                1, int(self.mask_portion * num_maskable_tokens)
-            )  # Ensure at least 1 token is masked
-            #logger.info(f"Number of tokens to mask: {num_tokens_to_mask}")
-
-            # Validate inputs before sampling
-            if num_tokens_to_mask > probability_distribution.size(-1):
-                logger.error(f"Cannot sample {num_tokens_to_mask} tokens from a distribution of size {probability_distribution.size(-1)}")
-                raise ValueError(f"Cannot sample {num_tokens_to_mask} tokens from a distribution of size {probability_distribution.size(-1)}")
-
-            # Sample tokens to mask
+            # Mutily the probability distribution by the class weights
             class_weights = self.class_weights
-            weighted_probability_distribution = probability_distribution * class_weights[category]  # Fix method call
-            weighted_probability_distribution /= weighted_probability_distribution.sum() # normalize the weights
-
+            expected_class_weights = torch.ones_like(class_weights) / len(class_weights)
+            scale_class_weights = class_weights / expected_class_weights
+            weighted_probability_distribution = probability_distribution * scale_class_weights[category]  # Fix method call
+    
             # Check for invalid values in the weighted probability distribution
             if torch.isnan(weighted_probability_distribution).any() or torch.isinf(weighted_probability_distribution).any() or (weighted_probability_distribution < 0).any():
                 logger.info(f"Weighted probability distribution: {weighted_probability_distribution}")
@@ -207,12 +198,10 @@ class EmbeddingDataset(Dataset):
                 logger.error(f"Invalid values found in weighted probability distribution: {weighted_probability_distribution}")
                 raise ValueError("Weighted probability distribution contains invalid values")
 
-            # sample the indices to mask
-            idx = torch.multinomial(
-                weighted_probability_distribution, num_samples=num_tokens_to_mask, replacement=False
-            )
-            #logger.info(f"Indices to mask: {idx}")
-
+            # Use a Bernoulli distribution to sample the indices to mask
+            rand_vals = torch.rand_like(weighted_probability_distribution)
+            idx = torch.nonzero(rand_vals < weighted_probability_distribution, as_tuple=True)[0]
+            
             # generate masked versions
             masked_category = category.clone()
             masked_category[idx] = self.mask_token
@@ -352,6 +341,19 @@ class EmbeddingDataset(Dataset):
         embedding[idx] = masked_features
 
         return embedding
+
+    def update_masked_category_counts(self, category, idx):
+        """
+        Update the counts of masked categories.
+
+        Parameters:
+        category (torch.Tensor): Original category tensor.
+        idx (torch.Tensor): Indices of masked features.
+        """
+        for index in idx:
+            cat = category[index].item()
+            if cat != self.mask_token:
+                self.masked_category_counts[cat] += 1
 
 def fourier_positional_encoding(seq_len, d_model, device):
     """
@@ -1404,9 +1406,8 @@ def train(
         total_loss = 0
         total_correct = 0
         total_samples = 0
-        class_counts = torch.zeros(num_classes, device=device)
-        predicted_counts = torch.zeros(num_classes, device=device)
-  
+        masked_category_counts = torch.zeros(num_classes, device=device)  # Initialize masked category counts
+
         logger.info(f"Starting epoch {epoch + 1}/{epochs}")
         for embeddings, categories, masks, idx in tqdm(train_dataloader, desc=f"Training Epoch {epoch + 1}/{epochs}"):
             embeddings, categories, masks = (
@@ -1436,16 +1437,10 @@ def train(
             total_correct += accuracy * len(idx)
             total_samples += len(idx)
 
-            # Update class counts 
-            #logger.info('Calculating class counts')
-            #all_categories = torch.cat([categories[e][i].view(-1) for e, i in enumerate(idx)])
-            #all_predictions = torch.cat([outputs.argmax(dim=-1)[e][i].view(-1) for e, i in enumerate(idx)])
-            #class_counts += torch.bincount(all_categories, minlength=num_classes)
-            #predicted_counts += torch.bincount(all_predictions, minlength=num_classes)
-
-        # Log class counts
-        #logger.info(f"Epoch {epoch + 1}/{epochs}, Class Counts: {class_counts.cpu().numpy()}")
-        #logger.info(f"Epoch {epoch + 1}/{epochs}, Predicted Counts: {predicted_counts.cpu().numpy()}")
+            # Update masked category counts
+            masked_category_counts += train_dataloader.dataset.masked_category_counts.to(device)
+            #logger.info(f"Masked Category Counts - prior: {masked_category_counts.cpu().numpy()}")
+            train_dataloader.dataset.masked_category_counts.zero_()  # Reset counts after each batch
 
         # Calculate average training loss and accuracy for the epoch
         avg_train_loss = total_loss / len(train_dataloader)
@@ -1453,8 +1448,9 @@ def train(
         train_losses.append(avg_train_loss)
         train_accuracies.append(avg_train_accuracy)
 
-        # Log training loss and accuracy
+        # Log training loss, accuracy, and masked category counts
         logger.info(f"Epoch {epoch + 1}/{epochs}, Training Loss: {avg_train_loss}, Training Accuracy: {avg_train_accuracy}")
+        logger.info(f"Epoch {epoch + 1}/{epochs}, Masked Category Counts: {masked_category_counts.cpu().numpy()}")
 
         # Clear cache after training epoch
         gc.collect()
@@ -1470,8 +1466,6 @@ def train(
         final_validation_categories = []  # List to store categories for each validation instance
 
         with torch.no_grad(): # No need to calculate gradients for validation
-            class_counts = torch.zeros(num_classes, device=device)
-            predicted_counts = torch.zeros(num_classes, device=device)
             for embeddings, categories, masks, idx in tqdm(test_dataloader, desc=f"Validation Epoch {epoch + 1}/{epochs}"):
                 embeddings, categories, masks = (
                     embeddings.to(device).float(),
@@ -1504,16 +1498,6 @@ def train(
                     final_validation_attention.append(attn_weights.cpu().detach().numpy())
                     final_validation_categories.append(categories.cpu().detach().numpy())  # Store categories
                     final_validation_masks.append(masks.cpu().detach().numpy())  # Store masks
-
-                # Update class counts
-                #all_categories = torch.cat([categories[e][i].view(-1) for e, i in enumerate(idx)])
-                #all_predictions = torch.cat([outputs.argmax(dim=-1)[e][i].view(-1) for e, i in enumerate(idx)])
-                #class_counts += torch.bincount(all_categories, minlength=num_classes)
-                #predicted_counts += torch.bincount(all_predictions, minlength=num_classes)
-
-            # Log class counts
-            #logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Class Counts: {class_counts.cpu().numpy()}")
-            #logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Predicted Counts: {predicted_counts.cpu().numpy()}")
 
         # Calculate average validation loss and accuracy
         avg_val_loss = total_val_loss / len(test_dataloader)
