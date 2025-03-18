@@ -394,7 +394,7 @@ class TransformerClassifier(nn.Module):
         Initialize the Transformer Classifier.
 
         Parameters:
-        input_dim (int): Input dimension size.
+        input_dim (int): Input dimension size of the ESM2 embeddings
         num_classes (int): Number of output classes.
         num_heads (int): Number of attention heads.
         num_layers (int): Number of transformer layers.
@@ -735,11 +735,11 @@ class TransformerClassifierRelativeAttention(nn.Module):
         # Check if CUDA is available
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # set the number of classes
+        # Set the number of classes
         self.num_classes = num_classes
 
         # Embedding layers
-        self.func_embedding = nn.Embedding(num_classes, 16).to(device)
+        self.func_embedding = nn.Embedding(self.num_classes, 16).to(device)
         self.strand_embedding = nn.Linear(2, 4).to(device)  # Change to linear layer
         self.length_embedding = nn.Linear(1, 8).to(device)
         self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)  # Use input_dim
