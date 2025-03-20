@@ -678,6 +678,13 @@ def read_annotations_information():
     )
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
 
+    # manually add additional categories that may be found with phold 
+    category_dict['vfdb'] = 'moron, auxiliary metabolic gene and host takeover'
+    category_dict['netflax'] = 'moron, auxiliary metabolic gene and host takeover'
+    category_dict['acr'] = 'moron, auxiliary metabolic gene and host takeover'
+    category_dict['card'] = 'moron, auxiliary metabolic gene and host takeover'
+    category_dict['defensefinder'] = 'moron, auxiliary metabolic gene and host takeover'
+
     phrog_integer = pickle.load(
         open(
             "phynteny_utils/integer_category.pkl", #TODO change this to a path

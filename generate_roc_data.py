@@ -83,7 +83,9 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, 
         logger.info(f"Number of batches {len(validation_loader)}")
         batch_count = 0
 
-    
+        # Initialize a dictionary to count predictions for each category
+        category_counts = {i: 0 for i in range(num_classes)}
+
         for embeddings, categories, masks, idx in validation_loader:
             
             batch_size = embeddings.shape[0]
@@ -102,10 +104,19 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, 
             for i in range(batch_size):
                 all_probs.extend(probs[i][idx[i]].tolist())
                 all_categories.extend(categories[i][idx[i]].tolist())
+                # Update category counts
+                logger.info(f"categories[i]: {categories[i]}")
+                logger.info(f"idx[i]: {idx[i]}")
+                logger.info(f"categories[i][idx[i]]: {categories[i][idx[i]]}")
+                for cat in categories[i][idx[i]].tolist():
+                    category_counts[cat] += 1
 
             batch_count += 1
             if batch_count % 100 == 0:
                 logger.info(f"...processing batch {batch_count}")
+
+        # Log the number of predictions made for each category
+        logger.info(f"Category counts: {category_counts}")
 
         all_probs = np.array(all_probs)
         all_categories = np.array(all_categories)

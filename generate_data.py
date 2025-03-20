@@ -140,6 +140,12 @@ def main(
         sep="\t",
     )
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
+    category_dict['vfdb'] = 'moron, auxiliary metabolic gene and host takeover'
+    category_dict['netflax'] = 'moron, auxiliary metabolic gene and host takeover'
+    category_dict['acr'] = 'moron, auxiliary metabolic gene and host takeover'
+    category_dict['card'] = 'moron, auxiliary metabolic gene and host takeover'
+    category_dict['defensefinder'] = 'moron, auxiliary metabolic gene and host takeover'
+
 
     # read in integer encoding of the categories - #TODO try to automate this weird step
     phrog_integer = pickle.load(
