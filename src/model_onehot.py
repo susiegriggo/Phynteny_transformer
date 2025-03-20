@@ -31,7 +31,7 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 class EmbeddingDataset(Dataset):
-    def __init__(self, embeddings, categories, labels, num_classes = 9, mask_token=-1, mask_portion=0.15, shuffle_features=False, zero_idx=False, noise_std=0):
+    def __init__(self, embeddings, categories, labels, num_classes = 9, mask_token=-1, mask_portion=0.15, shuffle_features=False, zero_idx=False, strand_gene_length=True, noise_std=0):
         """
         Initialize the dataset with embeddings, categories, and labels.
 
@@ -52,8 +52,9 @@ class EmbeddingDataset(Dataset):
             self.num_classes = num_classes # hard coded in for now
             self.mask_portion = mask_portion
             self.shuffle_features = shuffle_features  # Add shuffle_features attribute
-            self.zero_idx = zero_idx # if True send the embeddings of the masked tokens to zeros  
+            self.zero_idx = zero_idx  # Add zero_idx attribute
             self.noise_std = noise_std  # Add noise_std attribute
+            self.strand_gene_length = strand_gene_length  # Add strand_gene_length attribute
             self.class_weights = self.calculate_class_weights()
             logger.info(f"Computed class weights: {self.class_weights}")
             self.masked_category_counts = torch.zeros(num_classes)  # Add masked_category_counts attribute
@@ -119,6 +120,8 @@ class EmbeddingDataset(Dataset):
                     embedding = self.add_gaussian_noise(embedding, idx, std=self.noise_std)  # Add Gaussian noise to masked features
                 if self.zero_idx:
                     embedding = self.set_zero_idx(embedding, idx)  # Set the embeddings of the masked tokens to zeros
+                if not self.strand_gene_length:
+                    embedding = self.ignore_strand_gene_length(embedding, idx)  # Ignore strand and gene length features
             elif self.validation:
                 masked_category, idx = self.validation_mask(category, i)
             else:
@@ -344,16 +347,8 @@ class EmbeddingDataset(Dataset):
         torch.Tensor: Embedding tensor with added Gaussian noise.
         """
         masked_features = embedding[idx].clone()
-        #logger.info(f'masked_features shape: {masked_features.shape}')   
-        #logger.info(f"idx: {idx}")
-        #logger.info(f"masked_features: {masked_features}")
-        #logger.info(f"masked_feature.shape: {masked_features.shape}")   
-        #logger.info(f"masked_features[:,13:].size(): {masked_features[:,13:]}")
         noise = torch.normal(mean, std, size=masked_features[:, 3:].size())
         masked_features[:, 3:] += noise # is this the correct size if the embeddings haven't been added on yet 
-        #logger.info(f'masked_features: {masked_features}')
-        #logger.info(f'masked_features[:, 3:]: {masked_features[:, 3:]}')
-        #logger.info(f'masked_features[:, 13:]: {masked_features[:, 13:]}')
         embedding[idx] = masked_features
 
         return embedding
@@ -369,9 +364,27 @@ class EmbeddingDataset(Dataset):
         Returns:
         torch.Tensor: Embedding tensor with masked tokens set to zeros.
         """
-        masked_features = embedding[idx].clone()
+        new_features = embedding[idx].clone()
+        new_features = torch.zeros_like(new_features)
+        embedding[idx] = new_features
+        print(embedding[idx])
 
-        masked_features
+        return embedding
+    
+    def ignore_strand_gene_length(self, embedding, idx):
+        """
+        Ignore the strand and gene length features in the embedding.
+
+        Parameters:
+        embedding (torch.Tensor): Embedding tensor to modify.
+
+        Returns:
+        torch.Tensor: Embedding tensor with strand and gene length features ignored.
+        """
+        new_features = embedding[idx].clone()
+        new_features[:, :3] = torch.zeros_like(new_features[:, :3])
+        embedding[idx] = new_features
+
         return embedding
 
     def update_masked_category_counts(self, category, idx):
@@ -1375,7 +1388,9 @@ def train(
     device="cuda",
     checkpoint_interval=1, 
     lambda_penalty=0.1,
-    num_classes=9  # Add num_classes parameter
+    num_classes=9,  # Add num_classes parameter
+    zero_idx=False,  # Add zero_idx parameter
+    strand_gene_length=True  # Add strand_gene_length parameter
 ):
     """
     Train the model.
@@ -1615,7 +1630,7 @@ def train(
     gc.collect()
     torch.cuda.empty_cache()
 
-def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding=fourier_positional_encoding, use_positional_encoding=True, noise_std=0.0):
+def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding=fourier_positional_encoding, use_positional_encoding=True, noise_std=0.0, zero_idx=False, strand_gene_length=True):
     fold_logger = None
     try:
         device = torch.device(device_id)
@@ -1759,7 +1774,9 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             device=device,
             checkpoint_interval=checkpoint_interval,
             lambda_penalty=lambda_penalty,
-            num_classes=num_classes  # Pass num_classes
+            num_classes=num_classes,  # Pass num_classes
+            zero_idx=zero_idx,  # Pass zero_idx
+            strand_gene_length=strand_gene_length  # Pass strand_gene_length
         )
 
         fold_logger.info(f"FOLD: {fold} - Training completed")
@@ -1800,7 +1817,9 @@ def train_crossValidation(
     use_lstm=False,  # Add use_lstm parameter
     positional_encoding=fourier_positional_encoding,  # Use Fourier positional encoding
     use_positional_encoding=True,  # Add use_positional_encoding parameter
-    noise_std=0.0  # Add noise_std parameter
+    noise_std=0.0,  # Add noise_std parameter
+    zero_idx=False,  # Add zero_idx parameter
+    strand_gene_length=True  # Add strand_gene_length parameter
 ):
     """
     Train the model using K-Fold cross-validation.
@@ -1833,7 +1852,7 @@ def train_crossValidation(
     logger.add(save_path + "trainer.log", level="DEBUG")
 
     # Log the parameters being used to train the model
-    logger.info(f"Training parameters: attention={attention}, n_splits={n_splits}, batch_size={batch_size}, epochs={epochs}, lr={lr}, min_lr_ratio={min_lr_ratio}, save_path={save_path}, num_heads={num_heads}, hidden_dim={hidden_dim}, device={device}, dropout={dropout}, checkpoint_interval={checkpoint_interval}, intialisation={intialisation},lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, output_dim={output_dim}, positional_encoding={positional_encoding}, use_positional_encoding={use_positional_encoding}, noise_std={noise_std}")
+    logger.info(f"Training parameters: attention={attention}, n_splits={n_splits}, batch_size={batch_size}, epochs={epochs}, lr={lr}, min_lr_ratio={min_lr_ratio}, save_path={save_path}, num_heads={num_heads}, hidden_dim={hidden_dim}, device={device}, dropout={dropout}, checkpoint_interval={checkpoint_interval}, intialisation={intialisation},lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, output_dim={output_dim}, positional_encoding={positional_encoding}, use_positional_encoding={use_positional_encoding}, noise_std={noise_std}, zero_idx={zero_idx}, strand_gene_length={strand_gene_length}")
 
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_seed)
     fold = 1
@@ -1850,7 +1869,7 @@ def train_crossValidation(
             if fold == single_fold:
                 # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device}")
-                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, noise_std)
+                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, noise_std, zero_idx, strand_gene_length)
                 break
     else:
         if parallel_kfolds:
@@ -1863,7 +1882,7 @@ def train_crossValidation(
             for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
                 device_id = (fold - 1) % num_gpus
                 logger.info(f"Training fold {fold} on device {device_id}")
-                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, noise_std))
+                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, noise_std, zero_idx, strand_gene_length))
                 p.start()
                 processes.append(p)
 
@@ -1887,7 +1906,7 @@ def train_crossValidation(
                 device_id = (fold - 1) % num_gpus
                 # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device_id}")
-                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, noise_std)
+                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, noise_std, zero_idx, strand_gene_length)
 
             # Clear cache after all folds finish
             gc.collect()
