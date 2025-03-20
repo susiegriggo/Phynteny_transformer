@@ -31,7 +31,7 @@ torch.multiprocessing.set_sharing_strategy('file_system')
 
 
 class EmbeddingDataset(Dataset):
-    def __init__(self, embeddings, categories, labels, num_classes = 9, mask_token=-1, mask_portion=0.15, shuffle_features=False, noise_std=0):
+    def __init__(self, embeddings, categories, labels, num_classes = 9, mask_token=-1, mask_portion=0.15, shuffle_features=False, zero_idx=False, noise_std=0):
         """
         Initialize the dataset with embeddings, categories, and labels.
 
@@ -52,6 +52,7 @@ class EmbeddingDataset(Dataset):
             self.num_classes = num_classes # hard coded in for now
             self.mask_portion = mask_portion
             self.shuffle_features = shuffle_features  # Add shuffle_features attribute
+            self.zero_idx = zero_idx # if True send the embeddings of the masked tokens to zeros  
             self.noise_std = noise_std  # Add noise_std attribute
             self.class_weights = self.calculate_class_weights()
             logger.info(f"Computed class weights: {self.class_weights}")
@@ -116,6 +117,8 @@ class EmbeddingDataset(Dataset):
                     embedding = self.shuffle_masked_features(embedding, idx)  # Shuffle only masked features
                 if self.noise_std > 0:
                     embedding = self.add_gaussian_noise(embedding, idx, std=self.noise_std)  # Add Gaussian noise to masked features
+                if self.zero_idx:
+                    embedding = self.set_zero_idx(embedding, idx)  # Set the embeddings of the masked tokens to zeros
             elif self.validation:
                 masked_category, idx = self.validation_mask(category, i)
             else:
@@ -223,10 +226,17 @@ class EmbeddingDataset(Dataset):
         
         # the idx will be the idx that are different between the validation categories and the predicted categories
         idx = (category != self.predict_categories[ii]).nonzero(as_tuple=True)[0]
+        #logger.info(f'validation mask: category: {category}')
+        #logger.info(f'validation mask: predict_categories: {self.predict_categories[ii]}')
+        #logger.info(f'validation mask: idx: {idx}')
 
         # generate masked versions
         masked_category = category.clone()
         masked_category[idx] = self.mask_token
+
+        # check there are no unknowns in idx 
+        if self.mask_token in category[idx]:
+            raise ValueError("Mask token found in validation mask")
 
         return masked_category, idx 
 
@@ -241,6 +251,8 @@ class EmbeddingDataset(Dataset):
         self.embeddings = list(self.embeddings)
         self.categories = list(self.categories)
         self.labels = list(self.labels)
+
+   
 
     def custom_one_hot_encode(self, data):
         """
@@ -332,14 +344,34 @@ class EmbeddingDataset(Dataset):
         torch.Tensor: Embedding tensor with added Gaussian noise.
         """
         masked_features = embedding[idx].clone()
+        #logger.info(f'masked_features shape: {masked_features.shape}')   
         #logger.info(f"idx: {idx}")
         #logger.info(f"masked_features: {masked_features}")
         #logger.info(f"masked_feature.shape: {masked_features.shape}")   
         #logger.info(f"masked_features[:,13:].size(): {masked_features[:,13:]}")
-        noise = torch.normal(mean, std, size=masked_features[:, 13:].size())
-        masked_features[:, 13:] += noise
+        noise = torch.normal(mean, std, size=masked_features[:, 3:].size())
+        masked_features[:, 3:] += noise # is this the correct size if the embeddings haven't been added on yet 
+        #logger.info(f'masked_features: {masked_features}')
+        #logger.info(f'masked_features[:, 3:]: {masked_features[:, 3:]}')
+        #logger.info(f'masked_features[:, 13:]: {masked_features[:, 13:]}')
         embedding[idx] = masked_features
 
+        return embedding
+    
+    def set_zero_idx(self, embedding, idx):
+        """
+        Set the embeddings of the masked tokens to zeros.
+
+        Parameters:
+        embedding (torch.Tensor): Embedding tensor to modify.
+        idx (torch.Tensor): Indices of masked features.
+
+        Returns:
+        torch.Tensor: Embedding tensor with masked tokens set to zeros.
+        """
+        masked_features = embedding[idx].clone()
+
+        masked_features
         return embedding
 
     def update_masked_category_counts(self, category, idx):

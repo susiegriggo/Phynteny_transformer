@@ -60,6 +60,7 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     
     embeddings, categories, validation_categories, phrog_integer = load_data(embeddings_path, categories_path, validation_categories_path, integer_category_path)
     p = create_predictor(model_directory, device)
+    logger.info(f'predicor models: {p.models}')
     logger.info("Creating the dataset and dataloader.")
     conf_dataset_loader = create_dataloader(embeddings, categories, validation_categories, batch_size)
     logger.info("Processing batches.")
@@ -160,16 +161,25 @@ def process_batches(p, conf_dataset_loader):
         masks = masks.to(p.device)
         src_key_padding_mask = (masks != -2).to(p.device)
         
+
         phynteny_scores = p.predict_batch(embeddings, src_key_padding_mask)
 
         batch_size = len(idx)
+        logger.info(f"Processing batch {batches + 1}/{total_batches}, batch size: {batch_size}")
 
         for m in range(batch_size):
-            scores_at_idx = torch.tensor(phynteny_scores[m][idx[m]]).to(p.device)
-            if len(scores_at_idx.shape) == 1:
-                scores_at_idx = scores_at_idx.reshape(1, -1)
-            all_probs.append(scores_at_idx.cpu().numpy())
-            all_categories.append(categories[m][idx[m]].cpu())
+
+            try:
+                scores_at_idx = torch.tensor(phynteny_scores[m][idx[m]]).to(p.device)
+                if len(scores_at_idx.shape) == 1:
+                    scores_at_idx = scores_at_idx.reshape(1, -1)
+                all_probs.append(scores_at_idx.cpu().numpy())
+                all_categories.append(categories[m][idx[m]].cpu())
+            except KeyError as e:
+                logger.error(f"KeyError: {e} - phynteny_scores[{m}] or idx[{m}] might be invalid.")
+                logger.error(f"phynteny_scores[{m}]: {phynteny_scores[m]}")
+                logger.error(f"idx[{m}]: {idx[m]}")
+                raise e
 
         batches += 1
         if batches % 10 == 0:
