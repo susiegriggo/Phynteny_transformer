@@ -65,6 +65,8 @@ __status__ = "development"
 
 @click.version_option(version=__version__)
 
+
+
 def main(infile, out, esm_model, models, force, prefix):
 
     start_time = time.time()
@@ -143,9 +145,13 @@ def main(infile, out, esm_model, models, force, prefix):
 
     logger.info("Writing predictions to genbank file")
     genbank_file = out + "/phynteny.gbk"
-
+    annotated_genes_count = format_data.save_genbank(gb_dict, genbank_file, predictions, scores, confidence_scores)
+    
     logger.info("Generating table...")
     table_file = out + "/phynteny.tsv"
+    format_data.generate_table(table_file, gb_dict, category_dict, phrog_integer_category)
+    
+    logger.info(f"Number of genes annotated with confidence above 90%: {annotated_genes_count}")
     
     logger.info("Predictions completed")
     end_time = time.time()

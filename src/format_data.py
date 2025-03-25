@@ -788,3 +788,115 @@ def custom_one_hot_encode(data, num_classes=10):
             one_hot_row[value] = 1
             one_hot_encoded.append(one_hot_row)
     return np.array(one_hot_encoded)
+
+def save_genbank(gb_dict, genbank_file, predictions, scores, confidence_scores):
+    """
+    Save the predictions to a Genbank file.
+
+    :param gb_dict: Dictionary of Genbank records
+    :param genbank_file: Path to the output Genbank file
+    :param predictions: Dictionary of predictions
+    :param scores: Dictionary of scores
+    :param confidence_scores: Dictionary of confidence scores
+    """
+    with open(genbank_file, "w") as output_handle:
+        for k in gb_dict.keys():
+            # update the annotations 
+            cds = [i for i in gb_dict.get(k).features if i.type == "CDS"]
+            for i in range(len(cds)):
+                # only annotate genes that are not currently known 
+                if cds[i].qualifiers['phrog'] != "No_PHROG":
+                    cds[i].qualifiers["category"] = predictions[k][i]
+                    cds[i].qualifiers["phynteny confidence"] = confidence_scores[k][i]
+                    cds[i].qualifiers["phynteny score"] = scores[k][i]
+            SeqIO.write(gb_dict.get(k), output_handle, "genbank")
+            logger.info(f"Annotations updated for {k}")
+    output_handle.close()
+
+def generate_table(outfile, gb_dict, categories, phrog_integer):
+    """
+    Generate table summary of the annotations made.
+
+    :param outfile: Path to the output file
+    :param gb_dict: Dictionary of Genbank records
+    :param categories: Dictionary of categories
+    :param phrog_integer: Dictionary mapping phrog annotations to integers
+    """
+    # get the list of phages to loop through
+    keys = list(gb_dict.keys())
+
+    # count the number of genes found
+    found = 0
+
+    # convert annotations made to a text file
+    with click.open_file(outfile, "wt") if outfile != ".tsv" else sys.stdout as f:
+        f.write(
+            "ID\tstart\tend\tstrand\tphrog_id\tphrog_category\tphynteny_category\tphynteny_score\tconfidence\tphage\n"
+        )
+
+        for k in keys:
+            # obtain the sequence
+            seq = gb_dict.get(k).seq
+
+            # get the genes
+            cds = [f for f in gb_dict.get(k).features if f.type == "CDS"]
+
+            # extract the features for the cds
+            start = [c.location.start for c in cds]
+            end = [c.location.end for c in cds]
+            seq = [str(seq[start[i] : end[i]]) for i in range(len(cds))]
+
+            strand = [c.strand for c in cds]
+
+            # generate list of protein ids
+            ID = [
+                c.qualifiers.get("protein_id")[0]
+                if "protein_id" in c.qualifiers
+                else ""
+                for c in cds
+            ]
+
+            if len(ID) == 0:
+                ID = [
+                    c.qualifiers.get("ID")[0] if "ID" in c.qualifiers else ""
+                    for c in cds
+                ]
+
+            # lists to iterate through
+            phrog = []
+            phynteny_category = []
+            phynteny_score = []
+            phynteny_confidence = []
+
+            # extract details for genes
+            for c in cds:
+                if "phrog" in c.qualifiers.keys():
+                    phrog.append(c.qualifiers.get("phrog")[0])
+                else:
+                    phrog.append("No_PHROG")
+
+                if "phynteny" in c.qualifiers.keys():
+                    phynteny_category.append(c.qualifiers.get("phynteny"))
+                    phynteny_score.append(c.qualifiers.get("phynteny_score"))
+                    phynteny_confidence.append(c.qualifiers.get("phynteny_confidence"))
+
+                    # update the number of genes found
+                    if float(c.qualifiers.get("phynteny_confidence")) > 0.9:
+                        found += 1
+
+                else:
+                    phynteny_category.append(np.nan)
+                    phynteny_score.append(np.nan)
+                    phynteny_confidence.append(np.nan)
+
+            phrog = [int(p) if p not in ["No_PHROG", "vfdb", "acr", "card", "defensefinder"] else p for p in phrog]
+            known_category = [categories.get(phrog_integer.get(p)) for p in phrog]
+            known_category = [
+                "unknown function" if c == None else c for c in known_category
+            ]
+
+            # write to table
+            for i in range(len(cds)):
+                f.write(
+                    f"{ID[i]}\t{start[i]}\t{end[i]}\t{strand[i]}\t{phrog[i]}\t{known_category[i]}\t{phynteny_category[i]}\t{phynteny_score[i]}\t{phynteny_confidence[i]}\t{k}\n"
+                )
