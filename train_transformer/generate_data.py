@@ -136,7 +136,7 @@ def main(
     # read in information for the phrog annotations
     # read in annotation file
     phrogs = pd.read_csv(
-        "/scratch/pawsey1018/grig0076/GitHubs/Phynteny_transformer/phynteny_utils/phrog_annot_v4.tsv",
+        "/home/grig0076/GitHubs/Phynteny_transformer/phynteny_utils/phrog_annot_v4.tsv",
         sep="\t",
     )
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
@@ -146,11 +146,10 @@ def main(
     category_dict['card'] = 'moron, auxiliary metabolic gene and host takeover'
     category_dict['defensefinder'] = 'moron, auxiliary metabolic gene and host takeover'
 
-
     # read in integer encoding of the categories - #TODO try to automate this weird step
     phrog_integer = pickle.load(
         open(
-            "/scratch/pawsey1018/grig0076/GitHubs/Phynteny_transformer/phynteny_utils/integer_category.pkl",
+            "/home/grig0076/GitHubs/Phynteny_transformer/phynteny_utils/integer_category.pkl",
             "rb",
         )
     )
