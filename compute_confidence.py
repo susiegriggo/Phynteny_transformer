@@ -7,6 +7,7 @@ from src import predictor, model_onehot
 from loguru import logger
 import os
 from joblib import load
+import mmap
 
 # Parameters
 PARAMETERS = {
@@ -60,11 +61,11 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     
     embeddings, categories, validation_categories, phrog_integer = load_data(embeddings_path, categories_path, validation_categories_path, integer_category_path)
     p = create_predictor(model_directory, device)
-    logger.info(f'predicor models: {p.models}')
+    logger.info(f'Predictor models: {p.models}')
     logger.info("Creating the dataset and dataloader.")
     conf_dataset_loader = create_dataloader(embeddings, categories, validation_categories, batch_size)
     logger.info("Processing batches.")
-    all_probs, all_categories, all_labels = process_batches(p, conf_dataset_loader)
+    all_probs, all_categories, all_labels = process_batches(p, conf_dataset_loader, device)
     c_dict = compute_confidence_dict(all_categories, all_labels, all_probs, phrog_integer)
     save_confidence_dict(c_dict, output_path)
     logger.info("Finished the computation of confidence scores.")
@@ -81,7 +82,12 @@ def load_data(embeddings_path, categories_path, validation_categories_path, inte
     :return: Tuple of embeddings, categories, validation categories, and phrog integer dictionary
     """
     logger.info("Loading embeddings and categories.")
-    embeddings = load(embeddings_path)
+    
+    # Use memory mapping to load embeddings
+    with open(embeddings_path, 'rb') as f:
+        mmapped_file = mmap.mmap(f.fileno(), 0, access=mmap.ACCESS_READ)
+        embeddings = pickle.load(mmapped_file)
+    
     categories = load(categories_path)
     validation_categories = load(validation_categories_path)
     phrog_integer = load(integer_category_path)
@@ -121,7 +127,6 @@ def create_dataloader(embeddings, categories, validation_categories, batch_size=
     """
     logger.info("Creating the dataset and dataloader.")
     
-    
     # only include data that occurs in both sets 
     logger.info("Removing categories not in validation set.")
     include_keys = list(set(categories.keys()).intersection(set(validation_categories.keys())))
@@ -136,16 +141,17 @@ def create_dataloader(embeddings, categories, validation_categories, batch_size=
     # set the validation set
     logger.info("Setting the validation set.")
     conf_dataset.set_validation(list(validation_categories.values()))
-    conf_dataset_loader = DataLoader(conf_dataset, batch_size=batch_size, collate_fn=model_onehot.collate_fn)
+    conf_dataset_loader = DataLoader(conf_dataset, batch_size=batch_size, collate_fn=model_onehot.collate_fn, num_workers=4)  # Added num_workers for parallel data loading
     return conf_dataset_loader
 
 
-def process_batches(p, conf_dataset_loader):
+def process_batches(p, conf_dataset_loader, device):
     """
     Process batches to compute probabilities and categories.
 
     :param p: Predictor object
     :param conf_dataset_loader: DataLoader object for the dataset
+    :param device: Device to use for computation (cpu or cuda)
     :return: Tuple of all probabilities, all categories, and all labels
     """
     logger.info("Processing batches.")
@@ -157,20 +163,20 @@ def process_batches(p, conf_dataset_loader):
     logger.info(f"Total number of batches to process: {total_batches}")
 
     for embeddings, categories, masks, idx in conf_dataset_loader:
-        embeddings = embeddings.to(p.device)
-        masks = masks.to(p.device)
-        src_key_padding_mask = (masks != -2).to(p.device)
+        embeddings = embeddings.to(device)
+        masks = masks.to(device)
+        src_key_padding_mask = (masks != -2).to(device)
         
+        logger.info(f"Embeddings device: {embeddings.device}, Masks device: {masks.device}, src_key_padding_mask device: {src_key_padding_mask.device}")
 
         phynteny_scores = p.predict_batch(embeddings, src_key_padding_mask)
 
         batch_size = len(idx)
-        logger.info(f"Processing batch {batches + 1}/{total_batches}, batch size: {batch_size}")
+        #logger.info(f"Processing batch {batches + 1}/{total_batches}, batch size: {batch_size}")
 
         for m in range(batch_size):
-
             try:
-                scores_at_idx = torch.tensor(phynteny_scores[m][idx[m]]).to(p.device)
+                scores_at_idx = torch.tensor(phynteny_scores[m][idx[m]]).to(device)
                 if len(scores_at_idx.shape) == 1:
                     scores_at_idx = scores_at_idx.reshape(1, -1)
                 all_probs.append(scores_at_idx.cpu().numpy())
@@ -208,6 +214,9 @@ def compute_confidence_dict(all_categories, all_labels, all_probs, phrog_integer
     :return: Confidence dictionary
     """
     logger.info("Computing the confidence dictionary.")
+    logger.info(f"all_categories shape: {all_categories.shape}")
+    logger.info(f"all_labels shape: {all_labels.shape}")
+    logger.info(f"all_probs shape: {all_probs.shape}")
     bandwidth = np.arange(0, 5, 0.05)[1:]
     c_dict = predictor.build_confidence_dict(all_categories, all_labels, all_probs, bandwidth, phrog_integer)
     return c_dict

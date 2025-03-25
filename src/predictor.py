@@ -26,6 +26,9 @@ class Predictor:
         :return: Dictionary of predicted scores
         """
         self.models = [model.to(self.device) for model in self.models]
+        embeddings = embeddings.to(self.device)  # Move embeddings to device
+        src_key_padding_mask = src_key_padding_mask.to(self.device)  # Move mask to device
+
         for model in self.models:
             model.eval()
 
@@ -232,9 +235,9 @@ def build_confidence_dict(label, prediction, scores, bandwidth, categories):
     confidence_dict = dict()
 
     # loop through the categories
-    print("Computing kernel denisty for each category...")
+    print("Computing kernel density for each category...")
     for cat in range(0, 9):
-        print("processing " + str(cat))
+        print(f"Processing category {cat}")
 
         # fetch the true labels of the predictions of this category
         this_labels = label[prediction == cat]
@@ -245,6 +248,12 @@ def build_confidence_dict(label, prediction, scores, bandwidth, categories):
         # separate false positives and true positives
         TP_scores = this_scores[this_labels == cat]
         FP_scores = this_scores[this_labels != cat]
+
+        print(f"Category {cat}: TP_scores shape: {TP_scores.shape}, FP_scores shape: {FP_scores.shape}")
+
+        if TP_scores.shape[0] == 0 or FP_scores.shape[0] == 0:
+            print(f"Skipping category {cat} due to insufficient data.")
+            continue
 
         # loop through potential bandwidths
         for b in bandwidth:
