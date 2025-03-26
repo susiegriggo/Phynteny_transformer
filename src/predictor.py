@@ -54,7 +54,6 @@ class Predictor:
         logger.info(f"Aggregated scores: {all_scores}")
         return all_scores   
 
-
     def predict(self, X, y): # not sure if this is right 
         """
         Predict the scores for the given input data.
@@ -131,14 +130,14 @@ class Predictor:
 
         # Create the predictor option 
         predictor = model_onehot.TransformerClassifierCircularRelativeAttention(
-            input_dim=input_dim, 
-            num_classes=num_classes, 
-            num_heads=num_heads, 
-            hidden_dim=lstm_hidden_dim if lstm_hidden_dim else d_model,  # Use lstm_hidden_dim if available
-            lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
-            dropout=dropout, 
+            input_dim=1280,  # Fixed input_dim
+            num_classes=9,  # Fixed num_classes
+            num_heads=4,  # Fixed num_heads
+            hidden_dim=256,  # Fixed hidden_dim
+            lstm_hidden_dim=512,  # Fixed lstm_hidden_dim
+            dropout=0.1,  # Fixed dropout
             max_len=max_len,  # Specify max_len
-            use_lstm=use_lstm
+            use_lstm=True  # Fixed use_lstm
         )
     
         # Resize model parameters to match the checkpoint
