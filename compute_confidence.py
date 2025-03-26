@@ -189,17 +189,19 @@ def process_batches(p, conf_dataset_loader, device):
     total_batches = len(conf_dataset_loader)
     logger.info(f"Total number of batches to process: {total_batches}")
 
+    # Initialize dictionaries to count the number of each category that gets masked and predicted
+    masked_category_counts = {i: 0 for i in range(p.models[0].num_classes)}
+    predicted_category_counts = {i: 0 for i in range(p.models[0].num_classes)}
+
     for embeddings, categories, masks, idx in conf_dataset_loader:
         embeddings = embeddings.to(device)
         masks = masks.to(device)
         src_key_padding_mask = (masks != -2).to(device)
-        
-        logger.info(f"Embeddings device: {embeddings.device}, Masks device: {masks.device}, src_key_padding_mask device: {src_key_padding_mask.device}")
 
         phynteny_scores = p.predict_batch(embeddings, src_key_padding_mask)
 
         batch_size = len(idx)
-        logger.info(f"Processing batch {batches + 1}/{total_batches}, batch size: {batch_size}")
+        
 
         for m in range(batch_size):
             try:
@@ -209,6 +211,15 @@ def process_batches(p, conf_dataset_loader, device):
                 all_probs.append(scores_at_idx.cpu().numpy())
                 all_categories.append(categories[m][idx[m]].cpu())
 
+                # Update masked category counts
+                for cat in categories[m][idx[m]].tolist():
+                    masked_category_counts[cat] += 1
+
+                # Update predicted category counts
+                predicted_category = np.argmax(scores_at_idx.cpu().numpy(), axis=1)
+                for cat in predicted_category:
+                    predicted_category_counts[cat] += 1
+
             except KeyError as e:
                 logger.error(f"KeyError: {e} - phynteny_scores[{m}] or idx[{m}] might be invalid.")
                 logger.error(f"phynteny_scores[{m}]: {phynteny_scores[m]}")
@@ -217,6 +228,9 @@ def process_batches(p, conf_dataset_loader, device):
         batches += 1
         if batches % 100 == 0:
             logger.info(f"Processed {batches} batches...")
+            # Log the number of each category that gets masked and predicted
+            logger.info(f"Masked category counts: {masked_category_counts}")
+            logger.info(f"Predicted category counts: {predicted_category_counts}")
 
     all_categories = [t for t in all_categories if t.numel() > 0]
     all_categories = torch.cat(all_categories).tolist()
@@ -227,6 +241,10 @@ def process_batches(p, conf_dataset_loader, device):
     all_categories = np.array(all_categories)
     all_probs = np.array(all_probs)
     all_labels = np.array(all_labels)
+
+    # Log the number of each category that gets masked and predicted
+    logger.info(f"Masked category counts: {masked_category_counts}")
+    logger.info(f"Predicted category counts: {predicted_category_counts}")
 
     return all_probs, all_categories, all_labels
 

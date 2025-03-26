@@ -26,7 +26,6 @@ class Predictor:
         :param src_key_padding_mask: Mask tensor for padding in the input sequences
         :return: Dictionary of predicted scores
         """
-        logger.info("Starting batch prediction")
         self.models = [model.to(self.device) for model in self.models]
         embeddings = embeddings.to(self.device)  # Move embeddings to device
         src_key_padding_mask = src_key_padding_mask.to(self.device)  # Move mask to device
