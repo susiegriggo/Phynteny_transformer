@@ -41,7 +41,7 @@ for param, desc in PARAMETERS.items():
 @click.option('--lstm-hidden-dim', default=512, help='LSTM hidden dimension for the model.')
 @click.option('--dropout', default=0.1, help='Dropout rate for the model.')
 @click.option('--use-lstm', is_flag=True, help='Whether to use LSTM in the model.')
-@click.option('--max-len', default=512, help='Maximum length for the model.')
+@click.option('--max-len', default=1500, help='Maximum length for the model.')
 
 def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len):
     """
