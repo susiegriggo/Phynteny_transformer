@@ -10,6 +10,7 @@ import os
 import numpy  as np 
 from sklearn.neighbors import KernelDensity
 from Bio import SeqIO  # Add this import
+from loguru import logger  # Add this import
 
 class Predictor: 
 
@@ -25,9 +26,13 @@ class Predictor:
         :param src_key_padding_mask: Mask tensor for padding in the input sequences
         :return: Dictionary of predicted scores
         """
+        logger.info("Starting batch prediction")
         self.models = [model.to(self.device) for model in self.models]
         embeddings = embeddings.to(self.device)  # Move embeddings to device
         src_key_padding_mask = src_key_padding_mask.to(self.device)  # Move mask to device
+
+        logger.info(f"Embeddings: {embeddings}")
+        logger.info(f"src_key_padding_mask: {src_key_padding_mask}")
 
         for model in self.models:
             model.eval()
@@ -39,10 +44,14 @@ class Predictor:
                 outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
                 outputs = F.softmax(outputs, dim=-1)
                 
+                logger.info(f"Model outputs: {outputs}")
+
                 if len(all_scores) == 0:
                     all_scores = outputs.cpu().numpy()
                 else:
                     all_scores += outputs.cpu().numpy()
+        
+        logger.info(f"Aggregated scores: {all_scores}")
         return all_scores   
 
 
