@@ -31,9 +31,6 @@ class Predictor:
         embeddings = embeddings.to(self.device)  # Move embeddings to device
         src_key_padding_mask = src_key_padding_mask.to(self.device)  # Move mask to device
 
-        logger.info(f"Embeddings: {embeddings}")
-        logger.info(f"src_key_padding_mask: {src_key_padding_mask}")
-
         for model in self.models:
             model.eval()
 
@@ -44,14 +41,11 @@ class Predictor:
                 outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
                 outputs = F.softmax(outputs, dim=-1)
                 
-                logger.info(f"Model outputs: {outputs}")
-
                 if len(all_scores) == 0:
                     all_scores = outputs.cpu().numpy()
                 else:
                     all_scores += outputs.cpu().numpy()
         
-        logger.info(f"Aggregated scores: {all_scores}")
         return all_scores   
 
     def predict(self, X, y): # not sure if this is right 
@@ -106,38 +100,34 @@ class Predictor:
             record.annotations["phynteny score"] = self.scores[key]
             SeqIO.write(record, os.path.join(out, key + ".gb"), "genbank")
 
-    def read_model(self, model_path): 
+    def read_model(self, model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len): 
         """
         Read and load a model from the given path.
 
         :param model_path: Path to the model file
+        :param input_dim: Input dimension for the model
+        :param num_classes: Number of classes for the model
+        :param num_heads: Number of attention heads for the model
+        :param hidden_dim: Hidden dimension for the model
+        :param lstm_hidden_dim: LSTM hidden dimension for the model
+        :param dropout: Dropout rate for the model
+        :param use_lstm: Whether to use LSTM in the model
+        :param max_len: Maximum length for the model
         :return: Loaded model
         """
         # Read in the model 
         model = torch.load(model_path, map_location=torch.device(self.device))
 
-        # Dynamically determine input_dim from the model
-        input_dim = model.get('embedding_layer.weight').shape[1]
-        num_classes = model.get('fc.weight').shape[0]
-        lstm_hidden_dim = model.get('lstm.weight_hh_l0').shape[1] if 'lstm.weight_hh_l0' in model else None
-        d_model = lstm_hidden_dim * 2 if lstm_hidden_dim else model.get('transformer_encoder.layers.0.self_attn.relative_position_k').shape[1] * model.get('transformer_encoder.layers.0.self_attn.num_heads')
-        num_heads = d_model // model.get('transformer_encoder.layers.0.self_attn.relative_position_k').shape[1]
-        dropout = 0.1  # set this to an arbitrary value - doesn't matter if the model isn't in training mode
-        max_len = model.get('transformer_encoder.layers.1.self_attn.relative_position_k').shape[0]
-        use_lstm = lstm_hidden_dim is not None  # Set this based on whether the model uses an LSTM layer
-
-        print(f"Model parameters: input_dim: {input_dim}, num_classes: {num_classes}, lstm_hidden_dim: {lstm_hidden_dim}, num_heads: {num_heads}, dropout: {dropout}, max_len: {max_len}")
-
         # Create the predictor option 
         predictor = model_onehot.TransformerClassifierCircularRelativeAttention(
-            input_dim=1280,  # Fixed input_dim
-            num_classes=9,  # Fixed num_classes
-            num_heads=4,  # Fixed num_heads
-            hidden_dim=256,  # Fixed hidden_dim
-            lstm_hidden_dim=512,  # Fixed lstm_hidden_dim
-            dropout=0.1,  # Fixed dropout
+            input_dim=input_dim, 
+            num_classes=num_classes, 
+            num_heads=num_heads, 
+            hidden_dim=hidden_dim, 
+            lstm_hidden_dim=lstm_hidden_dim, 
+            dropout=dropout, 
             max_len=max_len,  # Specify max_len
-            use_lstm=True  # Fixed use_lstm
+            use_lstm=use_lstm
         )
     
         # Resize model parameters to match the checkpoint
@@ -150,18 +140,26 @@ class Predictor:
 
         return predictor
 
-    def read_models_from_directory(self, directory_path):
+    def read_models_from_directory(self, directory_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len):
         """
         Read and load all models from the given directory.
 
         :param directory_path: Path to the directory containing model files
+        :param input_dim: Input dimension for the model
+        :param num_classes: Number of classes for the model
+        :param num_heads: Number of attention heads for the model
+        :param hidden_dim: Hidden dimension for the model
+        :param lstm_hidden_dim: LSTM hidden dimension for the model
+        :param dropout: Dropout rate for the model
+        :param use_lstm: Whether to use LSTM in the model
+        :param max_len: Maximum length for the model
         """
         print('Reading models from directory: ', directory_path)
 
         for filename in os.listdir(directory_path):
             if filename.endswith(".model"):  # Assuming model files have .pt extension
                 model_path = os.path.join(directory_path, filename)
-                model = self.read_model(model_path)
+                model = self.read_model(model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len)
                 self.models.append(model)
 
     def compute_confidence(self, scores, confidence_dict, categories):

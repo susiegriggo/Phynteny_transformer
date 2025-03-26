@@ -34,8 +34,16 @@ for param, desc in PARAMETERS.items():
 @click.option('-o', '--output', 'output_path', type=click.Path(), help=PARAMETERS['output_path'])
 @click.option('-f', '--force', is_flag=True, help=PARAMETERS['force'])
 @click.option('--batch-size', default=128, help=PARAMETERS['batch_size'])
+@click.option('--input-dim', default=1280, help='Input dimension for the model.')
+@click.option('--num-classes', default=9, help='Number of classes for the model.')
+@click.option('--num-heads', default=4, help='Number of attention heads for the model.')
+@click.option('--hidden-dim', default=256, help='Hidden dimension for the model.')
+@click.option('--lstm-hidden-dim', default=512, help='LSTM hidden dimension for the model.')
+@click.option('--dropout', default=0.1, help='Dropout rate for the model.')
+@click.option('--use-lstm', is_flag=True, help='Whether to use LSTM in the model.')
+@click.option('--max-len', default=512, help='Maximum length for the model.')
 
-def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size):
+def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len):
     """
     Main function to compute confidence scores.
 
@@ -47,6 +55,14 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     :param output_path: Path to save the output confidence dictionary
     :param force: Boolean indicating whether to overwrite the output directory if it exists
     :param batch_size: Batch size for processing the data
+    :param input_dim: Input dimension for the model
+    :param num_classes: Number of classes for the model
+    :param num_heads: Number of attention heads for the model
+    :param hidden_dim: Hidden dimension for the model
+    :param lstm_hidden_dim: LSTM hidden dimension for the model
+    :param dropout: Dropout rate for the model
+    :param use_lstm: Whether to use LSTM in the model
+    :param max_len: Maximum length for the model
     """
     if os.path.exists(output_path) and not force:
         logger.error(f"Output directory already exists: {output_path}. Use --force to overwrite.")
@@ -60,7 +76,7 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
         logger.info("Using CPU for computation.")
     
     embeddings, categories, validation_categories, phrog_integer = load_data(embeddings_path, categories_path, validation_categories_path, integer_category_path)
-    p = create_predictor(model_directory, device)
+    p = create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len)
     logger.info(f'Predictor models: {p.models}')
     logger.info("Creating the dataset and dataloader.")
     conf_dataset_loader = create_dataloader(embeddings, categories, validation_categories, batch_size)
@@ -101,17 +117,26 @@ def load_data(embeddings_path, categories_path, validation_categories_path, inte
     return embeddings, categories, validation_categories, phrog_integer
 
 
-def create_predictor(model_directory, device):
+def create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len):
     """
     Create the predictor object.
 
     :param model_directory: Directory containing the models
     :param device: Device to use for computation (cpu or cuda)
+    :param input_dim: Input dimension for the model
+    :param num_classes: Number of classes for the model
+    :param num_heads: Number of attention heads for the model
+    :param hidden_dim: Hidden dimension for the model
+    :param lstm_hidden_dim: LSTM hidden dimension for the model
+    :param dropout: Dropout rate for the model
+    :param use_lstm: Whether to use LSTM in the model
+    :param max_len: Maximum length for the model
     :return: Predictor object
     """
     logger.info("Creating the predictor object.")
     p = predictor.Predictor(device=device)
-    p.read_models_from_directory(model_directory)
+    p.read_models_from_directory(model_directory, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len)
+    logger.info(f"Loaded models: {len(p.models)} models loaded.")
     return p
 
 
@@ -141,7 +166,7 @@ def create_dataloader(embeddings, categories, validation_categories, batch_size=
     # set the validation set
     logger.info("Setting the validation set.")
     conf_dataset.set_validation(list(validation_categories.values()))
-    conf_dataset_loader = DataLoader(conf_dataset, batch_size=batch_size, collate_fn=model_onehot.collate_fn, num_workers=4)  # Added num_workers for parallel data loading
+    conf_dataset_loader = DataLoader(conf_dataset, batch_size=batch_size, collate_fn=model_onehot.collate_fn)  # Added num_workers for parallel data loading
     return conf_dataset_loader
 
 
@@ -167,12 +192,12 @@ def process_batches(p, conf_dataset_loader, device):
         masks = masks.to(device)
         src_key_padding_mask = (masks != -2).to(device)
         
-        #logger.info(f"Embeddings device: {embeddings.device}, Masks device: {masks.device}, src_key_padding_mask device: {src_key_padding_mask.device}")
+        logger.info(f"Embeddings device: {embeddings.device}, Masks device: {masks.device}, src_key_padding_mask device: {src_key_padding_mask.device}")
 
         phynteny_scores = p.predict_batch(embeddings, src_key_padding_mask)
 
         batch_size = len(idx)
-        #logger.info(f"Processing batch {batches + 1}/{total_batches}, batch size: {batch_size}")
+        logger.info(f"Processing batch {batches + 1}/{total_batches}, batch size: {batch_size}")
 
         for m in range(batch_size):
             try:
@@ -182,16 +207,13 @@ def process_batches(p, conf_dataset_loader, device):
                 all_probs.append(scores_at_idx.cpu().numpy())
                 all_categories.append(categories[m][idx[m]].cpu())
 
-                logger.info(f'Phynteny scores at index {m}: {scores_at_idx}')
-                logger.info(f'Categories at index {m}: {categories[m][idx[m]]}')
             except KeyError as e:
                 logger.error(f"KeyError: {e} - phynteny_scores[{m}] or idx[{m}] might be invalid.")
                 logger.error(f"phynteny_scores[{m}]: {phynteny_scores[m]}")
                 logger.error(f"idx[{m}]: {idx[m]}")
                 raise e
-
         batches += 1
-        if batches % 10 == 0:
+        if batches % 100 == 0:
             logger.info(f"Processed {batches} batches...")
 
     all_categories = [t for t in all_categories if t.numel() > 0]
@@ -203,9 +225,7 @@ def process_batches(p, conf_dataset_loader, device):
     all_categories = np.array(all_categories)
     all_probs = np.array(all_probs)
     all_labels = np.array(all_labels)
-    logger.info(f"All categories: {all_categories}")
-    logger.info(f"All probabilities: {all_probs}")
-    logger.info(f"All labels: {all_labels}")
+
     return all_probs, all_categories, all_labels
 
 
