@@ -181,6 +181,9 @@ def process_batches(p, conf_dataset_loader, device):
                     scores_at_idx = scores_at_idx.reshape(1, -1)
                 all_probs.append(scores_at_idx.cpu().numpy())
                 all_categories.append(categories[m][idx[m]].cpu())
+
+                logger.info(f'Phynteny scores at index {m}: {scores_at_idx}')
+                logger.info(f'Categories at index {m}: {categories[m][idx[m]]}')
             except KeyError as e:
                 logger.error(f"KeyError: {e} - phynteny_scores[{m}] or idx[{m}] might be invalid.")
                 logger.error(f"phynteny_scores[{m}]: {phynteny_scores[m]}")
