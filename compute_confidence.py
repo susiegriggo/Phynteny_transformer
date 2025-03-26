@@ -40,10 +40,10 @@ for param, desc in PARAMETERS.items():
 @click.option('--hidden-dim', default=256, help='Hidden dimension for the model.')
 @click.option('--lstm-hidden-dim', default=512, help='LSTM hidden dimension for the model.')
 @click.option('--dropout', default=0.1, help='Dropout rate for the model.')
-@click.option('--use-lstm', is_flag=True, help='Whether to use LSTM in the model.')
+@click.option('--no-lstm', is_flag=True, help='Specify if LSTM should not be used in the model.')
 @click.option('--max-len', default=1500, help='Maximum length for the model.')
 
-def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len):
+def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, no_lstm, max_len):
     """
     Main function to compute confidence scores.
 
@@ -61,9 +61,11 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     :param hidden_dim: Hidden dimension for the model
     :param lstm_hidden_dim: LSTM hidden dimension for the model
     :param dropout: Dropout rate for the model
-    :param use_lstm: Whether to use LSTM in the model
+    :param no_lstm: Specify if LSTM should not be used in the model
     :param max_len: Maximum length for the model
     """
+    use_lstm = not no_lstm
+
     if os.path.exists(output_path) and not force:
         logger.error(f"Output directory already exists: {output_path}. Use --force to overwrite.")
         return

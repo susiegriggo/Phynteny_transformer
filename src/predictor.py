@@ -142,7 +142,7 @@ class Predictor:
 
         return predictor
 
-    def read_models_from_directory(self, directory_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len):
+    def read_models_from_directory(self, directory_path, input_dim=1280, num_classes=9, num_heads=4, hidden_dim=256, lstm_hidden_dim=512, dropout=0.1, use_lstm=True, max_len=1500):
         """
         Read and load all models from the given directory.
 
