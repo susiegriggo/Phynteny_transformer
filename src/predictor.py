@@ -118,13 +118,15 @@ class Predictor:
         # Read in the model 
         model = torch.load(model_path, map_location=torch.device(self.device))
 
+        logger.info(f'Reading model with input_dim={input_dim}, num_classes={num_classes}, num_heads={num_heads}, hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={dropout}, use_lstm={use_lstm}, max_len={max_len}')
+
         # Create the predictor option 
         predictor = model_onehot.TransformerClassifierCircularRelativeAttention(
             input_dim=input_dim, 
             num_classes=num_classes, 
             num_heads=num_heads, 
             hidden_dim=hidden_dim, 
-            lstm_hidden_dim=lstm_hidden_dim, 
+            lstm_hidden_dim=lstm_hidden_dim if use_lstm else None,  # Use lstm_hidden_dim if use_lstm is True
             dropout=dropout, 
             max_len=max_len,  # Specify max_len
             use_lstm=use_lstm
