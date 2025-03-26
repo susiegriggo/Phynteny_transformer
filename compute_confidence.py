@@ -167,7 +167,7 @@ def process_batches(p, conf_dataset_loader, device):
         masks = masks.to(device)
         src_key_padding_mask = (masks != -2).to(device)
         
-        logger.info(f"Embeddings device: {embeddings.device}, Masks device: {masks.device}, src_key_padding_mask device: {src_key_padding_mask.device}")
+        #logger.info(f"Embeddings device: {embeddings.device}, Masks device: {masks.device}, src_key_padding_mask device: {src_key_padding_mask.device}")
 
         phynteny_scores = p.predict_batch(embeddings, src_key_padding_mask)
 
@@ -200,6 +200,9 @@ def process_batches(p, conf_dataset_loader, device):
     all_categories = np.array(all_categories)
     all_probs = np.array(all_probs)
     all_labels = np.array(all_labels)
+    logger.info(f"All categories: {all_categories}")
+    logger.info(f"All probabilities: {all_probs}")
+    logger.info(f"All labels: {all_labels}")
     return all_probs, all_categories, all_labels
 
 
