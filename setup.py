@@ -25,10 +25,10 @@ package_data = {
 install_requires = [
         "loguru",
         "click",
-        "torch",
+        "torch>=2.0.0",
         "numpy",
         "biopython",
-        "sklearn",
+        "scikit-learn",
         "transformers",
         "pandas",
         "tqdm",
@@ -52,7 +52,7 @@ setuptools.setup(
     package_data=package_data,
     data_files=data_files,
     include_package_data=True,
-    scripts=["phynteny"],
+    scripts=["phynteny_transformer"],
     entry_points={
         "console_scripts": [
             "generate_training_data=train_phynteny.generate_training_data:main",
@@ -70,5 +70,5 @@ setuptools.setup(
         "Operating System :: OS Independent",
     ],
     install_requires=install_requires,
-    python_requires="3.8+",
+    python_requires=">=3.8",
 )
