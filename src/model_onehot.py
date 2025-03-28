@@ -1512,7 +1512,12 @@ def train(
         total_val_samples = 0
         final_validation_categories = []  # List to store categories for each validation instance
 
-        with torch.no_grad(): # No need to calculate gradients for validation
+        # Initialize counters for validation
+        val_masked_category_counts = torch.zeros(num_classes, device=device)
+        val_predicted_counts = torch.zeros(num_classes, device=device)
+        val_correct_counts = torch.zeros(num_classes, device=device)
+
+        with torch.no_grad():  # No need to calculate gradients for validation
             for embeddings, categories, masks, idx in tqdm(test_dataloader, desc=f"Validation Epoch {epoch + 1}/{epochs}"):
                 embeddings, categories, masks = (
                     embeddings.to(device).float(),
@@ -1531,13 +1536,24 @@ def train(
                     
                     # Calculate diagonal penalty so it can be stored in the metrics
                     diagonal_penalty = diagonal_attention_penalty(attn_weights, src_key_padding_mask=src_key_padding_mask)
-    
+
                 # Update total validation loss and accuracy
                 total_val_loss += val_loss.item()
                 total_val_classification_loss += val_classification_loss.item()
                 total_diagonal_penalty += diagonal_penalty.item()
                 total_val_correct += accuracy * len(idx)
                 total_val_samples += len(idx)
+
+                # Update validation counters
+                for batch_idx, indices in enumerate(idx):
+                    for i in indices:
+                        true_label = categories[batch_idx, i].item()
+                        pred_label = outputs.argmax(dim=-1)[batch_idx, i].item()
+                        if true_label != -1:  # Ignore padding or invalid labels
+                            val_masked_category_counts[true_label] += 1
+                            val_predicted_counts[pred_label] += 1
+                            if true_label == pred_label:
+                                val_correct_counts[true_label] += 1
 
                 # Store the final validation weights and attention weights
                 if epoch == epochs - 1:
@@ -1551,6 +1567,22 @@ def train(
         avg_val_classification_loss = total_val_classification_loss / len(test_dataloader)
         avg_diagonal_penalty = total_diagonal_penalty / len(test_dataloader)
         avg_val_accuracy = total_val_correct / total_val_samples
+
+        # Log validation metrics
+        logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {avg_val_loss}, Validation Accuracy: {avg_val_accuracy}")
+        logger.info("Validation masked category counts:")
+        for i in range(num_classes):
+            logger.info(f"Category {i}: {val_masked_category_counts[i].item()} masked")
+        logger.info("Validation predicted counts:")
+        for i in range(num_classes):
+            logger.info(f"Category {i}: {val_predicted_counts[i].item()} predicted")
+        logger.info("Validation accuracy per category:")
+        for i in range(num_classes):
+            if val_masked_category_counts[i] > 0:
+                accuracy = val_correct_counts[i].item() / val_masked_category_counts[i].item()
+                logger.info(f"Category {i}: {accuracy:.2f}")
+            else:
+                logger.info(f"Category {i}: No masked samples")
 
         # Append metrics to lists
         val_losses.append(avg_val_loss)
@@ -1601,7 +1633,7 @@ def train(
         metrics_df.to_csv(os.path.join(save_path, "metrics.csv"), index=False)
 
     # Save the model
-    torch.save(model.state_dict(), save_path + "transformer.model")
+    torch.save(model.state_dict(), save_path + "/transformer.model")
 
     # Save the training and validation loss to CSV
     logger.info("Saving metrics to CSV")
