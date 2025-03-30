@@ -5,6 +5,7 @@ from loguru import logger
 from src import model_onehot
 from src.model_onehot import fourier_positional_encoding  # Add import for Fourier positional encoding
 import os
+import torch
 
 def setup_output_directory(out, force):
     try:
@@ -39,6 +40,234 @@ def validate_num_heads(ctx, param, value):
         raise click.BadParameter("Number of attention heads must be divisible by 4.")
     return value
 
+def generate_script(out, params):
+    """
+    Generate a Python script dynamically and save it to the output directory.
+    """
+    script_content = f"""
+# Auto-generated script
+import torch
+from src.model_onehot import TransformerClassifier, TransformerClassifierRelativeAttention, TransformerClassifierCircularRelativeAttention
+
+def load_model(model_path):
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    attention = "{params['attention']}"
+    input_dim = {params['input_size']}
+    num_classes = 9
+    num_heads = {params['num_heads']}
+    hidden_dim = {params['hidden_dim']}
+    lstm_hidden_dim = {params['lstm_hidden_dim']}
+    dropout = {params['dropout']}
+    num_layers = {params['num_layers']}
+    output_dim = {params['output_dim']}
+    use_lstm = {params['use_lstm']}
+    use_positional_encoding = {params['use_positional_encoding']}
+    
+    if attention == "absolute":
+        model = TransformerClassifier(
+            input_dim=input_dim,
+            num_classes=num_classes,
+            num_heads=num_heads,
+            hidden_dim=hidden_dim,
+            lstm_hidden_dim=lstm_hidden_dim,
+            dropout=dropout,
+            num_layers=num_layers,
+            output_dim=output_dim,
+            use_lstm=use_lstm,
+            use_positional_encoding=use_positional_encoding
+        )
+    elif attention == "relative":
+        model = TransformerClassifierRelativeAttention(
+            input_dim=input_dim,
+            num_classes=num_classes,
+            num_heads=num_heads,
+            hidden_dim=hidden_dim,
+            lstm_hidden_dim=lstm_hidden_dim,
+            dropout=dropout,
+            num_layers=num_layers,
+            output_dim=output_dim,
+            use_lstm=use_lstm,
+            use_positional_encoding=use_positional_encoding
+        )
+    elif attention == "circular":
+        model = TransformerClassifierCircularRelativeAttention(
+            input_dim=input_dim,
+            num_classes=num_classes,
+            num_heads=num_heads,
+            hidden_dim=hidden_dim,
+            lstm_hidden_dim=lstm_hidden_dim,
+            dropout=dropout,
+            num_layers=num_layers,
+            output_dim=output_dim,
+            use_lstm=use_lstm,
+            use_positional_encoding=use_positional_encoding
+        )
+    else:
+        raise ValueError(f"Invalid attention type: {params['attention']}")
+    
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()
+    return model
+
+def main():
+    print("This is an auto-generated script.")
+    print("Modify this script as needed.")
+
+if __name__ == "__main__":
+    main()
+"""
+    script_path = os.path.join(out, "generated_script.py")
+    with open(script_path, "w") as script_file:
+        script_file.write(script_content)
+    logger.info(f"Generated script saved at: {script_path}")
+
+def test_model(out, params, fold="fold_1"):
+    """
+    Load the trained model and test it on the validation data.
+
+    Parameters:
+    out (str): Output directory where the model and validation data are saved.
+    params (dict): Dictionary of model parameters.
+    fold (str): The fold to test (e.g., "fold_1").
+    """
+    try:
+        # Log the parameters used to load the model
+        logger.info("Model loading parameters:")
+        for key, value in params.items():
+            logger.info(f"{key}: {value}")
+
+        # Load the model
+        model_path = os.path.join(out, fold, "transformer.model")
+        model = load_model(model_path, params)
+        logger.info(f"Model loaded successfully from {model_path}.")
+
+        # Load the validation data
+        val_loader_path = os.path.join(out, fold, "val_kfold_loader.pkl")
+        with open(val_loader_path, "rb") as f:
+            val_loader = pickle.load(f)
+        logger.info(f"Validation data loaded successfully from {val_loader_path}.")
+
+        # Initialize counters for predictions and correct predictions
+        category_counts = torch.zeros(params["num_classes"], dtype=torch.int)
+        correct_predictions = torch.zeros(params["num_classes"], dtype=torch.int)
+
+        # Evaluate the model
+        model.eval()
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        model.to(device)
+
+        with torch.no_grad():
+            for embeddings, categories, masks, idx in val_loader:
+                embeddings = embeddings.to(device).float()
+                categories = categories.to(device).long()
+                masks = masks.to(device).float()
+                src_key_padding_mask = (masks != -2).bool().to(device)
+
+                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                predictions = outputs.argmax(dim=-1)
+
+                # Evaluate only rows with idx
+                for batch_idx, indices in enumerate(idx):
+                    for i in indices:
+                        pred = predictions[batch_idx, i].item()
+                        true_label = categories[batch_idx, i].item()
+                        if pred != -1:  # Ignore padding or invalid predictions
+                            category_counts[pred] += 1
+                            if pred == true_label:
+                                correct_predictions[pred] += 1
+
+        # Log the results
+        logger.info("Prediction counts and correct predictions for each category:")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts[i].item()} predictions, {correct_predictions[i].item()} correct")
+
+        # Calculate and log accuracy per category
+        logger.info("Accuracy per category:")
+        for i in range(params["num_classes"]):
+            if category_counts[i] > 0:
+                accuracy = correct_predictions[i].item() / category_counts[i].item()
+                logger.info(f"Category {i}: {accuracy:.2f}")
+            else:
+                logger.info(f"Category {i}: No predictions made")
+
+    except Exception as e:
+        logger.error(f"Error during model testing: {e}")
+        raise
+
+def load_model(model_path, params):
+    """
+    Load the trained model from the specified path.
+
+    Parameters:
+    model_path (str): Path to the saved model file.
+    params (dict): Dictionary of model parameters.
+
+    Returns:
+    nn.Module: Loaded model.
+    """
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    
+    attention = params["attention"]
+    input_dim = params["input_size"]
+    num_classes = params["num_classes"]
+    num_heads = params["num_heads"]
+    hidden_dim = params["hidden_dim"]
+    lstm_hidden_dim = params["lstm_hidden_dim"]
+    dropout = params["dropout"]
+    num_layers = params["num_layers"]
+    output_dim = params["output_dim"]
+    use_lstm = params["use_lstm"]
+    use_positional_encoding = params["use_positional_encoding"]
+
+    if attention == "absolute":
+        model = model_onehot.TransformerClassifier(
+            input_dim=input_dim,
+            num_classes=num_classes,
+            num_heads=num_heads,
+            hidden_dim=hidden_dim,
+            lstm_hidden_dim=lstm_hidden_dim,
+            dropout=dropout,
+            num_layers=num_layers,
+            output_dim=output_dim,
+            use_lstm=use_lstm,
+            use_positional_encoding=use_positional_encoding
+        )
+    elif attention == "relative":
+        model = model_onehot.TransformerClassifierRelativeAttention(
+            input_dim=input_dim,
+            num_classes=num_classes,
+            num_heads=num_heads,
+            hidden_dim=hidden_dim,
+            lstm_hidden_dim=lstm_hidden_dim,
+            dropout=dropout,
+            num_layers=num_layers,
+            output_dim=output_dim,
+            use_lstm=use_lstm,
+            use_positional_encoding=use_positional_encoding
+        )
+    elif attention == "circular":
+        model = model_onehot.TransformerClassifierCircularRelativeAttention(
+            input_dim=input_dim,
+            num_classes=num_classes,
+            num_heads=num_heads,
+            hidden_dim=hidden_dim,
+            lstm_hidden_dim=lstm_hidden_dim,
+            dropout=dropout,
+            num_layers=num_layers,
+            output_dim=output_dim,
+            use_lstm=use_lstm,
+            use_positional_encoding=use_positional_encoding
+        )
+    else:
+        raise ValueError(f"Invalid attention type: {attention}")
+    
+    model.load_state_dict(torch.load(model_path, map_location=device))
+    model.to(device)
+    model.eval()
+    return model
+
 @click.command()
 @click.option("--x_path", "-x", help="File path to X training data")
 @click.option("--y_path", "-y", help="File path to y training data")
@@ -71,7 +300,7 @@ def validate_num_heads(ctx, param, value):
 )
 @click.option(
     "--batch_size",
-    default=1,
+    default=16,  # Revert batch size to 16
     help="Batch size used to train the model.",
     type=int,
 )
@@ -173,6 +402,12 @@ def validate_num_heads(ctx, param, value):
     default=False,
     help="Ignore the strand and gene length features in the embeddings.",
 )
+@click.option(
+    "--run_test_model",  # Update the option name
+    is_flag=True,
+    default=False,
+    help="Test the trained model on the validation data.",
+)
 def main(
     x_path,
     y_path,
@@ -201,9 +436,25 @@ def main(
     use_positional_encoding,  # Add use_positional_encoding parameter
     noise_std,  # Add noise_std parameter
     zero_idx,  # Add zero_idx parameter
-    ignore_strand_gene_length  # Add ignore_strand_gene_length parameter
+    ignore_strand_gene_length,  # Add ignore_strand_gene_length parameter
+    run_test_model  # Use the updated parameter name
 ):
     setup_output_directory(out, force)
+
+    # Generate the script with training parameters
+    params = {
+        "attention": attention,
+        "input_size": None,  # Will be set after loading data
+        "num_heads": num_heads,
+        "hidden_dim": hidden_dim,
+        "lstm_hidden_dim": lstm_hidden_dim,
+        "dropout": dropout,
+        "num_layers": num_layers,
+        "output_dim": output_dim,
+        "use_lstm": use_lstm,
+        "use_positional_encoding": use_positional_encoding,
+        "num_classes": 9  # Hardcoded for now
+    }
 
     # generate loguru object
     logger.add(out + "/trainer.log", level="DEBUG")
@@ -212,6 +463,9 @@ def main(
     logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}, use_lstm={use_lstm}, use_positional_encoding={use_positional_encoding}, noise_std={noise_std}, zero_idx={zero_idx}, ignore_strand_gene_length={ignore_strand_gene_length}")  # Log use_lstm
 
     X, y, input_size, labels = load_data(x_path, y_path)  # Get labels
+    params["input_size"] = input_size  # Set input size in params
+
+    generate_script(out, params)
 
     shuffled_data = {}  # Dictionary to save shuffled data
 
@@ -240,6 +494,7 @@ def main(
     train_dataset.set_training(True)
     logger.info(f"Total dataset size: {len(train_dataset)} samples")
 
+    # Train the model
     logger.info("\nTraining model...")
 
     try:
@@ -275,6 +530,9 @@ def main(
     except Exception as e:
         logger.error(f"Error during training: {e}")
         raise
+
+    if run_test_model:  # Use the updated parameter name
+        test_model(out, params)
 
     logger.info("FINISHED! :D")
 
