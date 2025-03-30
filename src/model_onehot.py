@@ -1577,12 +1577,28 @@ def train(
         for i in range(num_classes):
             logger.info(f"Category {i}: {val_predicted_counts[i].item()} predicted")
         logger.info("Validation accuracy per category:")
+        per_category_accuracies = {}
         for i in range(num_classes):
             if val_masked_category_counts[i] > 0:
                 accuracy = val_correct_counts[i].item() / val_masked_category_counts[i].item()
                 logger.info(f"Category {i}: {accuracy:.2f}")
+                per_category_accuracies[i] = accuracy
             else:
                 logger.info(f"Category {i}: No masked samples")
+                per_category_accuracies[i] = None
+
+        # Save per-category metrics to a file
+        per_category_metrics = {
+            "epoch": epoch + 1,
+            "masked_counts": val_masked_category_counts.cpu().tolist(),
+            "predicted_counts": val_predicted_counts.cpu().tolist(),
+            "accuracies": per_category_accuracies,
+        }
+        metrics_file = os.path.join(save_path, f"per_category_metrics_epoch_{epoch + 1}.json")
+        with open(metrics_file, "w") as f:
+            import json
+            json.dump(per_category_metrics, f, indent=4)
+        logger.info(f"Per-category metrics saved to {metrics_file}")
 
         # Append metrics to lists
         val_losses.append(avg_val_loss)
