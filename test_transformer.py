@@ -96,6 +96,16 @@ def test_model(model_path, val_loader_path, params):
         with open(val_loader_path, "rb") as f:
             val_loader = pickle.load(f)
         logger.info(f"Validation data loaded successfully from {val_loader_path}.")
+        
+        # Log the mode of val_loader
+        if hasattr(val_loader, 'training') and val_loader.training:
+            logger.info("val_loader is already in training mode.")
+        else:
+            logger.info("val_loader is not in training mode. Setting it to training mode.")
+            if hasattr(val_loader, 'set_training'):
+                val_loader.set_training(True)
+            else:
+                logger.warning("val_loader does not have a set_training method.")
 
         category_counts = torch.zeros(params["num_classes"], dtype=torch.int)
         correct_predictions = torch.zeros(params["num_classes"], dtype=torch.int)
