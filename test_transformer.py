@@ -129,7 +129,7 @@ def test_model(model_path, val_loader_path, params):
                         pred = predictions[batch_idx, i].item()
                         true_label = categories[batch_idx, i].item()
                         if pred != -1:  # Ignore padding or invalid predictions
-                            category_counts[pred] += 1  # Update based on predicted label
+                            category_counts[true_label] += 1  # Update based on predicted label
                             if pred == true_label:
                                 correct_predictions[pred] += 1
 

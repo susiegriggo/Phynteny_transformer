@@ -1,10 +1,11 @@
 import pickle
 import click
 import random
+import os
 from loguru import logger
+os.chdir('/home/grig0076/susie_scratch/GitHubs/latest/Phynteny_transformer')
 from src import model_onehot
 from src.model_onehot import fourier_positional_encoding  # Add import for Fourier positional encoding
-import os
 import torch
 
 def setup_output_directory(out, force):
