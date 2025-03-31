@@ -149,9 +149,10 @@ def test_model(out, params, fold="fold_1"):
             val_loader = pickle.load(f)
         logger.info(f"Validation data loaded successfully from {val_loader_path}.")
 
-        # Initialize counters for predictions and correct predictions
-        category_counts = torch.zeros(params["num_classes"], dtype=torch.int)
-        correct_predictions = torch.zeros(params["num_classes"], dtype=torch.int)
+        # Initialize counters for predictions, correct predictions, and counts
+        category_counts_masked = torch.zeros(params["num_classes"], dtype=torch.int)
+        category_counts_predicted = torch.zeros(params["num_classes"], dtype=torch.int)
+        category_counts_correct = torch.zeros(params["num_classes"], dtype=torch.int)  # Renamed from category_counts_true
 
         # Evaluate the model
         model.eval()
@@ -174,23 +175,31 @@ def test_model(out, params, fold="fold_1"):
                         pred = predictions[batch_idx, i].item()
                         true_label = categories[batch_idx, i].item()
                         if pred != -1:  # Ignore padding or invalid predictions
-                            category_counts[pred] += 1
                             if pred == true_label:
-                                correct_predictions[pred] += 1
+                                category_counts_correct[true_label] += 1  # Updated to category_counts_correct
+                            category_counts_predicted[pred] += 1  # Count predictions
+                            category_counts_masked[true_label] += 1  # Count masked categories
 
-        # Log the results
-        logger.info("Prediction counts and correct predictions for each category:")
-        for i in range(params["num_classes"]):
-            logger.info(f"Category {i}: {category_counts[i].item()} predictions, {correct_predictions[i].item()} correct")
 
-        # Calculate and log accuracy per category
         logger.info("Accuracy per category:")
         for i in range(params["num_classes"]):
-            if category_counts[i] > 0:
-                accuracy = correct_predictions[i].item() / category_counts[i].item()
+            if category_counts_masked[i] > 0:
+                accuracy = category_counts_correct[i].item() / category_counts_masked[i].item()
                 logger.info(f"Category {i}: {accuracy:.2f}")
             else:
                 logger.info(f"Category {i}: No predictions made")
+
+        logger.info("Masked category counts (true labels):")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts_masked[i].item()} masked")
+
+        logger.info("Prediction counts:")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts_predicted[i].item()} predicted")
+
+        logger.info("True label counts:")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts_correct[i].item()} correct")  # Updated to category_counts_correct
 
     except Exception as e:
         logger.error(f"Error during model testing: {e}")

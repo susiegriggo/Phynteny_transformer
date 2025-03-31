@@ -107,8 +107,9 @@ def test_model(model_path, val_loader_path, params):
             else:
                 logger.warning("val_loader's dataset does not have a set_training method.")
 
-        category_counts = torch.zeros(params["num_classes"], dtype=torch.int)
-        correct_predictions = torch.zeros(params["num_classes"], dtype=torch.int)
+        category_counts_masked = torch.zeros(params["num_classes"], dtype=torch.int)
+        category_counts_predicted = torch.zeros(params["num_classes"], dtype=torch.int)
+        category_counts_correct = torch.zeros(params["num_classes"], dtype=torch.int)
 
         model.eval()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -129,21 +130,30 @@ def test_model(model_path, val_loader_path, params):
                         pred = predictions[batch_idx, i].item()
                         true_label = categories[batch_idx, i].item()
                         if pred != -1:  # Ignore padding or invalid predictions
-                            category_counts[pred] += 1  # Update based on predicted label
                             if pred == true_label:
-                                correct_predictions[pred] += 1
-
-        logger.info("Prediction counts and correct predictions for each category:")
-        for i in range(params["num_classes"]):
-            logger.info(f"Category {i}: {category_counts[i].item()} predictions, {correct_predictions[i].item()} correct")
+                                category_counts_correct[true_label] += 1  # Count correct predictions
+                            category_counts_predicted[pred] += 1  # Count predictions
+                            category_counts_masked[true_label] += 1  # Count masked categories
 
         logger.info("Accuracy per category:")
         for i in range(params["num_classes"]):
-            if category_counts[i] > 0:
-                accuracy = correct_predictions[i].item() / category_counts[i].item()
+            if category_counts_masked[i] > 0:
+                accuracy = category_counts_correct[i].item() / category_counts_masked[i].item()
                 logger.info(f"Category {i}: {accuracy:.2f}")
             else:
                 logger.info(f"Category {i}: No predictions made")
+
+        logger.info("Masked category counts (true labels):")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts_masked[i].item()} masked")
+
+        logger.info("Prediction counts:")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts_predicted[i].item()} predicted")
+
+        logger.info("Correct label counts:")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts_correct[i].item()} correct")
 
         logger.info("Testing process completed successfully.")
         print("Testing process completed successfully.")
