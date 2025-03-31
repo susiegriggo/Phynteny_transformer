@@ -3,7 +3,7 @@ import pickle
 import torch
 from loguru import logger
 from src.model_onehot import TransformerClassifier, TransformerClassifierRelativeAttention, TransformerClassifierCircularRelativeAttention
-from tqdm import tqdm  # Add tqdm import
+from tqdm import tqdm
 
 def load_model(model_path, params):
     """
@@ -97,15 +97,6 @@ def test_model(model_path, val_loader_path, params):
             val_loader = pickle.load(f)
         logger.info(f"Validation data loaded successfully from {val_loader_path}.")
 
-        # Check if the dataset is set to training or validation mode
-        if hasattr(val_loader.dataset, "training") and val_loader.dataset.training:
-            logger.info("Validation dataset is in training mode.")
-        elif hasattr(val_loader.dataset, "validation") and val_loader.dataset.validation:
-            logger.info("Validation dataset is in validation mode.")
-        else:
-            logger.info("Validation dataset is neither in training nor validation mode. Setting it to training mode.")
-            val_loader.dataset.set_training(True)
-
         category_counts = torch.zeros(params["num_classes"], dtype=torch.int)
         correct_predictions = torch.zeros(params["num_classes"], dtype=torch.int)
 
@@ -127,8 +118,8 @@ def test_model(model_path, val_loader_path, params):
                     for i in indices:
                         pred = predictions[batch_idx, i].item()
                         true_label = categories[batch_idx, i].item()
-                        if pred != -1:
-                            category_counts[pred] += 1
+                        if pred != -1:  # Ignore padding or invalid predictions
+                            category_counts[pred] += 1  # Update based on predicted label
                             if pred == true_label:
                                 correct_predictions[pred] += 1
 
