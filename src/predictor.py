@@ -128,7 +128,8 @@ class Predictor:
             lstm_hidden_dim=lstm_hidden_dim if use_lstm else None,  # Use lstm_hidden_dim if use_lstm is True
             dropout=dropout, 
             max_len=max_len,  # Specify max_len
-            use_lstm=use_lstm
+            use_lstm=use_lstm, 
+            positional_encoding=model_onehot.fourier_positional_encoding  # Add positional_encoding argument
         )
     
         # Resize model parameters to match the checkpoint

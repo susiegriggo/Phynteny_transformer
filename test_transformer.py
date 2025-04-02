@@ -2,7 +2,7 @@ import os
 import pickle
 import torch
 from loguru import logger
-from src.model_onehot import TransformerClassifier, TransformerClassifierRelativeAttention, TransformerClassifierCircularRelativeAttention
+from src.model_onehot import TransformerClassifier, TransformerClassifierRelativeAttention, TransformerClassifierCircularRelativeAttention, fourier_positional_encoding
 from tqdm import tqdm
 
 def load_model(model_path, params):
@@ -40,7 +40,8 @@ def load_model(model_path, params):
             num_layers=num_layers,
             output_dim=output_dim,
             use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
+            use_positional_encoding=use_positional_encoding,
+            positional_encoding=fourier_positional_encoding
         )
     elif attention == "relative":
         model = TransformerClassifierRelativeAttention(
@@ -53,7 +54,8 @@ def load_model(model_path, params):
             num_layers=num_layers,
             output_dim=output_dim,
             use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
+            use_positional_encoding=use_positional_encoding,
+            positional_encoding=fourier_positional_encoding
         )
     elif attention == "circular":
         model = TransformerClassifierCircularRelativeAttention(
@@ -66,7 +68,8 @@ def load_model(model_path, params):
             num_layers=num_layers,
             output_dim=output_dim,
             use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
+            use_positional_encoding=use_positional_encoding,
+            positional_encoding=fourier_positional_encoding
         )
     else:
         raise ValueError(f"Invalid attention type: {attention}")
