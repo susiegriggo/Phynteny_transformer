@@ -2,7 +2,7 @@ import os
 import pickle
 import torch
 from loguru import logger
-from src.model_onehot import TransformerClassifier, TransformerClassifierRelativeAttention, TransformerClassifierCircularRelativeAttention
+from src.model_onehot import TransformerClassifier, TransformerClassifierRelativeAttention, TransformerClassifierCircularRelativeAttention, fourier_positional_encoding
 from tqdm import tqdm
 
 def load_model(model_path, params):
@@ -40,7 +40,8 @@ def load_model(model_path, params):
             num_layers=num_layers,
             output_dim=output_dim,
             use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
+            use_positional_encoding=use_positional_encoding,
+            positional_encoding=fourier_positional_encoding
         )
     elif attention == "relative":
         model = TransformerClassifierRelativeAttention(
@@ -53,7 +54,8 @@ def load_model(model_path, params):
             num_layers=num_layers,
             output_dim=output_dim,
             use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
+            use_positional_encoding=use_positional_encoding,
+            positional_encoding=fourier_positional_encoding
         )
     elif attention == "circular":
         model = TransformerClassifierCircularRelativeAttention(
@@ -66,7 +68,8 @@ def load_model(model_path, params):
             num_layers=num_layers,
             output_dim=output_dim,
             use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
+            use_positional_encoding=use_positional_encoding,
+            positional_encoding=fourier_positional_encoding
         )
     else:
         raise ValueError(f"Invalid attention type: {attention}")
@@ -76,7 +79,7 @@ def load_model(model_path, params):
     model.eval()
     return model
 
-def test_model(model_path, val_loader_path, params):
+def test_model(model_path, val_loader_path, params, noise_std=None):
     """
     Load the trained model and test it on the validation data.
 
@@ -84,6 +87,7 @@ def test_model(model_path, val_loader_path, params):
     model_path (str): Path to the trained model file.
     val_loader_path (str): Path to the validation data loader.
     params (dict): Dictionary of model parameters.
+    noise_std (float, optional): Standard deviation of noise to apply to the dataset.
     """
     try:
         logger.info("Model loading parameters:")
@@ -96,7 +100,21 @@ def test_model(model_path, val_loader_path, params):
         with open(val_loader_path, "rb") as f:
             val_loader = pickle.load(f)
         logger.info(f"Validation data loaded successfully from {val_loader_path}.")
-        
+
+        # Update noise_std if specified
+        if noise_std is not None:
+            if hasattr(val_loader, 'dataset') and hasattr(val_loader.dataset, 'noise_std'):
+                logger.info(f"Updating noise_std of the embedding dataset to: {noise_std}")
+                val_loader.dataset.noise_std = noise_std
+            else:
+                logger.warning("The embedding dataset does not have a noise_std attribute.")
+
+        # Log the noise_std value of the embedding dataset
+        if hasattr(val_loader, 'dataset') and hasattr(val_loader.dataset, 'noise_std'):
+            logger.info(f"noise_std of the embedding dataset: {val_loader.dataset.noise_std}")
+        else:
+            logger.warning("The embedding dataset does not have a noise_std attribute.")
+
         # Log the mode of val_loader
         if hasattr(val_loader, 'dataset') and hasattr(val_loader.dataset, 'training') and val_loader.dataset.training:
             logger.info("val_loader's dataset is already in training mode.")
@@ -120,20 +138,23 @@ def test_model(model_path, val_loader_path, params):
                 embeddings = embeddings.to(device).float()
                 categories = categories.to(device).long()
                 masks = masks.to(device).float()
+
                 src_key_padding_mask = (masks != -2).bool().to(device)
 
-                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-                predictions = outputs.argmax(dim=-1)
+                with torch.amp.autocast('cuda'):
+                    outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                    predictions = outputs.argmax(dim=-1)
 
+                # Evaluate only rows with idx
                 for batch_idx, indices in enumerate(idx):
                     for i in indices:
-                        pred = predictions[batch_idx, i].item()
                         true_label = categories[batch_idx, i].item()
-                        if pred != -1:  # Ignore padding or invalid predictions
-                            if pred == true_label:
-                                category_counts_correct[true_label] += 1  # Count correct predictions
-                            category_counts_predicted[pred] += 1  # Count predictions
-                            category_counts_masked[true_label] += 1  # Count masked categories
+                        pred_label = predictions[batch_idx, i].item()
+                        if true_label != -1:  # Ignore padding or invalid labels
+                            category_counts_masked[true_label] += 1
+                            category_counts_predicted[pred_label] += 1
+                            if true_label == pred_label:
+                                category_counts_correct[true_label] += 1
 
         logger.info("Accuracy per category:")
         for i in range(params["num_classes"]):
@@ -179,7 +200,8 @@ if __name__ == "__main__":
     @click.option("--output_dim", type=int, help="Output dimension.")
     @click.option("--use_lstm", is_flag=True, default=False, help="Use LSTM layers.")
     @click.option("--use_positional_encoding", is_flag=True, default=True, help="Use positional encoding.")
-    def main(model_path, val_loader_path, attention, input_size, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, num_layers, output_dim, use_lstm, use_positional_encoding):
+    @click.option("--noise_std", default=None, type=float, help="Standard deviation of noise to apply to the dataset.")
+    def main(model_path, val_loader_path, attention, input_size, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, num_layers, output_dim, use_lstm, use_positional_encoding, noise_std):
         params = {
             "attention": attention,
             "input_size": input_size,
@@ -193,6 +215,6 @@ if __name__ == "__main__":
             "use_lstm": use_lstm,
             "use_positional_encoding": use_positional_encoding,
         }
-        test_model(model_path, val_loader_path, params)
+        test_model(model_path, val_loader_path, params, noise_std=noise_std)
 
     main()

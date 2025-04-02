@@ -1,11 +1,9 @@
-# Phynteny-Transformer
+# Phynteny-Transformer 
 ![Phynteny Transformer Logo](phynteny_logo.png)
 
-`phynteny` is annotation tool for bacteriophage genomes that integrates protein language models and synteny. 
+`Phynteny` is annotation tool for bacteriophage genomes that integrates protein language models and gene synteny. `Phynteny` leverages a transformer architecture with attention mechanisms and long short term memory to capture the positional information of genes.
 
-`phynteny` leverages a transformer architecture with attention mechanisms and long short term memory to capture the positional information of genes.
-
-`phynteny` takes a genbank file with PHROG annotations as input. If you haven't already annotaated your phage(s) with [Pharokka](https://github.com/gbouras13/pharokka) and [phold](https://github.com/gbouras13/phold) go do that and come back here! 
+`Phynteny` takes a genbank file with PHROG annotations as input. If you haven't already annotated your phage(s) with [Pharokka](https://github.com/gbouras13/pharokka) and [phold](https://github.com/gbouras13/phold) go do that and then come right back here! 
 
 ### Dependencies
 
@@ -27,24 +25,33 @@ You can install the dependencies using pip:
 
 ### Installation 
 
+You can install Phynteny Transformer from source 
+```
+git clone https://github.com/susiegriggo/Phynteny_transformer 
+cd Phynteny_transformer 
+pip install . 
+``` 
+
+Pip and conda options coming soon 
+
 #### Install Models 
 
+Before you can run phynteny you'll need to install some databases 
 
 
-### Running Phynteny 
+### Quick Start 
+```
+phynteny_transformer  test_data/test_phage.gbk -o test_output
+```
 
 
-### Containers 
+### Output 
+
+* ```phynteny_transformer.gbk``` contains a GenBank format file that has been updated to include annotations generated using Phynteny along with their Phynteny score and confidence. 
+* ```phynteny_per_cds_funcions.tsv``` provides a table of the annotations generated (similar to the ```pharokka_cds_functions.tsv from Pharokka```)
 
 
-### Model Architecture
-
-The model consists of the following components:
-- **Embedding Layers**: These layers embed the functional, strand, and length information of genes.
-- **Positional Encoding**: Learnable or sinusoidal positional encodings are used to capture the positional information of genes.
-- **LSTM Layer**: A bidirectional LSTM layer processes the embedded sequences.
-- **Transformer Encoder**: Multiple transformer encoder layers with different attention mechanisms (absolute, relative, and circular) are used to capture the dependencies between genes.
-- **Classification Layer**: A final linear layer classifies the genes into different functional categories.
+### Brief Overview 
 
 
 

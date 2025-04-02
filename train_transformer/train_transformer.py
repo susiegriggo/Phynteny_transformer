@@ -41,111 +41,32 @@ def validate_num_heads(ctx, param, value):
         raise click.BadParameter("Number of attention heads must be divisible by 4.")
     return value
 
-def generate_script(out, params):
-    """
-    Generate a Python script dynamically and save it to the output directory.
-    """
-    script_content = f"""
-# Auto-generated script
-import torch
-from src.model_onehot import TransformerClassifier, TransformerClassifierRelativeAttention, TransformerClassifierCircularRelativeAttention
 
-def load_model(model_path):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    attention = "{params['attention']}"
-    input_dim = {params['input_size']}
-    num_classes = 9
-    num_heads = {params['num_heads']}
-    hidden_dim = {params['hidden_dim']}
-    lstm_hidden_dim = {params['lstm_hidden_dim']}
-    dropout = {params['dropout']}
-    num_layers = {params['num_layers']}
-    output_dim = {params['output_dim']}
-    use_lstm = {params['use_lstm']}
-    use_positional_encoding = {params['use_positional_encoding']}
-    
-    if attention == "absolute":
-        model = TransformerClassifier(
-            input_dim=input_dim,
-            num_classes=num_classes,
-            num_heads=num_heads,
-            hidden_dim=hidden_dim,
-            lstm_hidden_dim=lstm_hidden_dim,
-            dropout=dropout,
-            num_layers=num_layers,
-            output_dim=output_dim,
-            use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
-        )
-    elif attention == "relative":
-        model = TransformerClassifierRelativeAttention(
-            input_dim=input_dim,
-            num_classes=num_classes,
-            num_heads=num_heads,
-            hidden_dim=hidden_dim,
-            lstm_hidden_dim=lstm_hidden_dim,
-            dropout=dropout,
-            num_layers=num_layers,
-            output_dim=output_dim,
-            use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
-        )
-    elif attention == "circular":
-        model = TransformerClassifierCircularRelativeAttention(
-            input_dim=input_dim,
-            num_classes=num_classes,
-            num_heads=num_heads,
-            hidden_dim=hidden_dim,
-            lstm_hidden_dim=lstm_hidden_dim,
-            dropout=dropout,
-            num_layers=num_layers,
-            output_dim=output_dim,
-            use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
-        )
-    else:
-        raise ValueError(f"Invalid attention type: {params['attention']}")
-    
-    model.load_state_dict(torch.load(model_path, map_location=device))
-    model.to(device)
-    model.eval()
-    return model
-
-def main():
-    print("This is an auto-generated script.")
-    print("Modify this script as needed.")
-
-if __name__ == "__main__":
-    main()
-"""
-    script_path = os.path.join(out, "generated_script.py")
-    with open(script_path, "w") as script_file:
-        script_file.write(script_content)
-    logger.info(f"Generated script saved at: {script_path}")
-
-def test_model(out, params, fold="fold_1"):
+def test_model(out, params, fold=None):  # Default fold is None
     """
     Load the trained model and test it on the validation data.
 
     Parameters:
     out (str): Output directory where the model and validation data are saved.
     params (dict): Dictionary of model parameters.
-    fold (str): The fold to test (e.g., "fold_1").
+    fold (str): The fold to test (e.g., "fold_1"). If None, defaults to "fold_1".
     """
     try:
+        # Determine the fold directory
+        fold_dir = f"fold_{fold}" if fold is not None else "fold_1"
+
         # Log the parameters used to load the model
         logger.info("Model loading parameters:")
         for key, value in params.items():
             logger.info(f"{key}: {value}")
 
         # Load the model
-        model_path = os.path.join(out, fold, "transformer.model")
+        model_path = os.path.join(out, fold_dir, "transformer_state_dict.pth")
         model = load_model(model_path, params)
         logger.info(f"Model loaded successfully from {model_path}.")
 
         # Load the validation data
-        val_loader_path = os.path.join(out, fold, "val_kfold_loader.pkl")
+        val_loader_path = os.path.join(out, fold_dir, "val_kfold_loader.pkl")
         with open(val_loader_path, "rb") as f:
             val_loader = pickle.load(f)
         logger.info(f"Validation data loaded successfully from {val_loader_path}.")
@@ -231,6 +152,7 @@ def load_model(model_path, params):
     use_lstm = params["use_lstm"]
     use_positional_encoding = params["use_positional_encoding"]
 
+    # Initialize the model
     if attention == "absolute":
         model = model_onehot.TransformerClassifier(
             input_dim=input_dim,
@@ -273,7 +195,9 @@ def load_model(model_path, params):
     else:
         raise ValueError(f"Invalid attention type: {attention}")
     
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    # Load the state dictionary
+    state_dict = torch.load(model_path, map_location=device)
+    model.load_state_dict(state_dict)  # Load the state_dict into the model
     model.to(device)
     model.eval()
     return model
@@ -475,8 +399,6 @@ def main(
     X, y, input_size, labels = load_data(x_path, y_path)  # Get labels
     params["input_size"] = input_size  # Set input size in params
 
-    generate_script(out, params)
-
     shuffled_data = {}  # Dictionary to save shuffled data
 
     # Shuffle if specified
@@ -542,7 +464,7 @@ def main(
         raise
 
     if run_test_model:  # Use the updated parameter name
-        test_model(out, params)
+        test_model(out, params, fold=fold_index)  # Pass fold_index to test_model
 
     logger.info("FINISHED! :D")
 
