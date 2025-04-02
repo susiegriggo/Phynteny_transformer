@@ -50,7 +50,8 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, 
         return
 
     num_classes = 9
-    device = 'cpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    logger.info(f"Using device: {device}")
     #phrog_categories = [f"Category {i}" for i in range(num_classes)]
 
     # Initialize dictionaries to store precision, recall, average precision, false positive rate, true positive rate, and ROC AUC
@@ -83,7 +84,8 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, 
 
         # Load model
         m = model_onehot.TransformerClassifierCircularRelativeAttention(input_dim=1280, num_classes=num_classes, num_heads=4, hidden_dim=256, dropout=0.1, use_lstm=True)
-        m.load_state_dict(torch.load(f'{model_dir}/fold_{k+1}transformer.model', map_location=torch.device('cpu')))
+        m.load_state_dict(torch.load(f'{model_dir}/fold_{k+1}transformer.model', map_location=torch.device(device)))
+        m.to(device)  # Move model to the appropriate device
         m.eval()
         logger.info("Model and validation data read")
 
