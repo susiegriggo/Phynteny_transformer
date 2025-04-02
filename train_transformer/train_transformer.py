@@ -40,118 +40,40 @@ def validate_num_heads(ctx, param, value):
         raise click.BadParameter("Number of attention heads must be divisible by 4.")
     return value
 
-def generate_script(out, params):
-    """
-    Generate a Python script dynamically and save it to the output directory.
-    """
-    script_content = f"""
-# Auto-generated script
-import torch
-from src.model_onehot import TransformerClassifier, TransformerClassifierRelativeAttention, TransformerClassifierCircularRelativeAttention
 
-def load_model(model_path):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
-    attention = "{params['attention']}"
-    input_dim = {params['input_size']}
-    num_classes = 9
-    num_heads = {params['num_heads']}
-    hidden_dim = {params['hidden_dim']}
-    lstm_hidden_dim = {params['lstm_hidden_dim']}
-    dropout = {params['dropout']}
-    num_layers = {params['num_layers']}
-    output_dim = {params['output_dim']}
-    use_lstm = {params['use_lstm']}
-    use_positional_encoding = {params['use_positional_encoding']}
-    
-    if attention == "absolute":
-        model = TransformerClassifier(
-            input_dim=input_dim,
-            num_classes=num_classes,
-            num_heads=num_heads,
-            hidden_dim=hidden_dim,
-            lstm_hidden_dim=lstm_hidden_dim,
-            dropout=dropout,
-            num_layers=num_layers,
-            output_dim=output_dim,
-            use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
-        )
-    elif attention == "relative":
-        model = TransformerClassifierRelativeAttention(
-            input_dim=input_dim,
-            num_classes=num_classes,
-            num_heads=num_heads,
-            hidden_dim=hidden_dim,
-            lstm_hidden_dim=lstm_hidden_dim,
-            dropout=dropout,
-            num_layers=num_layers,
-            output_dim=output_dim,
-            use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
-        )
-    elif attention == "circular":
-        model = TransformerClassifierCircularRelativeAttention(
-            input_dim=input_dim,
-            num_classes=num_classes,
-            num_heads=num_heads,
-            hidden_dim=hidden_dim,
-            lstm_hidden_dim=lstm_hidden_dim,
-            dropout=dropout,
-            num_layers=num_layers,
-            output_dim=output_dim,
-            use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
-        )
-    else:
-        raise ValueError(f"Invalid attention type: {params['attention']}")
-    
-    model.load_state_dict(torch.load(model_path, map_location=device))
-    model.to(device)
-    model.eval()
-    return model
-
-def main():
-    print("This is an auto-generated script.")
-    print("Modify this script as needed.")
-
-if __name__ == "__main__":
-    main()
-"""
-    script_path = os.path.join(out, "generated_script.py")
-    with open(script_path, "w") as script_file:
-        script_file.write(script_content)
-    logger.info(f"Generated script saved at: {script_path}")
-
-def test_model(out, params, fold="fold_1"):
+def test_model(out, params, fold=None):  # Default fold is None
     """
     Load the trained model and test it on the validation data.
 
     Parameters:
     out (str): Output directory where the model and validation data are saved.
     params (dict): Dictionary of model parameters.
-    fold (str): The fold to test (e.g., "fold_1").
+    fold (str): The fold to test (e.g., "fold_1"). If None, defaults to "fold_1".
     """
     try:
+        # Determine the fold directory
+        fold_dir = f"fold_{fold}" if fold is not None else "fold_1"
+
         # Log the parameters used to load the model
         logger.info("Model loading parameters:")
         for key, value in params.items():
             logger.info(f"{key}: {value}")
 
         # Load the model
-        model_path = os.path.join(out, fold, "transformer.model")
+        model_path = os.path.join(out, fold_dir, "transformer_state_dict.pth")
         model = load_model(model_path, params)
         logger.info(f"Model loaded successfully from {model_path}.")
 
         # Load the validation data
-        val_loader_path = os.path.join(out, fold, "val_kfold_loader.pkl")
+        val_loader_path = os.path.join(out, fold_dir, "val_kfold_loader.pkl")
         with open(val_loader_path, "rb") as f:
             val_loader = pickle.load(f)
         logger.info(f"Validation data loaded successfully from {val_loader_path}.")
 
-        # Initialize counters for predictions and correct predictions
-        category_counts = torch.zeros(params["num_classes"], dtype=torch.int)
-        correct_predictions = torch.zeros(params["num_classes"], dtype=torch.int)
+        # Initialize counters for predictions, correct predictions, and counts
+        category_counts_masked = torch.zeros(params["num_classes"], dtype=torch.int)
+        category_counts_predicted = torch.zeros(params["num_classes"], dtype=torch.int)
+        category_counts_correct = torch.zeros(params["num_classes"], dtype=torch.int)  # Renamed from category_counts_true
 
         # Evaluate the model
         model.eval()
@@ -174,23 +96,31 @@ def test_model(out, params, fold="fold_1"):
                         pred = predictions[batch_idx, i].item()
                         true_label = categories[batch_idx, i].item()
                         if pred != -1:  # Ignore padding or invalid predictions
-                            category_counts[pred] += 1
                             if pred == true_label:
-                                correct_predictions[pred] += 1
+                                category_counts_correct[true_label] += 1  # Updated to category_counts_correct
+                            category_counts_predicted[pred] += 1  # Count predictions
+                            category_counts_masked[true_label] += 1  # Count masked categories
 
-        # Log the results
-        logger.info("Prediction counts and correct predictions for each category:")
-        for i in range(params["num_classes"]):
-            logger.info(f"Category {i}: {category_counts[i].item()} predictions, {correct_predictions[i].item()} correct")
 
-        # Calculate and log accuracy per category
         logger.info("Accuracy per category:")
         for i in range(params["num_classes"]):
-            if category_counts[i] > 0:
-                accuracy = correct_predictions[i].item() / category_counts[i].item()
+            if category_counts_masked[i] > 0:
+                accuracy = category_counts_correct[i].item() / category_counts_masked[i].item()
                 logger.info(f"Category {i}: {accuracy:.2f}")
             else:
                 logger.info(f"Category {i}: No predictions made")
+
+        logger.info("Masked category counts (true labels):")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts_masked[i].item()} masked")
+
+        logger.info("Prediction counts:")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts_predicted[i].item()} predicted")
+
+        logger.info("True label counts:")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts_correct[i].item()} correct")  # Updated to category_counts_correct
 
     except Exception as e:
         logger.error(f"Error during model testing: {e}")
@@ -221,6 +151,7 @@ def load_model(model_path, params):
     use_lstm = params["use_lstm"]
     use_positional_encoding = params["use_positional_encoding"]
 
+    # Initialize the model
     if attention == "absolute":
         model = model_onehot.TransformerClassifier(
             input_dim=input_dim,
@@ -263,7 +194,9 @@ def load_model(model_path, params):
     else:
         raise ValueError(f"Invalid attention type: {attention}")
     
-    model.load_state_dict(torch.load(model_path, map_location=device))
+    # Load the state dictionary
+    state_dict = torch.load(model_path, map_location=device)
+    model.load_state_dict(state_dict)  # Load the state_dict into the model
     model.to(device)
     model.eval()
     return model
@@ -465,8 +398,6 @@ def main(
     X, y, input_size, labels = load_data(x_path, y_path)  # Get labels
     params["input_size"] = input_size  # Set input size in params
 
-    generate_script(out, params)
-
     shuffled_data = {}  # Dictionary to save shuffled data
 
     # Shuffle if specified
@@ -532,7 +463,7 @@ def main(
         raise
 
     if run_test_model:  # Use the updated parameter name
-        test_model(out, params)
+        test_model(out, params, fold=fold_index)  # Pass fold_index to test_model
 
     logger.info("FINISHED! :D")
 

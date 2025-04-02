@@ -2,8 +2,8 @@ import os
 import pickle
 import torch
 from loguru import logger
-from src.model_onehot import TransformerClassifier, TransformerClassifierRelativeAttention, TransformerClassifierCircularRelativeAttention
-from tqdm import tqdm  # Add tqdm import
+from src.model_onehot import TransformerClassifier, TransformerClassifierRelativeAttention, TransformerClassifierCircularRelativeAttention, fourier_positional_encoding
+from tqdm import tqdm
 
 def load_model(model_path, params):
     """
@@ -40,7 +40,8 @@ def load_model(model_path, params):
             num_layers=num_layers,
             output_dim=output_dim,
             use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
+            use_positional_encoding=use_positional_encoding,
+            positional_encoding=fourier_positional_encoding
         )
     elif attention == "relative":
         model = TransformerClassifierRelativeAttention(
@@ -53,7 +54,8 @@ def load_model(model_path, params):
             num_layers=num_layers,
             output_dim=output_dim,
             use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
+            use_positional_encoding=use_positional_encoding,
+            positional_encoding=fourier_positional_encoding
         )
     elif attention == "circular":
         model = TransformerClassifierCircularRelativeAttention(
@@ -66,7 +68,8 @@ def load_model(model_path, params):
             num_layers=num_layers,
             output_dim=output_dim,
             use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
+            use_positional_encoding=use_positional_encoding,
+            positional_encoding=fourier_positional_encoding
         )
     else:
         raise ValueError(f"Invalid attention type: {attention}")
@@ -76,7 +79,7 @@ def load_model(model_path, params):
     model.eval()
     return model
 
-def test_model(model_path, val_loader_path, params):
+def test_model(model_path, val_loader_path, params, noise_std=None):
     """
     Load the trained model and test it on the validation data.
 
@@ -84,6 +87,7 @@ def test_model(model_path, val_loader_path, params):
     model_path (str): Path to the trained model file.
     val_loader_path (str): Path to the validation data loader.
     params (dict): Dictionary of model parameters.
+    noise_std (float, optional): Standard deviation of noise to apply to the dataset.
     """
     try:
         logger.info("Model loading parameters:")
@@ -97,17 +101,33 @@ def test_model(model_path, val_loader_path, params):
             val_loader = pickle.load(f)
         logger.info(f"Validation data loaded successfully from {val_loader_path}.")
 
-        # Check if the dataset is set to training or validation mode
-        if hasattr(val_loader.dataset, "training") and val_loader.dataset.training:
-            logger.info("Validation dataset is in training mode.")
-        elif hasattr(val_loader.dataset, "validation") and val_loader.dataset.validation:
-            logger.info("Validation dataset is in validation mode.")
-        else:
-            logger.info("Validation dataset is neither in training nor validation mode. Setting it to training mode.")
-            val_loader.dataset.set_training(True)
+        # Update noise_std if specified
+        if noise_std is not None:
+            if hasattr(val_loader, 'dataset') and hasattr(val_loader.dataset, 'noise_std'):
+                logger.info(f"Updating noise_std of the embedding dataset to: {noise_std}")
+                val_loader.dataset.noise_std = noise_std
+            else:
+                logger.warning("The embedding dataset does not have a noise_std attribute.")
 
-        category_counts = torch.zeros(params["num_classes"], dtype=torch.int)
-        correct_predictions = torch.zeros(params["num_classes"], dtype=torch.int)
+        # Log the noise_std value of the embedding dataset
+        if hasattr(val_loader, 'dataset') and hasattr(val_loader.dataset, 'noise_std'):
+            logger.info(f"noise_std of the embedding dataset: {val_loader.dataset.noise_std}")
+        else:
+            logger.warning("The embedding dataset does not have a noise_std attribute.")
+
+        # Log the mode of val_loader
+        if hasattr(val_loader, 'dataset') and hasattr(val_loader.dataset, 'training') and val_loader.dataset.training:
+            logger.info("val_loader's dataset is already in training mode.")
+        else:
+            logger.info("val_loader's dataset is not in training mode. Setting it to training mode.")
+            if hasattr(val_loader, 'dataset') and hasattr(val_loader.dataset, 'set_training'):
+                val_loader.dataset.set_training(True)
+            else:
+                logger.warning("val_loader's dataset does not have a set_training method.")
+
+        category_counts_masked = torch.zeros(params["num_classes"], dtype=torch.int)
+        category_counts_predicted = torch.zeros(params["num_classes"], dtype=torch.int)
+        category_counts_correct = torch.zeros(params["num_classes"], dtype=torch.int)
 
         model.eval()
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -118,31 +138,43 @@ def test_model(model_path, val_loader_path, params):
                 embeddings = embeddings.to(device).float()
                 categories = categories.to(device).long()
                 masks = masks.to(device).float()
+
                 src_key_padding_mask = (masks != -2).bool().to(device)
 
-                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
-                predictions = outputs.argmax(dim=-1)
+                with torch.amp.autocast('cuda'):
+                    outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                    predictions = outputs.argmax(dim=-1)
 
+                # Evaluate only rows with idx
                 for batch_idx, indices in enumerate(idx):
                     for i in indices:
-                        pred = predictions[batch_idx, i].item()
                         true_label = categories[batch_idx, i].item()
-                        if pred != -1:
-                            category_counts[pred] += 1
-                            if pred == true_label:
-                                correct_predictions[pred] += 1
-
-        logger.info("Prediction counts and correct predictions for each category:")
-        for i in range(params["num_classes"]):
-            logger.info(f"Category {i}: {category_counts[i].item()} predictions, {correct_predictions[i].item()} correct")
+                        pred_label = predictions[batch_idx, i].item()
+                        if true_label != -1:  # Ignore padding or invalid labels
+                            category_counts_masked[true_label] += 1
+                            category_counts_predicted[pred_label] += 1
+                            if true_label == pred_label:
+                                category_counts_correct[true_label] += 1
 
         logger.info("Accuracy per category:")
         for i in range(params["num_classes"]):
-            if category_counts[i] > 0:
-                accuracy = correct_predictions[i].item() / category_counts[i].item()
+            if category_counts_masked[i] > 0:
+                accuracy = category_counts_correct[i].item() / category_counts_masked[i].item()
                 logger.info(f"Category {i}: {accuracy:.2f}")
             else:
                 logger.info(f"Category {i}: No predictions made")
+
+        logger.info("Masked category counts (true labels):")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts_masked[i].item()} masked")
+
+        logger.info("Prediction counts:")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts_predicted[i].item()} predicted")
+
+        logger.info("Correct label counts:")
+        for i in range(params["num_classes"]):
+            logger.info(f"Category {i}: {category_counts_correct[i].item()} correct")
 
         logger.info("Testing process completed successfully.")
         print("Testing process completed successfully.")
@@ -168,7 +200,8 @@ if __name__ == "__main__":
     @click.option("--output_dim", type=int, help="Output dimension.")
     @click.option("--use_lstm", is_flag=True, default=False, help="Use LSTM layers.")
     @click.option("--use_positional_encoding", is_flag=True, default=True, help="Use positional encoding.")
-    def main(model_path, val_loader_path, attention, input_size, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, num_layers, output_dim, use_lstm, use_positional_encoding):
+    @click.option("--noise_std", default=None, type=float, help="Standard deviation of noise to apply to the dataset.")
+    def main(model_path, val_loader_path, attention, input_size, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, num_layers, output_dim, use_lstm, use_positional_encoding, noise_std):
         params = {
             "attention": attention,
             "input_size": input_size,
@@ -182,6 +215,6 @@ if __name__ == "__main__":
             "use_lstm": use_lstm,
             "use_positional_encoding": use_positional_encoding,
         }
-        test_model(model_path, val_loader_path, params)
+        test_model(model_path, val_loader_path, params, noise_std=noise_std)
 
     main()
