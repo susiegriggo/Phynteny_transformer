@@ -388,9 +388,9 @@ class EmbeddingDataset(Dataset):
         torch.Tensor: Embedding tensor with masked tokens set to zeros.
         """
         new_features = embedding[idx].clone()
-        new_features = torch.zeros_like(new_features)
+        new_features[:,3:] = torch.zeros_like(new_features[:,3:])
         embedding[idx] = new_features
-        print(embedding[idx])
+        #print(embedding[idx])
 
         return embedding
     
@@ -456,7 +456,8 @@ class TransformerClassifier(nn.Module):
         output_dim=None,  # Add output_dim parameter
         use_lstm=False,  # Add use_lstm parameter
         positional_encoding=fourier_positional_encoding,  # Use Fourier positional encoding
-        use_positional_encoding=True  # Add use_positional_encoding parameter
+        use_positional_encoding=True,  # Add use_positional_encoding parameter
+        protein_dropout_rate=0.0  # Add parameter for protein feature dropout
     ):
         """
         Initialize the Transformer Classifier.
@@ -783,7 +784,8 @@ class TransformerClassifierRelativeAttention(nn.Module):
         output_dim=None,  # Add output_dim parameter
         use_lstm=False,  # Add use_lstm parameter
         positional_encoding=fourier_positional_encoding,  # Use Fourier positional encoding
-        use_positional_encoding=True  # Add use_positional_encoding parameter
+        use_positional_encoding=True,  # Add use_positional_encoding parameter
+        protein_dropout_rate=0.0  # Add parameter for protein feature dropout
     ):
         """
         Initialize the Transformer Classifier with Relative Attention.
@@ -1097,7 +1099,8 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         output_dim=None,
         use_lstm=False,
         positional_encoding=fourier_positional_encoding,
-        use_positional_encoding=True
+        use_positional_encoding=True,
+        protein_dropout_rate=0.0  # Add parameter for protein feature dropout
     ):
         super(TransformerClassifierCircularRelativeAttention, self).__init__()
 
@@ -1113,6 +1116,11 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)
 
         self.dropout = nn.Dropout(dropout).to(device)
+        
+        # Add protein feature dropout layer
+        self.protein_feature_dropout = ProteinFeatureDropout(dropout_rate=protein_dropout_rate).to(device)
+        self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes to the dropout layer
+        
         self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device) if use_positional_encoding else None
         self.output_dim = output_dim if output_dim else num_classes
 
@@ -1280,7 +1288,7 @@ def combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask,
         logger.error("NaN values found in classification loss")
 
     # Compute diagonal penalty
-    diagonal_penalty = diagonal_attention_penalty(attn_weights, src_key_padding_mask=src_key_padding_mask)
+    diagonal_penalty = diagonal_attention_penalty(attn_weights, src_key_padding_mask, idx)
 
     # Check for NaN values in the diagonal penalty
     if torch.isnan(diagonal_penalty).any():
@@ -1295,9 +1303,9 @@ def combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask,
 
     return penalised_loss, classification_loss
 
-def diagonal_attention_penalty(attn_weights, src_key_padding_mask):
+def diagonal_attention_entire(attn_weights, src_key_padding_mask):
     """
-    Calculate the diagonal attention penalty.
+    Calculate the diagonal attention penalty. This doesn't focus on the masked tokens but the entire sequence
 
     Parameters:
     attn_weights (torch.Tensor): Attention weights tensor.
@@ -1330,6 +1338,42 @@ def diagonal_attention_penalty(attn_weights, src_key_padding_mask):
 
     return penalty.mean()
 
+def diagonal_attention_penalty(attn_weights, src_key_padding_mask, idx):
+    """
+    Enhanced diagonal attention penalty mechanism. Compares the ratio of self attention to other attention 
+    """
+    
+    batch_size, num_heads, seq_len, _ = attn_weights.size()
+    device = attn_weights.device
+    
+    # Create a mask that only considers positions in idx (the masked tokens)
+    # Initialize with zeros
+    idx_mask = torch.zeros(batch_size, seq_len, device=device)
+    
+    # For each batch item, mark the positions in idx as 1
+    for b in range(batch_size):
+        if b < len(idx) and idx[b].numel() > 0:
+            idx_mask[b, idx[b]] = 1.0
+    
+    # Expand for attention heads
+    idx_mask = idx_mask.unsqueeze(1).unsqueeze(-1).expand(-1, num_heads, -1, seq_len)
+    
+    # Create diagonal mask
+    diag_mask = torch.eye(seq_len, device=device).unsqueeze(0).unsqueeze(0)
+    
+    # Apply masks to keep only diagonal attention for masked tokens
+    valid_mask = src_key_padding_mask.unsqueeze(1).unsqueeze(2)
+    masked_diag_attn = attn_weights * diag_mask * idx_mask * valid_mask
+    
+    # Get total attention from masked tokens
+    masked_total_attn = attn_weights * idx_mask * valid_mask
+    
+    # Calculate ratio of diagonal attention to total for masked tokens
+    diag_sum = masked_diag_attn.sum(dim=(-2, -1))
+    total_sum = masked_total_attn.sum(dim=(-2, -1)) + 1e-8
+    
+    return (diag_sum / total_sum).mean()
+    
 
 def cosine_lr_scheduler(optimizer, num_warmup_steps, num_training_steps, min_lr_ratio=0.1, last_epoch=-1):
     """
@@ -1561,7 +1605,7 @@ def train(
                     accuracy = calculate_accuracy(outputs, categories, masks, idx)
                     
                     # Calculate diagonal penalty so it can be stored in the metrics
-                    diagonal_penalty = diagonal_attention_penalty(attn_weights, src_key_padding_mask=src_key_padding_mask)
+                    diagonal_penalty = diagonal_attention_penalty(attn_weights, src_key_padding_mask, idx)
 
                 # Update total validation loss and accuracy
                 total_val_loss += val_loss.item()
@@ -1633,7 +1677,7 @@ def train(
         val_accuracies.append(avg_val_accuracy)
 
         # Log validation loss and accuracy
-        logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {avg_val_loss}, Validation Accuracy: {avg_val_accuracy}")
+        #logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {avg_val_loss}, Validation Accuracy: {avg_val_accuracy}")
 
         # Save the final validation categories and masks
         with open(os.path.join(save_path, "final_validation_categories.pkl"), "wb") as f:
@@ -1676,7 +1720,7 @@ def train(
 
     # Save the model's state dictionary
     model_save_path = os.path.join(save_path, "transformer_state_dict.pth")
-    torch.save(model.state_dict(), model_save_path)
+    torch.save(model.state_dict(), model_save_path)  # Ensure only state_dict is saved
     logger.info(f"Model state dictionary saved at {model_save_path}")
 
     # Reload the model to test saving/loading process and compute validation metrics
@@ -1697,6 +1741,7 @@ def train(
     ).to(device)
 
     # Log the parameters used for reloading the model
+    logger.info(f'Model type: {type(model)}')
     logger.info(f"Reloaded model parameters: input_dim={model.embedding_layer.in_features}, "
                 f"num_classes={model.num_classes}, num_heads={model.transformer_encoder.layers[0].self_attn.num_heads}, "
                 f"num_layers={len(model.transformer_encoder.layers)}, hidden_dim={model.embedding_layer.out_features + 28}, "
@@ -1723,7 +1768,6 @@ def train(
             )
             src_key_padding_mask = (masks != -2).bool().to(device)
             outputs = reloaded_model(embeddings, src_key_padding_mask=src_key_padding_mask)
-            predictions = outputs.argmax(dim=-1)
 
             # Evaluate only rows with idx
             for batch_idx, indices in enumerate(idx):
@@ -1786,7 +1830,7 @@ def train(
     gc.collect()
     torch.cuda.empty_cache()
 
-def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding=fourier_positional_encoding, use_positional_encoding=True, zero_idx=False, strand_gene_length=True):
+def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding=fourier_positional_encoding, use_positional_encoding=True, zero_idx=False, strand_gene_length=True, protein_dropout_rate=0.0):
     fold_logger = None
     try:
         device = torch.device(device_id)
@@ -1875,7 +1919,8 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                     output_dim=output_dim,  # Pass output_dim
                     use_lstm=use_lstm,  # Pass use_lstm
                     positional_encoding=positional_encoding,  # Use Fourier positional encoding
-                    use_positional_encoding=use_positional_encoding  # Pass use_positional_encoding
+                    use_positional_encoding=use_positional_encoding,  # Pass use_positional_encoding
+                    protein_dropout_rate=protein_dropout_rate  # Pass the parameter here
                 ).to(device)
             elif attention == "relative":
                 kfold_transformer_model = TransformerClassifierRelativeAttention(
@@ -1890,7 +1935,8 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                     output_dim=output_dim,  # Pass output_dim
                     use_lstm=use_lstm,  # Pass use_lstm
                     positional_encoding=positional_encoding,  # Use Fourier positional encoding
-                    use_positional_encoding=use_positional_encoding  # Pass use_positional_encoding
+                    use_positional_encoding=use_positional_encoding,  # Pass use_positional_encoding
+                    protein_dropout_rate=protein_dropout_rate  # Pass the parameter here
                 ).to(device)
             elif attention == "absolute":
                 kfold_transformer_model = TransformerClassifier(
@@ -1905,7 +1951,8 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                     output_dim=output_dim,  # Pass output_dim
                     use_lstm=use_lstm,  # Pass use_lstm
                     positional_encoding=positional_encoding,  # Use Fourier positional encoding
-                    use_positional_encoding=use_positional_encoding  # Pass use_positional_encoding
+                    use_positional_encoding=use_positional_encoding,  # Pass use_positional_encoding
+                    protein_dropout_rate=protein_dropout_rate  # Pass the parameter here
                 ).to(device)
             else:
                 fold_logger.error("Invalid attention type specified")
@@ -1975,7 +2022,8 @@ def train_crossValidation(
     use_positional_encoding=True,  # Add use_positional_encoding parameter
     noise_std=0.0,  # Add noise_std parameter
     zero_idx=False,  # Add zero_idx parameter
-    strand_gene_length=True  # Add strand_gene_length parameter
+    strand_gene_length=True,  # Add strand_gene_length parameter
+    protein_dropout_rate=0.0  # Parameter is defined here but not used in the function calls
 ):
     """
     Train the model using K-Fold cross-validation.
@@ -2025,7 +2073,7 @@ def train_crossValidation(
             if fold == single_fold:
                 # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device}")
-                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, zero_idx, strand_gene_length)
+                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, zero_idx, strand_gene_length, protein_dropout_rate)  # Add protein_dropout_rate
                 break
     else:
         if parallel_kfolds:
@@ -2038,7 +2086,16 @@ def train_crossValidation(
             for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
                 device_id = (fold - 1) % num_gpus
                 logger.info(f"Training fold {fold} on device {device_id}")
-                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, zero_idx, strand_gene_length))
+                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, 
+                                                      device_id, dataset, attention, 
+                                                      batch_size, epochs, lr, min_lr_ratio, 
+                                                      save_path, num_heads, hidden_dim, 
+                                                      lstm_hidden_dim, dropout, 
+                                                      checkpoint_interval, intialisation, 
+                                                      lambda_penalty, num_layers, output_dim, 
+                                                      input_size, use_lstm, positional_encoding, 
+                                                      use_positional_encoding, zero_idx, 
+                                                      strand_gene_length, protein_dropout_rate))  # Add protein_dropout_rate
                 p.start()
                 processes.append(p)
 
@@ -2062,7 +2119,7 @@ def train_crossValidation(
                 device_id = (fold - 1) % num_gpus
                 # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device_id}")
-                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, zero_idx, strand_gene_length)
+                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, zero_idx, strand_gene_length, protein_dropout_rate)  # Add protein_dropout_rate
 
             # Clear cache after all folds finish
             gc.collect()
@@ -2107,8 +2164,72 @@ def save_logits(model, dataloader, device, output_dir="logits_output"):
     # Create the output directory if it doesn't exist
     if not os.path.exists(output_dir):
         os.makedirs(output_dir)
-        logger.info(f"Directory created: {output_dir}")
 
-    # Save the logits to a file
+     # Save the logits to a file
     np.save(os.path.join(output_dir, "logits.npy"), all_logits)
     logger.info("Logits saved successfully")
+
+
+
+class ProteinFeatureDropout(nn.Module):
+    """
+    Custom dropout layer that specifically targets protein features in embeddings.
+    
+    During training, applies standard dropout.
+    During inference, applies a consistent dropout mask for stability.
+    """
+
+    def __init__(self, dropout_rate=0.2):
+        super().__init__()
+        self.dropout_rate = dropout_rate
+        # Register buffer to store fixed mask for inference
+        self.register_buffer('fixed_mask', None)
+        
+    def forward(self, x, protein_idx=None, is_training=None):
+        """
+        Apply dropout to protein features starting from protein_idx.
+        
+        Args:
+            x (torch.Tensor): Input tensor [batch_size, seq_len, feature_dim]
+            protein_idx (int): Index where protein features start in the feature dimension
+            is_training (bool, optional): Override the module's training state
+            
+        Returns:
+            torch.Tensor: The input tensor with dropout applied only to protein features
+        """
+        # Default protein index if not specified (assuming format from EmbeddingDataset)
+        if protein_idx is None:
+            # Default: after one-hot class encoding, strand info, and gene length
+            # num_classes + 2 (strand) + 1 (length)
+            if hasattr(self, 'num_classes'):
+                protein_idx = self.num_classes + 3
+            else:
+                protein_idx = 12  # Default assuming 9 classes + 3 features
+                
+        # Use module's training state if not specified
+        is_training = self.training if is_training is None else is_training
+        
+        # Create a copy of the input to modify
+        result = x.clone()
+        
+        # Extract protein features
+        protein_features = x[:, :, protein_idx:]
+        
+        if is_training:
+            # Apply standard dropout during training
+            dropped_features = F.dropout(protein_features, p=self.dropout_rate, training=True)
+        else:
+            # Use consistent mask during inference
+            if self.fixed_mask is None or self.fixed_mask.shape != protein_features.shape:
+                # Generate a new fixed mask if needed
+                self.fixed_mask = torch.bernoulli(
+                    torch.ones_like(protein_features) * (1 - self.dropout_rate)
+                ).to(protein_features.device)
+            
+            # Apply the fixed mask
+            dropped_features = protein_features * self.fixed_mask
+        
+        # Replace protein features in the result tensor
+        result[:, :, protein_idx:] = dropped_features
+        
+        return result
