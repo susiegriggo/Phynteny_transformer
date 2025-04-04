@@ -190,7 +190,8 @@ def load_model(model_path, params):
             num_layers=num_layers,
             output_dim=output_dim,
             use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
+            use_positional_encoding=use_positional_encoding,
+            protein_dropout_rate=protein_dropout_rate  # Add this parameter
         )
     else:
         raise ValueError(f"Invalid attention type: {attention}")
@@ -342,6 +343,12 @@ def load_model(model_path, params):
     default=False,
     help="Test the trained model on the validation data.",
 )
+@click.option(
+    "--protein_dropout_rate",
+    default=0.0,
+    help="Dropout rate for protein features (only applied to protein embeddings).",
+    type=float,
+)
 def main(
     x_path,
     y_path,
@@ -371,7 +378,8 @@ def main(
     noise_std,  # Add noise_std parameter
     zero_idx,  # Add zero_idx parameter
     ignore_strand_gene_length,  # Add ignore_strand_gene_length parameter
-    run_test_model  # Use the updated parameter name
+    run_test_model,  # Use the updated parameter name
+    protein_dropout_rate,  # Add protein_dropout_rate parameter
 ):
     setup_output_directory(out, force)
 
@@ -394,7 +402,7 @@ def main(
     logger.add(out + "/trainer.log", level="DEBUG")
 
     # Log parameter values
-    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}, use_lstm={use_lstm}, use_positional_encoding={use_positional_encoding}, noise_std={noise_std}, zero_idx={zero_idx}, ignore_strand_gene_length={ignore_strand_gene_length}")  # Log use_lstm
+    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}, use_lstm={use_lstm}, use_positional_encoding={use_positional_encoding}, noise_std={noise_std}, zero_idx={zero_idx}, ignore_strand_gene_length={ignore_strand_gene_length}, protein_dropout_rate={protein_dropout_rate}")  # Log use_lstm
 
     X, y, input_size, labels = load_data(x_path, y_path)  # Get labels
     params["input_size"] = input_size  # Set input size in params
@@ -457,13 +465,15 @@ def main(
             use_positional_encoding=use_positional_encoding,  # Pass use_positional_encoding
             noise_std=noise_std,  # Pass noise_std
             zero_idx=zero_idx,  # Pass zero_idx
-            strand_gene_length=not ignore_strand_gene_length  # Pass ignore_strand_gene_length
+            strand_gene_length=not ignore_strand_gene_length,  # Pass ignore_strand_gene_length
+            protein_dropout_rate=protein_dropout_rate  # Add this parameter
         )
     except Exception as e:
         logger.error(f"Error during training: {e}")
         raise
 
     if run_test_model:  # Use the updated parameter name
+
         test_model(out, params, fold=fold_index)  # Pass fold_index to test_model
 
     logger.info("FINISHED! :D")
