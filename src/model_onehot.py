@@ -1118,7 +1118,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         self.dropout = nn.Dropout(dropout).to(device)
         
         # Add protein feature dropout layer
-        self.protein_feature_dropout = ProteinFeatureDropout(dropout_rate=protein_dropout_rate).to(device)
+        self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate).to(device)
         self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes to the dropout layer
         
         self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device) if use_positional_encoding else None
@@ -1142,23 +1142,38 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers).to(device)
 
-    def forward(self, x, src_key_padding_mask=None, return_attn_weights=False, save_lstm_output=False, save_transformer_output=False):
+    def forward(self, x, src_key_padding_mask=None, idx=None, return_attn_weights=False, save_lstm_output=False, save_transformer_output=False):
         x = x.float()
+
+        # Extract the different components from the input tensor
         func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:self.num_classes], x[:,:,self.num_classes:self.num_classes+2], x[:,:,self.num_classes+2:self.num_classes+3], x[:,:,self.num_classes+3:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
         strand_embeds = self.strand_embedding(strand_ids.float())
         length_embeds = self.length_embedding(gene_length)
         protein_embeds = self.embedding_layer(protein_embeds)
 
+        # Concatenate the embeddings 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
+
+        # Apply protein feature dropout to the masked tokens 
+        if idx is not None:
+            x = self.protein_feature_dropout(x, idx)  # Apply dropout to the protein features
+
+        # Apply positional encoding
         if self.positional_encoding is not None:
             x = x + self.positional_encoding[: x.size(1), :].to(x.device)
+
+        # Apply dropout
         x = self.dropout(x)
+
+        # Check if LSTM is used
         if self.lstm:
+            # Apply LSTM
             x, _ = self.lstm(x)
             if save_lstm_output:
                 self.saved_lstm_output = x.clone().detach().cpu().numpy()
 
+        # Apply transformer encoder
         if return_attn_weights:
             x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
             for layer in self.transformer_encoder.layers[1:]:
@@ -1540,7 +1555,7 @@ def train(
 
             # Forward pass
             with torch.amp.autocast('cuda'):
-                outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, idx=idx, return_attn_weights=True)
                 loss, _ = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty) 
                 accuracy = calculate_accuracy(outputs, categories, masks, idx)
                        
@@ -1600,7 +1615,7 @@ def train(
                 
                 # Forward pass
                 with torch.amp.autocast('cuda'):
-                    outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                    outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, idx=idx, return_attn_weights=True)
                     val_loss, val_classification_loss = combined_loss(outputs, categories, masks, attn_weights, idx, src_key_padding_mask, lambda_penalty=lambda_penalty)
                     accuracy = calculate_accuracy(outputs, categories, masks, idx)
                     
@@ -1767,7 +1782,7 @@ def train(
                 masks.to(device).float(),
             )
             src_key_padding_mask = (masks != -2).bool().to(device)
-            outputs = reloaded_model(embeddings, src_key_padding_mask=src_key_padding_mask)
+            outputs = reloaded_model(embeddings, src_key_padding_mask=src_key_padding_mask, idx=idx)
 
             # Evaluate only rows with idx
             for batch_idx, indices in enumerate(idx):
@@ -2233,3 +2248,79 @@ class ProteinFeatureDropout(nn.Module):
         result[:, :, protein_idx:] = dropped_features
         
         return result
+
+class MaskedTokenFeatureDropout(nn.Module): 
+    """
+    Custom Dropout layer that emeddings of masked tokens. During training, aplies standard dropout to masked tokens. During inference applies a consistent dropout mask for stability.
+    """
+
+    def __init__(self, dropout_rate=0.2):
+        super().__init__()
+        self.dropout_rate = dropout_rate
+        # Register buffer to store fixed mask for inference
+        self.register_buffer('fixed_mask', None)
+
+    def forward(self, x, idx, protein_idx=None, is_training=None):
+        """
+        Apply dropout to the features of masked tokens 
+
+        Args: 
+            x (torch.Tensor): Input tensor [batch_size, seq_len, feature_dim]
+            idx (torch.Tensor): Indices of the masked tokens
+            protein_idx (int): Index where protein features start in the feature dimension
+            is_training (bool, optional): Override the module's training state
+
+        Returns:
+            torch.Tensor: The input tensor with dropout applied only to protein features
+        """
+
+        # Default protein index if not specified (assuming format from EmbeddingDataset)
+        if protein_idx is None:
+            # Default: after one-hot class encoding, strand info, and gene length
+            # num_classes + 2 (strand) + 1 (length)
+            if hasattr(self, 'num_classes'):
+                protein_idx = self.num_classes + 3
+            else:
+                protein_idx = 12
+
+        # Use module's training state if not specified
+        is_training = self.training if is_training is None else is_training
+
+        # Create a copy of the input to modify
+        result = x.clone() 
+
+        # Only process if we have indices for masked tokens
+        if not idx:
+            return result
+
+        # Process each batch item individually 
+        batch_size = x.size(0)
+        for b in range(batch_size): 
+
+            # check this batch goes up to the maximum size  (last batch is sometimes smaller) and that it isn't empty 
+            if b < len(idx) and idx[b].numel() > 0: 
+
+                # get the masked features for the masked tokens in this batch 
+                masked_features = x[b, idx[b], protein_idx:]  # Extract features of masked tokens
+
+                if is_training:
+                    # Apply standard dropout during training
+                    dropped_features = F.dropout(masked_features, p=self.dropout_rate, training=True)
+                else: 
+                    if self.fixed_mask is None or self.fixed_mask.shape != masked_features.shape:
+                        # Generate a new fixed mask if needed
+                        self.fixed_mask = torch.bernoulli(
+                            torch.ones_like(masked_features) * (1 - self.dropout_rate)
+                        ).to(masked_features.device)
+
+                    # Apply the fixed mask
+                    dropped_features = masked_features * self.fixed_mask
+
+                # Upate only the maksed token features 
+                result[b, idx[b], protein_idx:] = dropped_features
+                
+        return result
+
+
+
+
