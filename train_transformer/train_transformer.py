@@ -87,7 +87,7 @@ def test_model(out, params, fold=None):  # Default fold is None
                 masks = masks.to(device).float()
                 src_key_padding_mask = (masks != -2).bool().to(device)
 
-                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                outputs = model(embeddings, idx=idx, src_key_padding_mask=src_key_padding_mask)
                 predictions = outputs.argmax(dim=-1)
 
                 # Evaluate only rows with idx

@@ -42,8 +42,9 @@ for param, desc in PARAMETERS.items():
 @click.option('--dropout', default=0.1, help='Dropout rate for the model.')
 @click.option('--no-lstm', is_flag=True, help='Specify if LSTM should not be used in the model.')
 @click.option('--max-len', default=1500, help='Maximum length for the model.')
+@click.option('--protein-dropout-rate', default=0.0, help='Dropout rate for protein features (only applied to protein embeddings).')
 
-def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, no_lstm, max_len):
+def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, no_lstm, max_len, protein_dropout_rate):
     """
     Main function to compute confidence scores.
 
@@ -63,6 +64,7 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     :param dropout: Dropout rate for the model
     :param no_lstm: Specify if LSTM should not be used in the model
     :param max_len: Maximum length for the model
+    :param protein_dropout_rate: Dropout rate for protein features
     """
     use_lstm = not no_lstm
 
@@ -78,7 +80,7 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
         logger.info("Using CPU for computation.")
     
     embeddings, categories, validation_categories, phrog_integer = load_data(embeddings_path, categories_path, validation_categories_path, integer_category_path)
-    p = create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len)
+    p = create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate)
     logger.info(f'Predictor models: {p.models}')
     logger.info("Creating the dataset and dataloader.")
     conf_dataset_loader = create_dataloader(embeddings, categories, validation_categories, batch_size)
@@ -119,7 +121,7 @@ def load_data(embeddings_path, categories_path, validation_categories_path, inte
     return embeddings, categories, validation_categories, phrog_integer
 
 
-def create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len):
+def create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate=0.0):
     """
     Create the predictor object.
 
@@ -133,11 +135,12 @@ def create_predictor(model_directory, device, input_dim, num_classes, num_heads,
     :param dropout: Dropout rate for the model
     :param use_lstm: Whether to use LSTM in the model
     :param max_len: Maximum length for the model
+    :param protein_dropout_rate: Dropout rate for protein features
     :return: Predictor object
     """
     logger.info("Creating the predictor object.")
     p = predictor.Predictor(device=device)
-    p.read_models_from_directory(model_directory, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len)
+    p.read_models_from_directory(model_directory, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate)
     logger.info(f"Loaded models: {len(p.models)} models loaded.")
     return p
 
