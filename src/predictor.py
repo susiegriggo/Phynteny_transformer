@@ -99,7 +99,7 @@ class Predictor:
             record.annotations["phynteny score"] = self.scores[key]
             SeqIO.write(record, os.path.join(out, key + ".gb"), "genbank")
 
-    def read_model(self, model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len): 
+    def read_model(self, model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate=0.0): 
         """
         Read and load a model from the given path.
 
@@ -112,12 +112,13 @@ class Predictor:
         :param dropout: Dropout rate for the model
         :param use_lstm: Whether to use LSTM in the model
         :param max_len: Maximum length for the model
+        :param protein_dropout_rate: Dropout rate for protein features
         :return: Loaded model
         """
         # Read in the model 
         model = torch.load(model_path, map_location=torch.device(self.device))
 
-        logger.info(f'Reading model with input_dim={input_dim}, num_classes={num_classes}, num_heads={num_heads}, hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={dropout}, use_lstm={use_lstm}, max_len={max_len}')
+        logger.info(f'Reading model with input_dim={input_dim}, num_classes={num_classes}, num_heads={num_heads}, hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={dropout}, use_lstm={use_lstm}, max_len={max_len}, protein_dropout_rate={protein_dropout_rate}')
 
         # Create the predictor option 
         predictor = model_onehot.TransformerClassifierCircularRelativeAttention(
@@ -129,7 +130,8 @@ class Predictor:
             dropout=dropout, 
             max_len=max_len,  # Specify max_len
             use_lstm=use_lstm, 
-            positional_encoding=model_onehot.fourier_positional_encoding  # Add positional_encoding argument
+            positional_encoding=model_onehot.fourier_positional_encoding,  # Add positional_encoding argument
+            protein_dropout_rate=protein_dropout_rate  # Add protein_dropout_rate parameter
         )
     
         # Resize model parameters to match the checkpoint
@@ -142,7 +144,7 @@ class Predictor:
 
         return predictor
 
-    def read_models_from_directory(self, directory_path, input_dim=1280, num_classes=9, num_heads=4, hidden_dim=256, lstm_hidden_dim=512, dropout=0.1, use_lstm=True, max_len=1500):
+    def read_models_from_directory(self, directory_path, input_dim=1280, num_classes=9, num_heads=4, hidden_dim=256, lstm_hidden_dim=512, dropout=0.1, use_lstm=True, max_len=1500, protein_dropout_rate=0.0):
         """
         Read and load all models from the given directory.
 
@@ -155,13 +157,14 @@ class Predictor:
         :param dropout: Dropout rate for the model
         :param use_lstm: Whether to use LSTM in the model
         :param max_len: Maximum length for the model
+        :param protein_dropout_rate: Dropout rate for protein features
         """
         print('Reading models from directory: ', directory_path)
 
         for filename in os.listdir(directory_path):
             if filename.endswith(".model"):  # Assuming model files have .pt extension
                 model_path = os.path.join(directory_path, filename)
-                model = self.read_model(model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len)
+                model = self.read_model(model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate)
                 self.models.append(model)
 
     def compute_confidence(self, scores, confidence_dict, categories):
