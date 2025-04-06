@@ -1519,6 +1519,11 @@ def train(
     final_validation_masks = []
     diagonal_penalities = []
 
+    # Track best validation loss and corresponding model
+    best_val_loss = float('inf')
+    best_model_path = os.path.join(save_path, "best_model.pth")
+    best_epoch = 0
+
     # Initialize DataFrame to store metrics
     metrics_df = pd.DataFrame(
         columns=[
@@ -1653,6 +1658,14 @@ def train(
         avg_diagonal_penalty = total_diagonal_penalty / len(test_dataloader)
         avg_val_accuracy = total_val_correct / total_val_samples
 
+        # Check if this is the best model so far based on validation loss
+        if avg_val_loss < best_val_loss:
+            best_val_loss = avg_val_loss
+            best_epoch = epoch + 1
+            # Save the best model
+            torch.save(model.state_dict(), best_model_path)
+            logger.info(f"Epoch {epoch + 1}/{epochs}: New best validation loss: {best_val_loss:.4f}. Model saved to {best_model_path}")
+
         # Log validation metrics
         logger.info(f"Epoch {epoch + 1}/{epochs}, Validation Loss: {avg_val_loss}, Validation Accuracy: {avg_val_accuracy}")
         logger.info("Validation masked category counts:")
@@ -1733,13 +1746,14 @@ def train(
         # Save the metrics DataFrame to CSV after each epoch
         metrics_df.to_csv(os.path.join(save_path, "metrics.csv"), index=False)
 
-    # Save the model's state dictionary
+    # Save the final model's state dictionary
     model_save_path = os.path.join(save_path, "transformer_state_dict.pth")
     torch.save(model.state_dict(), model_save_path)  # Ensure only state_dict is saved
     logger.info(f"Model state dictionary saved at {model_save_path}")
+    logger.info(f"Best model was from epoch {best_epoch} with validation loss {best_val_loss:.4f}")
 
-    # Reload the model to test saving/loading process and compute validation metrics
-    logger.info("Reloading the saved model for validation testing...")
+    # Reload the best model for evaluation instead of the last model
+    logger.info("Reloading the best model for validation testing...")
     reloaded_model = type(model)(  # Reinitialize the model with the same parameters
         input_dim=model.embedding_layer.in_features, #+ 28,  # Adjust input_dim
         num_classes=model.num_classes,
@@ -1752,7 +1766,8 @@ def train(
         output_dim=model.output_dim,
         use_lstm=model.lstm is not None,
         positional_encoding=fourier_positional_encoding,
-        use_positional_encoding=model.positional_encoding is not None
+        use_positional_encoding=model.positional_encoding is not None,
+        protein_dropout_rate=model.protein_feature_dropout.dropout_rate if hasattr(model, 'protein_feature_dropout') else 0.0
     ).to(device)
 
     # Log the parameters used for reloading the model
@@ -1762,9 +1777,10 @@ def train(
                 f"num_layers={len(model.transformer_encoder.layers)}, hidden_dim={model.embedding_layer.out_features + 28}, "
                 f"lstm_hidden_dim={model.lstm.hidden_size if model.lstm else None}, dropout={model.dropout.p}, "
                 f"output_dim={model.output_dim}, use_lstm={model.lstm is not None}, "
-                f"use_positional_encoding={model.positional_encoding is not None}")
+                f"use_positional_encoding={model.positional_encoding is not None}, "
+                f"protein_dropout_rate={model.protein_feature_dropout.dropout_rate if hasattr(model, 'protein_feature_dropout') else 0.0}")
 
-    reloaded_model.load_state_dict(torch.load(model_save_path, map_location=device))
+    reloaded_model.load_state_dict(torch.load(best_model_path, map_location=device, strict=False))
     reloaded_model.eval()
 
     # Test the reloaded model on validation data
@@ -2258,6 +2274,8 @@ class MaskedTokenFeatureDropout(nn.Module):
         super().__init__()
         self.dropout_rate = dropout_rate
         # Register buffer to store fixed mask for inference
+
+        # dont register the buffer here, as it will be created in the forward pass
         self.register_buffer('fixed_mask', None)
 
     def forward(self, x, idx, protein_idx=None, is_training=None):
