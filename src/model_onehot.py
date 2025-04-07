@@ -484,7 +484,7 @@ class TransformerClassifier(nn.Module):
 
         # Embedding layers
         self.func_embedding = nn.Embedding(num_classes, 16).to(device)
-        self.strand_embedding = nn.Linear(2, 4).to(device)  # Change to linear layer
+        self.strand_embedding = nn.Linear(2, 2).to(device)  # Change to linear layer
         self.length_embedding = nn.Linear(1, 8).to(device)
         self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)  # Use input_dim
 
@@ -810,7 +810,7 @@ class TransformerClassifierRelativeAttention(nn.Module):
 
         # Embedding layers
         self.func_embedding = nn.Embedding(self.num_classes, 16).to(device)
-        self.strand_embedding = nn.Linear(2, 4).to(device)  # Change to linear layer
+        self.strand_embedding = nn.Linear(2, 2).to(device)  # Change to linear layer
         self.length_embedding = nn.Linear(1, 8).to(device)
         self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)  # Use input_dim
 
@@ -1100,7 +1100,10 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         use_lstm=False,
         positional_encoding=fourier_positional_encoding,
         use_positional_encoding=True,
-        protein_dropout_rate=0.0  # Add parameter for protein feature dropout
+        protein_dropout_rate=0.0,  # Add parameter for protein feature dropout
+        function_embedding_dim=16,
+        strand_embedding_dim=2,
+        length_embedding_dim=8
     ):
         super(TransformerClassifierCircularRelativeAttention, self).__init__()
 
@@ -1110,15 +1113,16 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         self.num_classes = num_classes
 
         # Embedding layers
-        self.func_embedding = nn.Embedding(self.num_classes, 16).to(device)
-        self.strand_embedding = nn.Linear(2, 4).to(device)
-        self.length_embedding = nn.Linear(1, 8).to(device)
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim - 28).to(device)
+        self.func_embedding = nn.Embedding(self.num_classes,function_embedding_dim).to(device)
+        self.strand_embedding = nn.Linear(2, strand_embedding_dim).to(device)
+        self.length_embedding = nn.Linear(1, length_embedding_dim).to(device)
+        self.gene_feature_dim = function_embedding_dim + strand_embedding_dim + length_embedding_dim
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim - self.gene_feature_dim).to(device)
 
         self.dropout = nn.Dropout(dropout).to(device)
         
         # Add protein feature dropout layer
-        self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate).to(device)
+        self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate,  protein_idx=self.gene_feature_dim).to(device)
         self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes to the dropout layer
         
         self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device) if use_positional_encoding else None
@@ -2270,15 +2274,16 @@ class MaskedTokenFeatureDropout(nn.Module):
     Custom Dropout layer that emeddings of masked tokens. During training, aplies standard dropout to masked tokens. During inference applies a consistent dropout mask for stability.
     """
 
-    def __init__(self, dropout_rate=0.2):
+    def __init__(self, dropout_rate=0.2, protein_idx=28):
         super().__init__()
         self.dropout_rate = dropout_rate
+        self.protein_idx = protein_idx
         # Register buffer to store fixed mask for inference
 
         # dont register the buffer here, as it will be created in the forward pass
         self.register_buffer('fixed_mask', None)
 
-    def forward(self, x, idx, protein_idx=None, is_training=None):
+    def forward(self, x, idx, is_training=None):
         """
         Apply dropout to the features of masked tokens 
 
@@ -2291,15 +2296,6 @@ class MaskedTokenFeatureDropout(nn.Module):
         Returns:
             torch.Tensor: The input tensor with dropout applied only to protein features
         """
-
-        # Default protein index if not specified (assuming format from EmbeddingDataset)
-        if protein_idx is None:
-            # Default: after one-hot class encoding, strand info, and gene length
-            # num_classes + 2 (strand) + 1 (length)
-            if hasattr(self, 'num_classes'):
-                protein_idx = self.num_classes + 3
-            else:
-                protein_idx = 12
 
         # Use module's training state if not specified
         is_training = self.training if is_training is None else is_training
@@ -2319,7 +2315,7 @@ class MaskedTokenFeatureDropout(nn.Module):
             if b < len(idx) and idx[b].numel() > 0: 
 
                 # get the masked features for the masked tokens in this batch 
-                masked_features = x[b, idx[b], protein_idx:]  # Extract features of masked tokens
+                masked_features = x[b, idx[b], self.protein_idx:]  # Extract features of masked tokens
 
                 if is_training:
                     # Apply standard dropout during training
@@ -2335,7 +2331,7 @@ class MaskedTokenFeatureDropout(nn.Module):
                     dropped_features = masked_features * self.fixed_mask
 
                 # Upate only the maksed token features 
-                result[b, idx[b], protein_idx:] = dropped_features
+                result[b, idx[b], self.protein_idx:] = dropped_features
                 
         return result
 

@@ -151,6 +151,8 @@ def load_model(model_path, params):
     output_dim = params["output_dim"]
     use_lstm = params["use_lstm"]
     use_positional_encoding = params["use_positional_encoding"]
+    protein_dropout_rate = params.get("protein_dropout_rate", 0.0)  # Get with default value
+    
 
     # Initialize the model
     if attention == "absolute":
@@ -395,6 +397,7 @@ def main(
         "output_dim": output_dim,
         "use_lstm": use_lstm,
         "use_positional_encoding": use_positional_encoding,
+        "protein_dropout_rate": protein_dropout_rate,  # Add this parameter to params dictionary
         "num_classes": 9  # Hardcoded for now
     }
 
