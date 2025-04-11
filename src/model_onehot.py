@@ -1039,7 +1039,7 @@ class CircularRelativePositionAttention(nn.Module):
 
 
 class CircularTransformerEncoderLayer(nn.Module):
-    def __init(
+    def __init__(
         self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1500, initialisation='random'
     ):
         """
@@ -1131,7 +1131,8 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         self.length_embedding = nn.Linear(1, length_embedding_dim).to(device)
         self.gene_feature_dim = function_embedding_dim + strand_embedding_dim + length_embedding_dim
         self.embedding_layer = nn.Linear(input_dim, hidden_dim - self.gene_feature_dim).to(device)
-
+        self.num_layers = num_layers
+        self.num_heads = num_heads
         self.dropout = nn.Dropout(dropout).to(device)
         
         # Add protein feature dropout layer
