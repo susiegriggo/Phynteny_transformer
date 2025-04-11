@@ -517,12 +517,18 @@ class TransformerClassifier(nn.Module):
             d_model = hidden_dim  # Use hidden_dim directly
 
         # Transformer Encoder
-        encoder_layer = nn.TransformerEncoderLayer(
+        # Create transformer encoder only if num_layers > 0
+        if num_layers > 0:
+            encoder_layers = nn.TransformerEncoderLayer(
             d_model=d_model, nhead=num_heads, batch_first=True  # Use d_model
         ).to(device)
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer, num_layers=num_layers
-        ).to(device)
+            self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers).to(device)
+        else:
+            # Create an identity module when no transformer layers are needed
+            self.transformer_encoder = nn.Identity().to(device)
+            logger.info("Using Identity layer instead of transformer encoder (num_layers=0)")
+            
+        # Positional Encoding
         if use_positional_encoding:
             self.positional_encoding = positional_encoding(1000, hidden_dim, device).to(device)
         else:
@@ -579,8 +585,10 @@ def log_model_devices(model):
         logger.info("positional_encoding is not used")
     if model.lstm:
         logger.info(f"lstm is on device: {next(model.lstm.parameters()).device}")
-    logger.info(f"transformer_encoder is on device: {next(model.transformer_encoder.parameters()).device}")
-    logger.info(f"fc is on device: {model.fc.weight.device}")
+    if model.num_layers > 0:
+        logger.info(f"transformer_encoder is on device: {next(model.transformer_encoder.parameters()).device}")
+        logger.info(f"transformer_encoder is on device: {next(model.transformer_encoder.parameters()).device}")
+        logger.info(f"fc is on device: {model.fc.weight.device}")
 
 class RelativePositionAttention(nn.Module):
     def __init__(self, d_model, num_heads, max_len=1500, batch_first=True, intialisation = 'random'):
@@ -828,16 +836,21 @@ class TransformerClassifierRelativeAttention(nn.Module):
             self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)  # Use hidden_dim directly
             d_model = hidden_dim  # Use hidden_dim directly
 
-        encoder_layers = CustomTransformerEncoderLayer(
-            d_model=d_model,  # Use d_model
-            num_heads=num_heads,
-            dropout=dropout,
-            max_len=max_len,
-            intialisation=intialisation
-        )
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layers, num_layers=num_layers
-        ).to(device)
+        # Create transformer encoder only if num_layers > 0
+        if num_layers > 0:
+            encoder_layers = CustomTransformerEncoderLayer(
+                d_model=d_model,
+                num_heads=num_heads,
+                dropout=dropout,
+                max_len=max_len,
+                initialisation=intialisation
+            )
+            self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers).to(device)
+        else:
+            # Create an identity module when no transformer layers are needed
+            self.transformer_encoder = nn.Identity().to(device)
+            logger.info("Using Identity layer instead of transformer encoder (num_layers=0)")
+
         if use_positional_encoding:
             self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device)
         else:
@@ -1026,7 +1039,7 @@ class CircularRelativePositionAttention(nn.Module):
 
 
 class CircularTransformerEncoderLayer(nn.Module):
-    def __init__(
+    def __init(
         self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1500, initialisation='random'
     ):
         """
@@ -1137,14 +1150,20 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
             self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)
             d_model = hidden_dim
 
-        encoder_layers = CircularTransformerEncoderLayer(
-            d_model=d_model,
-            num_heads=num_heads,
-            dropout=dropout,
-            max_len=max_len,
-            initialisation=intialisation
-        )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers).to(device)
+        # Create transformer encoder only if num_layers > 0
+        if num_layers > 0:
+            encoder_layers = CircularTransformerEncoderLayer(
+                d_model=d_model,
+                num_heads=num_heads,
+                dropout=dropout,
+                max_len=max_len,
+                initialisation=intialisation
+            )
+            self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers).to(device)
+        else:
+            # Create an identity module when no transformer layers are needed
+            self.transformer_encoder = nn.Identity().to(device)
+            logger.info("Using Identity layer instead of transformer encoder (num_layers=0)")
 
     def forward(self, x, src_key_padding_mask=None, idx=None, return_attn_weights=False, save_lstm_output=False, save_transformer_output=False):
         x = x.float()
@@ -1177,24 +1196,35 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
             if save_lstm_output:
                 self.saved_lstm_output = x.clone().detach().cpu().numpy()
 
-        # Apply transformer encoder
-        if return_attn_weights:
+        # Apply transformer encoder conditionally
+        if return_attn_weights and isinstance(self.transformer_encoder, nn.TransformerEncoder) and hasattr(self.transformer_encoder, 'layers') and len(self.transformer_encoder.layers) > 0:
+            # Only try to get attention weights if we have a real transformer with layers
             x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
             for layer in self.transformer_encoder.layers[1:]:
                 x = layer(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
-            if self.output_dim != 9:
+            if self.output_dim != self.num_classes:
                 x = F.softmax(x, dim=-1)
             if save_transformer_output:
                 self.saved_transformer_output = x.clone().detach().cpu().numpy()
             return x, attn_weights
         else:
-            x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
+            # Just pass through transformer (or Identity if num_layers=0)
+            x = self.transformer_encoder(x)
             x = self.fc(x)
-            if self.output_dim != 9:
+            if self.output_dim != self.num_classes:
                 x = F.softmax(x, dim=-1)
             if save_transformer_output:
                 self.saved_transformer_output = x.clone().detach().cpu().numpy()
+            
+            # If return_attn_weights was requested but we can't provide them, create dummy weights
+            if return_attn_weights:
+                # Create dummy attention weights of the appropriate shape
+                batch_size = x.size(0)
+                seq_len = x.size(1)
+                # Use the model's num_heads attribute instead of hardcoded value
+                dummy_attn_weights = torch.zeros(batch_size, self.num_heads, seq_len, seq_len, device=x.device)
+                return x, dummy_attn_weights
             return x
 
 
