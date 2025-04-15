@@ -1160,6 +1160,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         progressive_dropout=False,
         initial_dropout_rate=1.0,
         final_dropout_rate=0.4,
+        progressive_epochs=25,
     ):
         super(TransformerClassifierCircularRelativeAttention, self).__init__()
 
@@ -1186,7 +1187,8 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate, 
                                                                  progressive_dropout=progressive_dropout,  # Default value set to False
                                                                  initial_dropout_rate=initial_dropout_rate,
-                                                                 final_dropout_rate=final_dropout_rate) 
+                                                                 final_dropout_rate=final_dropout_rate, 
+                                                                 total_epochs=progressive_epochs) 
         #self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes
         self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device) if use_positional_encoding else None
         

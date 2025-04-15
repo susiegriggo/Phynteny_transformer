@@ -316,8 +316,8 @@ def load_model(model_path, params):
 )
 @click.option(
     "--use_positional_encoding",
-    is_flag=True,
-    default=True,
+    type=click.Choice(["True", "False"]),
+    default="True",
     help="Include positional encoding in the model.",
 )
 @click.option(
@@ -438,6 +438,12 @@ def main(
     # Log parameter values
     logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}, use_lstm={use_lstm}, use_positional_encoding={use_positional_encoding}, noise_std={noise_std}, zero_idx={zero_idx}, ignore_strand_gene_length={ignore_strand_gene_length}, protein_dropout_rate={protein_dropout_rate}, pre_norm={pre_norm}, progressive_dropout={progressive_dropout}, initial_dropout_rate={initial_dropout_rate}, final_dropout_rate={final_dropout_rate}")  # Log use_lstm
 
+    # Log progressive dropout settings
+    if progressive_dropout:
+        logger.info(f"Progressive dropout is enabled. Initial rate: {initial_dropout_rate}, Final rate: {final_dropout_rate}")
+    else:
+        logger.info("Progressive dropout is not enabled. Using fixed dropout rate.")
+
     X, y, input_size, labels = load_data(x_path, y_path)  # Get labels
     params["input_size"] = input_size  # Set input size in params
 
@@ -470,7 +476,7 @@ def main(
 
     # Train the model
     logger.info("\nTraining model...")
-
+    use_positional_encoding=(use_positional_encoding == "True"), # Convert to boolean
     try:
         model_onehot.train_crossValidation(
             train_dataset,
