@@ -1174,13 +1174,16 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         self.num_heads = num_heads
         self.dropout = nn.Dropout(dropout).to(device)
         
+        # Add protein feature normalization
+        self.protein_norm = nn.LayerNorm(hidden_dim - self.gene_feature_dim).to(device)
+        
         # Add protein feature dropout layer
         self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate,  protein_idx=self.gene_feature_dim).to(device)
         self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes
-        
-        self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes
-              
         self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device) if use_positional_encoding else None
+        
+        # Add positional normalization
+        self.pos_norm = nn.LayerNorm(hidden_dim).to(device)
         self.output_dim = output_dim if output_dim else num_classes
 
         if use_lstm:
@@ -1218,6 +1221,9 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         length_embeds = self.length_embedding(gene_length)
         protein_embeds = self.embedding_layer(protein_embeds)
 
+        # Normalize protein features
+        protein_embeds = self.protein_norm(protein_embeds)
+
         # Concatenate the embeddings 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
 
@@ -1228,6 +1234,9 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         # Apply positional encoding
         if self.positional_encoding is not None:
             x = x + self.positional_encoding[: x.size(1), :].to(x.device)
+            
+        # Normalize combined features after positional encoding
+        x = self.pos_norm(x)
 
         # Apply dropout
         x = self.dropout(x)
