@@ -1040,7 +1040,7 @@ class CircularRelativePositionAttention(nn.Module):
 
 class CircularTransformerEncoderLayer(nn.Module):
     def __init__(
-        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1500, initialisation='random'
+        self, d_model, num_heads, dim_feedforward=512, dropout=0.1, max_len=1500, initialisation='random', pre_norm=False
     ):
         """
         Initialize the Circular Transformer Encoder Layer.
@@ -1052,6 +1052,7 @@ class CircularTransformerEncoderLayer(nn.Module):
         dropout (float): Dropout rate.
         max_len (int): Maximum sequence length.
         initialisation (str): Initialization method for relative position encodings ('random' or 'zero').
+        pre_norm (bool): If True, use pre-normalization, otherwise use post-normalization.
         """
         super(CircularTransformerEncoderLayer, self).__init__()
         self.self_attn= CircularRelativePositionAttention(
@@ -1064,6 +1065,7 @@ class CircularTransformerEncoderLayer(nn.Module):
         self.norm2 = nn.LayerNorm(d_model)
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
+        self.pre_norm = pre_norm
 
     def forward(self, src, src_mask=None, src_key_padding_mask=None, is_causal=False, return_attn_weights=False):
         """
@@ -1079,22 +1081,58 @@ class CircularTransformerEncoderLayer(nn.Module):
         Returns:
         torch.Tensor: Output tensor.
         """
-        if return_attn_weights: 
-            src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, is_causal=is_causal, src_key_padding_mask=src_key_padding_mask, return_attn_weights=return_attn_weights)
-            src = src + self.dropout1(src2)
-            src = self.norm1(src)
-            src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
-            src = src + self.dropout2(src2)
-            src = self.norm2(src)
-            return src, attn_weights
-        else: 
-            src2 = self.self_attn(src, src, src, attn_mask=src_mask, src_key_padding_mask=src_key_padding_mask, is_causal=is_causal)
-            src = src + self.dropout1(src2)
-            src = self.norm1(src)
-            src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
-            src = src + self.dropout2(src2)
-            src = self.norm2(src)
-            return src
+        if self.pre_norm:
+            # Pre-normalization architecture
+            if return_attn_weights:
+                # Apply layer norm before attention
+                src_norm = self.norm1(src)
+                src2, attn_weights = self.self_attn(src_norm, src_norm, src_norm, 
+                                                   attn_mask=src_mask, is_causal=is_causal, 
+                                                   src_key_padding_mask=src_key_padding_mask, 
+                                                   return_attn_weights=return_attn_weights)
+                src = src + self.dropout1(src2)
+                
+                # Apply layer norm before FFN
+                src_norm = self.norm2(src)
+                src2 = self.linear2(self.dropout(F.relu(self.linear1(src_norm))))
+                src = src + self.dropout2(src2)
+                return src, attn_weights
+            else:
+                # Apply layer norm before attention
+                src_norm = self.norm1(src)
+                src2 = self.self_attn(src_norm, src_norm, src_norm, 
+                                     attn_mask=src_mask, src_key_padding_mask=src_key_padding_mask, 
+                                     is_causal=is_causal)
+                src = src + self.dropout1(src2)
+                
+                # Apply layer norm before FFN
+                src_norm = self.norm2(src)
+                src2 = self.linear2(self.dropout(F.relu(self.linear1(src_norm))))
+                src = src + self.dropout2(src2)
+                return src
+        else:
+            # Post-normalization architecture (original)
+            if return_attn_weights: 
+                src2, attn_weights = self.self_attn(src, src, src, attn_mask=src_mask, 
+                                                   is_causal=is_causal, 
+                                                   src_key_padding_mask=src_key_padding_mask, 
+                                                   return_attn_weights=return_attn_weights)
+                src = src + self.dropout1(src2)
+                src = self.norm1(src)
+                src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
+                src = src + self.dropout2(src2)
+                src = self.norm2(src)
+                return src, attn_weights
+            else: 
+                src2 = self.self_attn(src, src, src, attn_mask=src_mask, 
+                                     src_key_padding_mask=src_key_padding_mask, 
+                                     is_causal=is_causal)
+                src = src + self.dropout1(src2)
+                src = self.norm1(src)
+                src2 = self.linear2(self.dropout(F.relu(self.linear1(src))))
+                src = src + self.dropout2(src2)
+                src = self.norm2(src)
+                return src
             
 
 class TransformerClassifierCircularRelativeAttention(nn.Module):
@@ -1116,7 +1154,8 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         protein_dropout_rate=0.0,  # Add parameter for protein feature dropout
         function_embedding_dim=16,
         strand_embedding_dim=2,
-        length_embedding_dim=8
+        length_embedding_dim=8,
+        pre_norm=False
     ):
         super(TransformerClassifierCircularRelativeAttention, self).__init__()
 
@@ -1137,8 +1176,10 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         
         # Add protein feature dropout layer
         self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate,  protein_idx=self.gene_feature_dim).to(device)
-        self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes to the dropout layer
+        self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes
         
+        self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes
+              
         self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device) if use_positional_encoding else None
         self.output_dim = output_dim if output_dim else num_classes
 
@@ -1158,7 +1199,8 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
                 num_heads=num_heads,
                 dropout=dropout,
                 max_len=max_len,
-                initialisation=intialisation
+                initialisation=intialisation,
+                pre_norm=pre_norm  # Pass the pre_norm parameter to CircularTransformerEncoderLayer
             )
             self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers).to(device)
         else:
@@ -1896,7 +1938,7 @@ def train(
     gc.collect()
     torch.cuda.empty_cache()
 
-def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding=fourier_positional_encoding, use_positional_encoding=True, zero_idx=False, strand_gene_length=True, protein_dropout_rate=0.0):
+def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding=fourier_positional_encoding, use_positional_encoding=True, zero_idx=False, strand_gene_length=True, protein_dropout_rate=0.0, pre_norm=False):
     fold_logger = None
     try:
         device = torch.device(device_id)
@@ -1986,7 +2028,8 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                     use_lstm=use_lstm,  # Pass use_lstm
                     positional_encoding=positional_encoding,  # Use Fourier positional encoding
                     use_positional_encoding=use_positional_encoding,  # Pass use_positional_encoding
-                    protein_dropout_rate=protein_dropout_rate  # Pass the parameter here
+                    protein_dropout_rate=protein_dropout_rate,  # Pass the parameter here
+                    pre_norm=pre_norm  # Pass pre_norm
                 ).to(device)
             elif attention == "relative":
                 kfold_transformer_model = TransformerClassifierRelativeAttention(
@@ -2089,7 +2132,8 @@ def train_crossValidation(
     noise_std=0.0,  # Add noise_std parameter
     zero_idx=False,  # Add zero_idx parameter
     strand_gene_length=True,  # Add strand_gene_length parameter
-    protein_dropout_rate=0.0  # Parameter is defined here but not used in the function calls
+    protein_dropout_rate=0.0,  # Parameter is defined here but not used in the function calls
+    pre_norm=False  # Add pre_norm parameter with default False
 ):
     """
     Train the model using K-Fold cross-validation.
@@ -2139,7 +2183,7 @@ def train_crossValidation(
             if fold == single_fold:
                 # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device}")
-                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, zero_idx, strand_gene_length, protein_dropout_rate)  # Add protein_dropout_rate
+                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, zero_idx, strand_gene_length, protein_dropout_rate, pre_norm)  # Pass pre_norm
                 break
     else:
         if parallel_kfolds:
@@ -2161,7 +2205,7 @@ def train_crossValidation(
                                                       lambda_penalty, num_layers, output_dim, 
                                                       input_size, use_lstm, positional_encoding, 
                                                       use_positional_encoding, zero_idx, 
-                                                      strand_gene_length, protein_dropout_rate))  # Add protein_dropout_rate
+                                                      strand_gene_length, protein_dropout_rate, pre_norm))  # Pass pre_norm
                 p.start()
                 processes.append(p)
 
@@ -2185,7 +2229,7 @@ def train_crossValidation(
                 device_id = (fold - 1) % num_gpus
                 # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device_id}")
-                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, zero_idx, strand_gene_length, protein_dropout_rate)  # Add protein_dropout_rate
+                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, zero_idx, strand_gene_length, protein_dropout_rate, pre_norm)  # Pass pre_norm
 
             # Clear cache after all folds finish
             gc.collect()
@@ -2264,7 +2308,7 @@ class ProteinFeatureDropout(nn.Module):
             torch.Tensor: The input tensor with dropout applied only to protein features
         """
         # Default protein index if not specified (assuming format from EmbeddingDataset)
-        if protein_idx is None:
+        if (protein_idx is None):
             # Default: after one-hot class encoding, strand info, and gene length
             # num_classes + 2 (strand) + 1 (length)
             if hasattr(self, 'num_classes'):
@@ -2286,7 +2330,7 @@ class ProteinFeatureDropout(nn.Module):
             dropped_features = F.dropout(protein_features, p=self.dropout_rate, training=True)
         else:
             # Use consistent mask during inference
-            if self.fixed_mask is None or self.fixed_mask.shape != protein_features.shape:
+            if (self.fixed_mask is None or self.fixed_mask.shape != protein_features.shape):
                 # Generate a new fixed mask if needed
                 self.fixed_mask = torch.bernoulli(
                     torch.ones_like(protein_features) * (1 - self.dropout_rate)
@@ -2343,7 +2387,7 @@ class MaskedTokenFeatureDropout(nn.Module):
         for b in range(batch_size): 
 
             # check this batch goes up to the maximum size  (last batch is sometimes smaller) and that it isn't empty 
-            if b < len(idx) and idx[b].numel() > 0: 
+            if (b < len(idx) and idx[b].numel() > 0): 
 
                 # get the masked features for the masked tokens in this batch 
                 masked_features = x[b, idx[b], self.protein_idx:]  # Extract features of masked tokens
@@ -2352,7 +2396,7 @@ class MaskedTokenFeatureDropout(nn.Module):
                     # Apply standard dropout during training
                     dropped_features = F.dropout(masked_features, p=self.dropout_rate, training=True)
                 else: 
-                    if self.fixed_mask is None or self.fixed_mask.shape != masked_features.shape:
+                    if (self.fixed_mask is None or self.fixed_mask.shape != masked_features.shape):
                         # Generate a new fixed mask if needed
                         self.fixed_mask = torch.bernoulli(
                             torch.ones_like(masked_features) * (1 - self.dropout_rate)
@@ -2365,6 +2409,13 @@ class MaskedTokenFeatureDropout(nn.Module):
                 result[b, idx[b], self.protein_idx:] = dropped_features
                 
         return result
+
+
+
+
+
+
+
 
 
 
