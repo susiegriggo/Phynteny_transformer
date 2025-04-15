@@ -2,6 +2,7 @@
 Modules for building transformer model 
 """
 
+#from build.lib.src.model_onehot import MaskedTokenFeatureDropout
 import torch.nn as nn
 import torch
 import pickle
@@ -1155,7 +1156,10 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         function_embedding_dim=16,
         strand_embedding_dim=2,
         length_embedding_dim=8,
-        pre_norm=False
+        pre_norm=False,
+        progressive_dropout=False,
+        initial_dropout_rate=1.0,
+        final_dropout_rate=0.4,
     ):
         super(TransformerClassifierCircularRelativeAttention, self).__init__()
 
@@ -1173,13 +1177,17 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         self.num_layers = num_layers
         self.num_heads = num_heads
         self.dropout = nn.Dropout(dropout).to(device)
+     
         
         # Add protein feature normalization
         self.protein_norm = nn.LayerNorm(hidden_dim - self.gene_feature_dim).to(device)
         
         # Add protein feature dropout layer
-        self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate,  protein_idx=self.gene_feature_dim).to(device)
-        self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes
+        self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate, 
+                                                                 progressive_dropout=progressive_dropout,  # Default value set to False
+                                                                 initial_dropout_rate=initial_dropout_rate,
+                                                                 final_dropout_rate=final_dropout_rate) 
+        #self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes
         self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device) if use_positional_encoding else None
         
         # Add positional normalization
@@ -1277,9 +1285,8 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
                 # Use the model's num_heads attribute instead of hardcoded value
                 dummy_attn_weights = torch.zeros(batch_size, self.num_heads, seq_len, seq_len, device=x.device)
                 return x, dummy_attn_weights
-            return x
-
-
+            return x       
+                
 def masked_loss(output, target, mask, idx, ignore_index=-1):
     """
     Calculate the masked loss.
@@ -1569,7 +1576,7 @@ def train(
     Parameters:
     model (nn.Module): Model to train.
     train_dataloader (DataLoader): DataLoader for training data.
-    test_dataloader (DataLoader): DataLoader for test data.
+    train_dataloader (DataLoader): DataLoader for training data.
     epochs (int, optional): Number of training epochs.
     lr (float, optional): Learning rate.
     min_lr_ratio (float, optional): Minimum learning rate ratio.
@@ -1631,6 +1638,13 @@ def train(
         total_samples = 0
         masked_category_counts = torch.zeros(num_classes, device=device)  # Initialize masked category counts
 
+        # At the beginning of each epoch in train()
+        if hasattr(model, 'protein_feature_dropout') and hasattr(model.protein_feature_dropout, 'update_dropout_rate'):
+            logger.info(f'Updating dropout rate for epoch {epoch + 1}')
+            model.protein_feature_dropout.update_dropout_rate(epoch)
+        else: 
+            logger.info('No dropout rate update function found in model')
+
         logger.info(f"Starting epoch {epoch + 1}/{epochs}")
         for embeddings, categories, masks, idx in tqdm(train_dataloader, desc=f"Training Epoch {epoch + 1}/{epochs}"):
             embeddings, categories, masks = (
@@ -1643,7 +1657,7 @@ def train(
             
             # Mask the padding from the transformer 
             src_key_padding_mask = (masks != -2).bool().to(device) 
-
+        
             # Forward pass
             with torch.amp.autocast('cuda'):
                 outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, idx=idx, return_attn_weights=True)
@@ -1947,7 +1961,7 @@ def train(
     gc.collect()
     torch.cuda.empty_cache()
 
-def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding=fourier_positional_encoding, use_positional_encoding=True, zero_idx=False, strand_gene_length=True, protein_dropout_rate=0.0, pre_norm=False):
+def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding=fourier_positional_encoding, use_positional_encoding=True, zero_idx=False, strand_gene_length=True, protein_dropout_rate=0.0, pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4):
     fold_logger = None
     try:
         device = torch.device(device_id)
@@ -2038,7 +2052,10 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
                     positional_encoding=positional_encoding,  # Use Fourier positional encoding
                     use_positional_encoding=use_positional_encoding,  # Pass use_positional_encoding
                     protein_dropout_rate=protein_dropout_rate,  # Pass the parameter here
-                    pre_norm=pre_norm  # Pass pre_norm
+                    pre_norm=pre_norm,  # Pass pre_norm
+                    progressive_dropout=progressive_dropout,  # Pass progressive_dropout
+                    initial_dropout_rate=initial_dropout_rate,  # Pass initial_dropout_rate
+                    final_dropout_rate=final_dropout_rate  # Pass final_dropout_rate
                 ).to(device)
             elif attention == "relative":
                 kfold_transformer_model = TransformerClassifierRelativeAttention(
@@ -2123,65 +2140,43 @@ def train_crossValidation(
     save_path="out",
     num_heads=4,
     hidden_dim=512,
-    lstm_hidden_dim=512,  # Add lstm_hidden_dim parameter
+    lstm_hidden_dim=512,
     device="cuda",
     dropout=0.1,
-    checkpoint_interval=10, 
+    checkpoint_interval=10,
     intialisation='random',
     lambda_penalty=0.1,
     parallel_kfolds=False,
-    num_layers=2, 
+    num_layers=2,
     random_seed=42,
     single_fold=None,
-    output_dim=None,  # Add output_dim parameter
-    input_size=None,  # Add input_size parameter
-    use_lstm=False,  # Add use_lstm parameter
-    positional_encoding=fourier_positional_encoding,  # Use Fourier positional encoding
-    use_positional_encoding=True,  # Add use_positional_encoding parameter
-    noise_std=0.0,  # Add noise_std parameter
-    zero_idx=False,  # Add zero_idx parameter
-    strand_gene_length=True,  # Add strand_gene_length parameter
-    protein_dropout_rate=0.0,  # Parameter is defined here but not used in the function calls
-    pre_norm=False  # Add pre_norm parameter with default False
+    output_dim=None,
+    input_size=None,
+    use_lstm=False,
+    positional_encoding=fourier_positional_encoding,
+    use_positional_encoding=True,
+    noise_std=0.0,
+    zero_idx=False,
+    strand_gene_length=True,
+    protein_dropout_rate=0.0,
+    pre_norm=False,
+    progressive_dropout=False,
+    initial_dropout_rate=1.0,
+    final_dropout_rate=0.4,
 ):
     """
     Train the model using K-Fold cross-validation.
 
     Parameters:
-    dataset (Dataset): Dataset to train on.
-    attention (str): Type of attention ('absolute', 'relative', 'circular').
-    n_splits (int, optional): Number of folds for cross-validation.
-    batch_size (int, optional): Batch size.
-    epochs (int, optional): Number of training epochs.
-    lr (float, optional): Learning rate.
-    min_lr_ratio (float, optional): Minimum learning rate ratio.
-    save_path (str, optional): Path to save the model.
-    num_heads (int, optional): Number of attention heads.
-    hidden_dim (int, optional): Hidden dimension size.
-    device (str, optional): Device to train on ('cuda' or 'cpu').
-    dropout (float, optional): Dropout rate.
-    checkpoint_interval (int, optional): Interval for saving checkpoints.
-    intialisation (str, optional): Initialization method for positional encoding ('random' or 'zero').
-    lambda_penalty (float, optional): Penalty for diagonal attention.
-    parallel_kfolds (bool, optional): If True, train kfolds in parallel.
-    num_layers (int, optional): Number of transformer layers.
-    random_seed (int, optional): Random seed for reproducibility.
-    single_fold (int, optional): If specified, train only the specified fold.
-
-    Returns:
-    None
+    # ...existing docstring...
     """
-    # access the logger object
-    logger.add(save_path + "trainer.log", level="DEBUG")
+    logger.add(save_path + "/trainer.log", level="DEBUG")
 
     # Log the parameters being used to train the model
-    logger.info(f"Training parameters: attention={attention}, n_splits={n_splits}, batch_size={batch_size}, epochs={epochs}, lr={lr}, min_lr_ratio={min_lr_ratio}, save_path={save_path}, num_heads={num_heads}, hidden_dim={hidden_dim}, device={device}, dropout={dropout}, checkpoint_interval={checkpoint_interval}, intialisation={intialisation},lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, output_dim={output_dim}, positional_encoding={positional_encoding}, use_positional_encoding={use_positional_encoding}, noise_std={noise_std}, zero_idx={zero_idx}, strand_gene_length={strand_gene_length}")
+    logger.info(f"Training parameters: attention={attention}, n_splits={n_splits}, batch_size={batch_size}, epochs={epochs}, lr={lr}, min_lr_ratio={min_lr_ratio}, save_path={save_path}, num_heads={num_heads}, hidden_dim={hidden_dim}, device={device}, dropout={dropout}, checkpoint_interval={checkpoint_interval}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, output_dim={output_dim}, positional_encoding={positional_encoding}, use_positional_encoding={use_positional_encoding}, noise_std={noise_std}, zero_idx={zero_idx}, strand_gene_length={strand_gene_length}, protein_dropout_rate={protein_dropout_rate}, pre_norm={pre_norm}, progressive_dropout={progressive_dropout}, initial_dropout_rate={initial_dropout_rate}, final_dropout_rate={final_dropout_rate}")
 
     kf = KFold(n_splits=n_splits, shuffle=True, random_state=random_seed)
-    fold = 1
-    logger.info(
-        "Training with K-Fold crossvalidation with " + str(n_splits) + " folds..."
-    )
+    logger.info(f"Training with K-Fold cross-validation with {n_splits} folds...")
 
     if single_fold is not None:
         if single_fold < 1 or single_fold > n_splits:
@@ -2190,57 +2185,137 @@ def train_crossValidation(
         logger.info(f"Training only fold {single_fold}")
         for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
             if fold == single_fold:
-                # Ensure fold_logger is defined
-                logger.info(f"Training fold {fold} on device {device}")
-                train_fold(fold, train_index, val_index, device, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, zero_idx, strand_gene_length, protein_dropout_rate, pre_norm)  # Pass pre_norm
+                train_fold(
+                    fold,
+                    train_index,
+                    val_index,
+                    device,
+                    dataset,
+                    attention,
+                    batch_size,
+                    epochs,
+                    lr,
+                    min_lr_ratio,
+                    save_path,
+                    num_heads,
+                    hidden_dim,
+                    lstm_hidden_dim,
+                    dropout,
+                    checkpoint_interval,
+                    intialisation,
+                    lambda_penalty,
+                    num_layers,
+                    output_dim,
+                    input_size,
+                    use_lstm,
+                    positional_encoding,
+                    use_positional_encoding,
+                    zero_idx,
+                    strand_gene_length,
+                    protein_dropout_rate,
+                    pre_norm,
+                    progressive_dropout,
+                    initial_dropout_rate,
+                    final_dropout_rate,
+                )
                 break
     else:
         if parallel_kfolds:
-            # Set start method for multiprocessing
             mp.set_start_method('spawn', force=True)
-
-            # Create a process for each fold
             processes = []
             num_gpus = torch.cuda.device_count()
             for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
                 device_id = (fold - 1) % num_gpus
                 logger.info(f"Training fold {fold} on device {device_id}")
-                p = mp.Process(target=train_fold, args=(fold, train_index, val_index, 
-                                                      device_id, dataset, attention, 
-                                                      batch_size, epochs, lr, min_lr_ratio, 
-                                                      save_path, num_heads, hidden_dim, 
-                                                      lstm_hidden_dim, dropout, 
-                                                      checkpoint_interval, intialisation, 
-                                                      lambda_penalty, num_layers, output_dim, 
-                                                      input_size, use_lstm, positional_encoding, 
-                                                      use_positional_encoding, zero_idx, 
-                                                      strand_gene_length, protein_dropout_rate, pre_norm))  # Pass pre_norm
+                p = mp.Process(
+                    target=train_fold,
+                    args=(
+                        fold,
+                        train_index,
+                        val_index,
+                        device_id,
+                        dataset,
+                        attention,
+                        batch_size,
+                        epochs,
+                        lr,
+                        min_lr_ratio,
+                        save_path,
+                        num_heads,
+                        hidden_dim,
+                        lstm_hidden_dim,
+                        dropout,
+                        checkpoint_interval,
+                        intialisation,
+                        lambda_penalty,
+                        num_layers,
+                        output_dim,
+                        input_size,
+                        use_lstm,
+                        positional_encoding,
+                        use_positional_encoding,
+                        zero_idx,
+                        strand_gene_length,
+                        protein_dropout_rate,
+                        pre_norm,
+                        progressive_dropout,
+                        initial_dropout_rate,
+                        final_dropout_rate,
+                    ),
+                )
                 p.start()
                 processes.append(p)
 
-            # Wait for all processes to finish
             for p in processes:
                 p.join()
 
-            # Check if any process is still alive
             for p in processes:
                 if p.is_alive():
                     logger.error(f"Process {p.pid} is still alive. Terminating...")
                     p.terminate()
                     p.join()
 
-            # Clear cache after all processes finish
             gc.collect()
             torch.cuda.empty_cache()
         else:
             num_gpus = torch.cuda.device_count()
             for fold, (train_index, val_index) in enumerate(kf.split(dataset), 1):
                 device_id = (fold - 1) % num_gpus
-                # Ensure fold_logger is defined
                 logger.info(f"Training fold {fold} on device {device_id}")
-                train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding, use_positional_encoding, zero_idx, strand_gene_length, protein_dropout_rate, pre_norm)  # Pass pre_norm
+                train_fold(
+                    fold,
+                    train_index,
+                    val_index,
+                    device_id,
+                    dataset,
+                    attention,
+                    batch_size,
+                    epochs,
+                    lr,
+                    min_lr_ratio,
+                    save_path,
+                    num_heads,
+                    hidden_dim,
+                    lstm_hidden_dim,
+                    dropout,
+                    checkpoint_interval,
+                    intialisation,
+                    lambda_penalty,
+                    num_layers,
+                    output_dim,
+                    input_size,
+                    use_lstm,
+                    positional_encoding,
+                    use_positional_encoding,
+                    zero_idx,
+                    strand_gene_length,
+                    protein_dropout_rate,
+                    pre_norm,
+                    progressive_dropout,
+                    initial_dropout_rate,
+                    final_dropout_rate,
+                )
 
-            # Clear cache after all folds finish
             gc.collect()
             torch.cuda.empty_cache()
 
@@ -2355,21 +2430,54 @@ class ProteinFeatureDropout(nn.Module):
 
 class MaskedTokenFeatureDropout(nn.Module): 
     """
-    Custom Dropout layer that emeddings of masked tokens. During training, aplies standard dropout to masked tokens. During inference applies a consistent dropout mask for stability.
+    Custom Dropout layer that applies dropout to embeddings of masked tokens.
+    During training, applies standard dropout to masked tokens.
+    Can progressively decrease dropout rate during training to encourage the model
+    to first learn gene order and gradually incorporate protein features.
     """
 
-    def __init__(self, dropout_rate=0.2, protein_idx=28):
+    def __init__(self, dropout_rate=0.2, protein_idx=28, progressive_dropout=False, 
+                 initial_dropout_rate=1.0, final_dropout_rate=None, total_epochs=15):
         super().__init__()
-        self.dropout_rate = dropout_rate
-        self.protein_idx = protein_idx
-        # Register buffer to store fixed mask for inference
+
+        self.protein_idx = protein_idx 
+        self.progressive_dropout = progressive_dropout
+
+        # Set up progesssive dropout parameters 
+        if progressive_dropout:
+            self.initial_dropout_rate = initial_dropout_rate
+            self.final_dropout_rate = final_dropout_rate if final_dropout_rate is not None else dropout_rate
+            self.dropout_rate = initial_dropout_rate # Start with initial dropout rate
+        else: 
+            self.dropout_rate = dropout_rate # Fixed dropout rate
+
+        self.total_epochs = total_epochs
+        self.current_epoch = 0
 
         # dont register the buffer here, as it will be created in the forward pass
         self.register_buffer('fixed_mask', None)
 
+    def update_dropout_rate(self, current_epoch): 
+        """
+        Update the dropout rate based on the current epoch.
+
+        Args:
+            current_epoch (int): Current epoch number.
+        """
+        if self.progressive_dropout:
+            self.current_epoch = current_epoch
+
+            # Calculate progress as a fraction (0 to 1)
+            progress = min(1.0, self.current_epoch / self.total_epochs)
+            # Linearly interpolate between initial and final dropout rates
+            self.dropout_rate = self.initial_dropout_rate - (self.initial_dropout_rate - self.final_dropout_rate) * progress
+            logger.info(f"Epoch {self.current_epoch}: Updated masked protein dropout rate: {self.dropout_rate:.4f}")
+        else:
+            logger.info("Progressive dropout is not enabled. Using fixed dropout rate.")
+
     def forward(self, x, idx, is_training=None):
         """
-        Apply dropout to the features of masked tokens 
+        Apply dropout to the features of masked tokens.
 
         Args: 
             x (torch.Tensor): Input tensor [batch_size, seq_len, feature_dim]
@@ -2380,7 +2488,6 @@ class MaskedTokenFeatureDropout(nn.Module):
         Returns:
             torch.Tensor: The input tensor with dropout applied only to protein features
         """
-
         # Use module's training state if not specified
         is_training = self.training if is_training is None else is_training
 
@@ -2418,6 +2525,10 @@ class MaskedTokenFeatureDropout(nn.Module):
                 result[b, idx[b], self.protein_idx:] = dropped_features
                 
         return result
+
+
+
+
 
 
 
