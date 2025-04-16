@@ -1181,7 +1181,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
      
         
         # Add protein feature normalization
-        self.protein_norm = nn.LayerNorm(hidden_dim - self.gene_feature_dim).to(device)
+        #self.protein_norm = nn.LayerNorm(hidden_dim - self.gene_feature_dim).to(device)
         
         # Add protein feature dropout layer
         self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate, 
@@ -1196,30 +1196,47 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         self.pos_norm = nn.LayerNorm(hidden_dim).to(device)
         self.output_dim = output_dim if output_dim else num_classes
 
-        if use_lstm:
-            self.lstm = nn.LSTM(hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True).to(device)
-            self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)
-            d_model = lstm_hidden_dim * 2
-        else:
-            self.lstm = None
-            self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)
-            d_model = hidden_dim
-
         # Create transformer encoder only if num_layers > 0
         if num_layers > 0:
             encoder_layers = CircularTransformerEncoderLayer(
-                d_model=d_model,
+                d_model=hidden_dim,  # Transformer's input dimension matches the embedding dim
                 num_heads=num_heads,
                 dropout=dropout,
                 max_len=max_len,
                 initialisation=intialisation,
-                pre_norm=pre_norm  # Pass the pre_norm parameter to CircularTransformerEncoderLayer
+                pre_norm=pre_norm
             )
             self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers).to(device)
+            
+            # LSTM takes transformer output as input
+            if use_lstm:
+                self.lstm = nn.LSTM(
+                    hidden_dim,  # Input size matches transformer's output dimension
+                    lstm_hidden_dim, 
+                    batch_first=True, 
+                    bidirectional=True
+                ).to(device)
+                self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)
+            else:
+                self.lstm = None
+                self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)
         else:
             # Create an identity module when no transformer layers are needed
             self.transformer_encoder = nn.Identity().to(device)
             logger.info("Using Identity layer instead of transformer encoder (num_layers=0)")
+            
+            # If no transformer, LSTM takes embedding output directly
+            if use_lstm:
+                self.lstm = nn.LSTM(
+                    hidden_dim,
+                    lstm_hidden_dim, 
+                    batch_first=True, 
+                    bidirectional=True
+                ).to(device)
+                self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)
+            else:
+                self.lstm = None
+                self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)
 
     def forward(self, x, src_key_padding_mask=None, idx=None, return_attn_weights=False, save_lstm_output=False, save_transformer_output=False):
         x = x.float()
@@ -1231,15 +1248,12 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         length_embeds = self.length_embedding(gene_length)
         protein_embeds = self.embedding_layer(protein_embeds)
 
-        # Normalize protein features
-        #protein_embeds = self.protein_norm(protein_embeds)
-
         # Concatenate the embeddings 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
 
         # Apply protein feature dropout to the masked tokens 
         if idx is not None:
-            x = self.protein_feature_dropout(x, idx)  # Apply dropout to the protein features
+            x = self.protein_feature_dropout(x, idx)
 
         # Apply positional encoding
         if self.positional_encoding is not None:
@@ -1248,89 +1262,45 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         # Normalize combined features after positional encoding
         x = self.pos_norm(x)
 
-        # # Apply dropout
-        # x = self.dropout(x)
+        # Apply dropout
+        x = self.dropout(x)
 
-        # # Check if LSTM is used
-        # if self.lstm:
-        #     # Apply LSTM
-        #     x, _ = self.lstm(x)
-        #     if save_lstm_output:
-        #         self.saved_lstm_output = x.clone().detach().cpu().numpy()
-
-        # # Apply transformer encoder conditionally
-        # if return_attn_weights and isinstance(self.transformer_encoder, nn.TransformerEncoder) and hasattr(self.transformer_encoder, 'layers') and len(self.transformer_encoder.layers) > 0:
-        #     # Only try to get attention weights if we have a real transformer with layers
-        #     x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
-        #     for layer in self.transformer_encoder.layers[1:]:
-        #         x = layer(x, src_key_padding_mask=src_key_padding_mask)
-        #     x = self.fc(x)
-        #     if self.output_dim != self.num_classes:
-        #         x = F.softmax(x, dim=-1)
-        #     if save_transformer_output:
-        #         self.saved_transformer_output = x.clone().detach().cpu().numpy()
-        #     return x, attn_weights
-        # else:
-        #     # Just pass through transformer (or Identity if num_layers=0)
-        #     x = self.transformer_encoder(x)
-        #     x = self.fc(x)
-        #     if self.output_dim != self.num_classes:
-        #         x = F.softmax(x, dim=-1)
-        #     if save_transformer_output:
-        #         self.saved_transformer_output = x.clone().detach().cpu().numpy()
-            
-        #     # If return_attn_weights was requested but we can't provide them, create dummy weights
-        #     if return_attn_weights:
-        #         # Create dummy attention weights of the appropriate shape
-        #         batch_size = x.size(0)
-        #         seq_len = x.size(1)
-        #         # Use the model's num_heads attribute instead of hardcoded value
-        #         dummy_attn_weights = torch.zeros(batch_size, self.num_heads, seq_len, seq_len, device=x.device)
-        #         return x, dummy_attn_weights
-        #     return x       
-
-        #CHANGED ORDER: First apply transformer, then LSTM
-        attn_weights = None
-    
-        # Apply transformer encoder first
+        # TRANSFORMER FIRST: Apply transformer encoder
         if return_attn_weights and isinstance(self.transformer_encoder, nn.TransformerEncoder) and hasattr(self.transformer_encoder, 'layers') and len(self.transformer_encoder.layers) > 0:
-            # Get attention weights from first layer
             x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
-            # Process remaining layers
             for layer in self.transformer_encoder.layers[1:]:
                 x = layer(x, src_key_padding_mask=src_key_padding_mask)
         else:
-            # Apply transformer without returning attention weights
             x = self.transformer_encoder(x)
-    
-        # Save transformer output if requested
+        
         if save_transformer_output:
             self.saved_transformer_output = x.clone().detach().cpu().numpy()
-    
-        # Then apply LSTM if it exists
+        
+        # THEN LSTM: Apply LSTM after transformer
         if self.lstm:
             x, _ = self.lstm(x)
             if save_lstm_output:
                 self.saved_lstm_output = x.clone().detach().cpu().numpy()
-    
+        
         # Final classification
         x = self.fc(x)
         if self.output_dim != self.num_classes:
             x = F.softmax(x, dim=-1)
-
-        # Return attention weights if requested
+        
+        # Return with attention weights if requested
         if return_attn_weights:
-            if attn_weights is None:
+            if 'attn_weights' in locals():
+                return x, attn_weights
+            else:
                 # Create dummy attention weights
                 batch_size = x.size(0)
                 seq_len = x.size(1)
                 dummy_attn_weights = torch.zeros(batch_size, self.num_heads, seq_len, seq_len, device=x.device)
                 return x, dummy_attn_weights
-            return x, attn_weights
-    
-        return x
-    
+        else:
+            return x
                 
+
 def masked_loss(output, target, mask, idx, ignore_index=-1):
     """
     Calculate the masked loss.
@@ -1397,6 +1367,7 @@ def combine_loss_distillation(output, target, mask, attn_weights, idx, src_key_p
     #penalised_loss + kl_loss(output.view(-1, num_classes), logits from teachers )
 
     return penalised_loss, classification_loss  
+
 
 def combined_loss(output, target, mask, attn_weights, idx, src_key_padding_mask, lambda_penalty=0.1, ignore_index=-1):
     """
@@ -2578,6 +2549,21 @@ class MaskedTokenFeatureDropout(nn.Module):
                 result[b, idx[b], self.protein_idx:] = dropped_features
                 
         return result
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
