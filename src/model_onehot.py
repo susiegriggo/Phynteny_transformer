@@ -1174,6 +1174,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         self.strand_embedding = nn.Linear(2, strand_embedding_dim).to(device)
         self.length_embedding = nn.Linear(1, length_embedding_dim).to(device)
         self.gene_feature_dim = function_embedding_dim + strand_embedding_dim + length_embedding_dim
+        logger.info(f'gene feature dim: {self.gene_feature_dim}')
         self.embedding_layer = nn.Linear(input_dim, hidden_dim - self.gene_feature_dim).to(device)
         self.num_layers = num_layers
         self.num_heads = num_heads
@@ -1188,6 +1189,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
                                                                  progressive_dropout=progressive_dropout,  # Default value set to False
                                                                  initial_dropout_rate=initial_dropout_rate,
                                                                  final_dropout_rate=final_dropout_rate, 
+                                                                 protein_idx=self.gene_feature_dim,  # just added this 
                                                                  total_epochs=progressive_epochs) 
         #self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes
         self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device) if use_positional_encoding else None
@@ -1247,7 +1249,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         strand_embeds = self.strand_embedding(strand_ids.float())
         length_embeds = self.length_embedding(gene_length)
         protein_embeds = self.embedding_layer(protein_embeds)
-
+        
         # Concatenate the embeddings 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
 
@@ -1889,7 +1891,7 @@ def train(
         intialisation='random',  # Adjust as needed
         output_dim=model.output_dim,
         use_lstm=model.lstm is not None,
-        positional_encoding=fourier_positional_encoding,
+        positional_encoding=sinusoidal_positional_encoding,
         use_positional_encoding=model.positional_encoding is not None,
         protein_dropout_rate=model.protein_feature_dropout.dropout_rate if hasattr(model, 'protein_feature_dropout') else 0.0
     ).to(device)
@@ -2535,6 +2537,7 @@ class MaskedTokenFeatureDropout(nn.Module):
                 if is_training:
                     # Apply standard dropout during training
                     dropped_features = F.dropout(masked_features, p=self.dropout_rate, training=True)
+
                 else: 
                     if (self.fixed_mask is None or self.fixed_mask.shape != masked_features.shape):
                         # Generate a new fixed mask if needed
@@ -2547,7 +2550,8 @@ class MaskedTokenFeatureDropout(nn.Module):
 
                 # Upate only the maksed token features 
                 result[b, idx[b], self.protein_idx:] = dropped_features
-                
+            else: 
+                logger.info(f'Not in loop')
         return result
 
 
