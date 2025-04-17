@@ -3,7 +3,8 @@ import click
 import random
 from loguru import logger
 from src import model_onehot
-from src.model_onehot import fourier_positional_encoding  # Add import for Fourier positional encoding
+from src.model_onehot import fourier_positional_encoding
+from src.model_onehot import sinusoidal_positional_encoding
 import os
 import torch
 
@@ -152,7 +153,10 @@ def load_model(model_path, params):
     use_positional_encoding = params["use_positional_encoding"]
     protein_dropout_rate = params.get("protein_dropout_rate", 0.0)  # Get with default value
     
-
+    # Determine which positional encoding to use
+    positional_encoding_type = params.get("positional_encoding_type", "fourier")
+    positional_encoding_func = fourier_positional_encoding if positional_encoding_type == "fourier" else sinusoidal_positional_encoding
+    
     # Initialize the model
     if attention == "absolute":
         model = model_onehot.TransformerClassifier(
@@ -165,7 +169,8 @@ def load_model(model_path, params):
             num_layers=num_layers,
             output_dim=output_dim,
             use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
+            use_positional_encoding=use_positional_encoding,
+            positional_encoding=positional_encoding_func  # Pass the selected encoding function
         )
     elif attention == "relative":
         model = model_onehot.TransformerClassifierRelativeAttention(
@@ -178,7 +183,8 @@ def load_model(model_path, params):
             num_layers=num_layers,
             output_dim=output_dim,
             use_lstm=use_lstm,
-            use_positional_encoding=use_positional_encoding
+            use_positional_encoding=use_positional_encoding,
+            positional_encoding=positional_encoding_func  # Pass the selected encoding function
         )
     elif attention == "circular":
         model = model_onehot.TransformerClassifierCircularRelativeAttention(
@@ -192,6 +198,7 @@ def load_model(model_path, params):
             output_dim=output_dim,
             use_lstm=use_lstm,
             use_positional_encoding=use_positional_encoding,
+            positional_encoding=positional_encoding_func,  # Pass the selected encoding function
             protein_dropout_rate=protein_dropout_rate  # Add this parameter
         )
     else:
@@ -321,6 +328,12 @@ def load_model(model_path, params):
     help="Include positional encoding in the model.",
 )
 @click.option(
+    "--positional_encoding_type",
+    type=click.Choice(["fourier", "sinusoidal"]),
+    default="fourier",
+    help="Type of positional encoding to use (fourier or sinusoidal).",
+)
+@click.option(
     "--noise_std",
     default=0.0,
     help="Standard deviation of the Gaussian noise to add to the embeddings.",
@@ -400,6 +413,7 @@ def main(
     force,  # Add force parameter
     use_lstm,  # Add use_lstm parameter
     use_positional_encoding,  # Add use_positional_encoding parameter
+    positional_encoding_type,  # Add positional_encoding_type parameter
     noise_std,  # Add noise_std parameter
     zero_idx,  # Add zero_idx parameter
     ignore_strand_gene_length,  # Add ignore_strand_gene_length parameter
@@ -424,6 +438,7 @@ def main(
         "output_dim": output_dim,
         "use_lstm": use_lstm,
         "use_positional_encoding": use_positional_encoding,
+        "positional_encoding_type": positional_encoding_type,  # Add this to params
         "protein_dropout_rate": protein_dropout_rate,  # Add this parameter to params dictionary
         "num_classes": 9,  # Hardcoded for now
         "pre_norm": pre_norm,  # Add pre_norm to params
@@ -436,7 +451,7 @@ def main(
     logger.add(out + "/trainer.log", level="DEBUG")
 
     # Log parameter values
-    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}, use_lstm={use_lstm}, use_positional_encoding={use_positional_encoding}, noise_std={noise_std}, zero_idx={zero_idx}, ignore_strand_gene_length={ignore_strand_gene_length}, protein_dropout_rate={protein_dropout_rate}, pre_norm={pre_norm}, progressive_dropout={progressive_dropout}, initial_dropout_rate={initial_dropout_rate}, final_dropout_rate={final_dropout_rate}")  # Log use_lstm
+    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}, use_lstm={use_lstm}, use_positional_encoding={use_positional_encoding}, positional_encoding_type={positional_encoding_type}, noise_std={noise_std}, zero_idx={zero_idx}, ignore_strand_gene_length={ignore_strand_gene_length}, protein_dropout_rate={protein_dropout_rate}, pre_norm={pre_norm}, progressive_dropout={progressive_dropout}, initial_dropout_rate={initial_dropout_rate}, final_dropout_rate={final_dropout_rate}")  # Log use_lstm
 
     # Log progressive dropout settings
     if progressive_dropout:
@@ -478,11 +493,13 @@ def main(
     logger.info("\nTraining model...")
     use_positional_encoding=(use_positional_encoding == "True"), # Convert to boolean
     try:
+        positional_encoding_func = fourier_positional_encoding if positional_encoding_type == "fourier" else sinusoidal_positional_encoding
+        logger.info(f"Using {positional_encoding_type} positional encoding")
         model_onehot.train_crossValidation(
             train_dataset,
             attention,
             n_splits=10,
-            batch_size=batch_size,  # have changed this batch size to 16 
+            batch_size=batch_size,
             epochs=epochs,
             lr=lr,
             save_path=out,
@@ -497,27 +514,26 @@ def main(
             checkpoint_interval=checkpoint_interval,
             num_layers=num_layers,
             single_fold=fold_index,
-            output_dim=output_dim,  # Pass output_dim
-            input_size=input_size,  # Pass input_size
-            lstm_hidden_dim=lstm_hidden_dim,  # Pass lstm_hidden_dim
-            use_lstm=use_lstm,  # Pass use_lstm
-            positional_encoding=fourier_positional_encoding,  # Use Fourier positional encoding
-            use_positional_encoding=use_positional_encoding,  # Pass use_positional_encoding
-            noise_std=noise_std,  # Pass noise_std
-            zero_idx=zero_idx,  # Pass zero_idx
-            strand_gene_length=not ignore_strand_gene_length,  # Pass ignore_strand_gene_length
-            protein_dropout_rate=protein_dropout_rate,  # Add this parameter
-            pre_norm=pre_norm,  # Add pre_norm parameter
-            progressive_dropout=progressive_dropout,  # Add progressive_dropout parameter
-            initial_dropout_rate=initial_dropout_rate,  # Add initial_dropout_rate parameter
-            final_dropout_rate=final_dropout_rate,  # Add final_dropout_rate parameter
+            output_dim=output_dim,
+            input_size=input_size,
+            lstm_hidden_dim=lstm_hidden_dim,
+            use_lstm=use_lstm,
+            positional_encoding=positional_encoding_func,  # Pass the selected encoding function
+            use_positional_encoding=use_positional_encoding,
+            noise_std=noise_std,
+            zero_idx=zero_idx,
+            strand_gene_length=not ignore_strand_gene_length,
+            protein_dropout_rate=protein_dropout_rate,
+            pre_norm=pre_norm,
+            progressive_dropout=progressive_dropout,
+            initial_dropout_rate=initial_dropout_rate,
+            final_dropout_rate=final_dropout_rate,
         )
     except Exception as e:
         logger.error(f"Error during training: {e}")
         raise
 
     if run_test_model:  # Use the updated parameter name
-
         test_model(out, params, fold=fold_index)  # Pass fold_index to test_model
 
     logger.info("FINISHED! :D")
