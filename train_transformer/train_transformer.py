@@ -477,8 +477,8 @@ def main(
         shuffled_data['y'] = y  # Save shuffled y
         logger.info("\t Done shuffling gene orders")
         # Save shuffled data to a file
-        with open(os.path.join(out, "shuffled_data.pkl"), "wb") as f:
-            pickle.dump(shuffled_data, f)
+        #with open(os.path.join(out, "shuffled_data.pkl"), "wb") as f:
+        #    pickle.dump(shuffled_data, f)
     else:
         logger.info("Gene orders not shuffled!")
 
