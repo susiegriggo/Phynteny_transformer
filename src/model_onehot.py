@@ -2550,7 +2550,6 @@ class MaskedTokenFeatureDropout(nn.Module):
 
                 # Upate only the maksed token features 
                 result[b, idx[b], self.protein_idx:] = dropped_features
-
         return result
 
 
