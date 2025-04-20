@@ -39,12 +39,14 @@ for param, desc in PARAMETERS.items():
 @click.option('--num-heads', default=4, help='Number of attention heads for the model.')
 @click.option('--hidden-dim', default=256, help='Hidden dimension for the model.')
 @click.option('--lstm-hidden-dim', default=512, help='LSTM hidden dimension for the model.')
-@click.option('--dropout', default=0.1, help='Dropout rate for the model.')
 @click.option('--no-lstm', is_flag=True, help='Specify if LSTM should not be used in the model.')
 @click.option('--max-len', default=1500, help='Maximum length for the model.')
-@click.option('--protein-dropout-rate', default=0.0, help='Dropout rate for protein features (only applied to protein embeddings).')
+@click.option('--attention', type=click.Choice(['absolute', 'relative', 'circular']), default='circular', help='Type of attention mechanism to use.')
+@click.option('--positional-encoding-type', type=click.Choice(['fourier', 'sinusoidal']), default='fourier', help='Type of positional encoding to use.')
+@click.option('--pre-norm', is_flag=True, default=False, help='Use pre-normalization in transformer layers instead of post-normalization.')
+@click.option('--output-dim', default=None, type=int, help='Output dimension for the model. Defaults to num_classes if not specified.')
 
-def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, no_lstm, max_len, protein_dropout_rate):
+def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, no_lstm, max_len, attention, positional_encoding_type, pre_norm, output_dim):
     """
     Main function to compute confidence scores.
 
@@ -61,12 +63,17 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     :param num_heads: Number of attention heads for the model
     :param hidden_dim: Hidden dimension for the model
     :param lstm_hidden_dim: LSTM hidden dimension for the model
-    :param dropout: Dropout rate for the model
     :param no_lstm: Specify if LSTM should not be used in the model
     :param max_len: Maximum length for the model
-    :param protein_dropout_rate: Dropout rate for protein features
+    :param attention: Type of attention mechanism (absolute, relative, or circular)
+    :param positional_encoding_type: Type of positional encoding (fourier or sinusoidal)
+    :param pre_norm: Use pre-normalization in transformer layers
+    :param output_dim: Output dimension for the model
     """
     use_lstm = not no_lstm
+    # Use num_classes as output_dim if not specified
+    if output_dim is None:
+        output_dim = num_classes
 
     if os.path.exists(output_path) and not force:
         logger.error(f"Output directory already exists: {output_path}. Use --force to overwrite.")
@@ -80,7 +87,16 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
         logger.info("Using CPU for computation.")
     
     embeddings, categories, validation_categories, phrog_integer = load_data(embeddings_path, categories_path, validation_categories_path, integer_category_path)
-    p = create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate)
+    
+    # Setting fixed values for dropout-related parameters that we don't need as CLI arguments
+    dropout = 0.0  # Always 0 for inference
+    protein_dropout_rate = 0.0  # Always 0 for inference
+    progressive_dropout = False  # Always False for inference
+    initial_dropout_rate = 0.0  # Not used for inference
+    final_dropout_rate = 0.0  # Not used for inference
+    
+    p = create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate, 
+                         attention, positional_encoding_type, pre_norm, progressive_dropout, initial_dropout_rate, final_dropout_rate, output_dim)
     logger.info(f'Predictor models: {p.models}')
     logger.info("Creating the dataset and dataloader.")
     conf_dataset_loader = create_dataloader(embeddings, categories, validation_categories, batch_size)
@@ -121,7 +137,8 @@ def load_data(embeddings_path, categories_path, validation_categories_path, inte
     return embeddings, categories, validation_categories, phrog_integer
 
 
-def create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate=0.0):
+def create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate=0.0, 
+                    attention='circular', positional_encoding_type='fourier', pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4, output_dim=None):
     """
     Create the predictor object.
 
@@ -136,11 +153,48 @@ def create_predictor(model_directory, device, input_dim, num_classes, num_heads,
     :param use_lstm: Whether to use LSTM in the model
     :param max_len: Maximum length for the model
     :param protein_dropout_rate: Dropout rate for protein features
+    :param attention: Type of attention mechanism (absolute, relative, or circular)
+    :param positional_encoding_type: Type of positional encoding (fourier or sinusoidal)
+    :param pre_norm: Use pre-normalization in transformer layers
+    :param progressive_dropout: Enable progressive dropout for protein features
+    :param initial_dropout_rate: Initial dropout rate when using progressive dropout
+    :param final_dropout_rate: Final dropout rate when using progressive dropout
+    :param output_dim: Output dimension for the model
     :return: Predictor object
     """
     logger.info("Creating the predictor object.")
     p = predictor.Predictor(device=device)
-    p.read_models_from_directory(model_directory, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate)
+    
+    # Set output_dim to num_classes if not specified
+    if output_dim is None:
+        output_dim = num_classes
+    
+    # Set all dropout-related parameters to 0 for inference
+    logger.info("Setting all dropout rates to 0 for inference")
+    inference_dropout = 0.0
+    inference_protein_dropout_rate = 0.0
+    
+    # Read models with updated parameters
+    p.read_models_from_directory(
+        model_directory, 
+        input_dim, 
+        num_classes, 
+        num_heads, 
+        hidden_dim, 
+        lstm_hidden_dim, 
+        dropout=inference_dropout,  # Set to 0 for inference
+        use_lstm=use_lstm, 
+        max_len=max_len, 
+        protein_dropout_rate=inference_protein_dropout_rate,  # Set to 0 for inference
+        attention=attention,
+        positional_encoding_type=positional_encoding_type,
+        pre_norm=pre_norm,
+        progressive_dropout=False,  # Disable progressive dropout for inference
+        initial_dropout_rate=0.0,   # Not used but set to 0 for clarity
+        final_dropout_rate=0.0,     # Not used but set to 0 for clarity
+        output_dim=output_dim
+    )
+    
     logger.info(f"Loaded models: {len(p.models)} models loaded.")
     return p
 
