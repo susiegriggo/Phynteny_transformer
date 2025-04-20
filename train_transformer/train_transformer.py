@@ -64,7 +64,7 @@ def test_model(out, params, fold=None):  # Default fold is None
 
         # Load the model
         model_path = os.path.join(out, fold_dir, "transformer_state_dict.pth")
-        model = load_model(model_path, params)
+        model = load_model(model_path, params,)
         logger.info(f"Model loaded successfully from {model_path}.")
 
         # Load the validation data
@@ -142,6 +142,7 @@ def load_model(model_path, params):
     """
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
+    # Extract model parameters from params dictionary
     attention = params["attention"]
     input_dim = params["input_size"]
     num_classes = params["num_classes"]
@@ -153,7 +154,11 @@ def load_model(model_path, params):
     output_dim = params["output_dim"]
     use_lstm = params["use_lstm"]
     use_positional_encoding = params["use_positional_encoding"]
-    protein_dropout_rate = params.get("protein_dropout_rate", 0.0)  # Get with default value
+    protein_dropout_rate = params.get("protein_dropout_rate", 0.0)
+    pre_norm = params.get("pre_norm", False)
+    progressive_dropout = params.get("progressive_dropout", False)
+    initial_dropout_rate = params.get("initial_dropout_rate", 1.0)
+    final_dropout_rate = params.get("final_dropout_rate", 0.4)
     
     # Determine which positional encoding to use
     positional_encoding_type = params.get("positional_encoding_type", "fourier")
@@ -172,7 +177,8 @@ def load_model(model_path, params):
             output_dim=output_dim,
             use_lstm=use_lstm,
             use_positional_encoding=use_positional_encoding,
-            positional_encoding=positional_encoding_func  # Pass the selected encoding function
+            positional_encoding=positional_encoding_func,
+            protein_dropout_rate=protein_dropout_rate
         )
     elif attention == "relative":
         model = model_onehot.TransformerClassifierRelativeAttention(
@@ -186,7 +192,8 @@ def load_model(model_path, params):
             output_dim=output_dim,
             use_lstm=use_lstm,
             use_positional_encoding=use_positional_encoding,
-            positional_encoding=positional_encoding_func  # Pass the selected encoding function
+            positional_encoding=positional_encoding_func,
+            protein_dropout_rate=protein_dropout_rate
         )
     elif attention == "circular":
         model = model_onehot.TransformerClassifierCircularRelativeAttention(
@@ -200,15 +207,33 @@ def load_model(model_path, params):
             output_dim=output_dim,
             use_lstm=use_lstm,
             use_positional_encoding=use_positional_encoding,
-            positional_encoding=positional_encoding_func,  # Pass the selected encoding function
-            protein_dropout_rate=protein_dropout_rate  # Add this parameter
+            positional_encoding=positional_encoding_func,
+            protein_dropout_rate=protein_dropout_rate,
+            pre_norm=pre_norm,
+            progressive_dropout=progressive_dropout,
+            initial_dropout_rate=initial_dropout_rate,
+            final_dropout_rate=final_dropout_rate
         )
     else:
         raise ValueError(f"Invalid attention type: {attention}")
     
-    # Load the state dictionary
+    # Load the state dictionary - NOTE: Pass strict=False to load_state_dict, not torch.load
+    logger.info("Loading model state dict with strict=False to handle missing/unexpected keys")
     state_dict = torch.load(model_path, map_location=device)
-    model.load_state_dict(state_dict)  # Load the state_dict into the model
+    
+    # Create a dummy forward pass to initialize buffers like fixed_mask
+    if hasattr(model, 'protein_feature_dropout'):
+        logger.info("Initializing protein_feature_dropout buffers with dummy forward pass")
+        batch_size, seq_len = 2, 10  # Minimal batch for initialization
+        feature_dim = model.gene_feature_dim + (hidden_dim - model.gene_feature_dim)
+        dummy_input = torch.zeros((batch_size, seq_len, feature_dim), device=device)
+        dummy_idx = [torch.tensor([0, 1]) for _ in range(batch_size)]
+        # Run a forward pass with the dummy data to initialize any dynamic buffers
+        model.protein_feature_dropout(dummy_input, dummy_idx)
+    
+    # Now load the state dict with strict=False to handle any remaining mismatches
+    model.load_state_dict(state_dict, strict=False)
+    
     model.to(device)
     model.eval()
     return model
