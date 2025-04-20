@@ -174,6 +174,13 @@ def create_predictor(model_directory, device, input_dim, num_classes, num_heads,
     inference_dropout = 0.0
     inference_protein_dropout_rate = 0.0
     
+    # Log the model parameters being used
+    logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}, num_heads={num_heads}, "
+                f"hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={inference_dropout}, "
+                f"use_lstm={use_lstm}, max_len={max_len}, protein_dropout_rate={inference_protein_dropout_rate}, "
+                f"attention={attention}, positional_encoding_type={positional_encoding_type}, pre_norm={pre_norm}, "
+                f"output_dim={output_dim}")
+    
     # Read models with updated parameters
     p.read_models_from_directory(
         model_directory, 
