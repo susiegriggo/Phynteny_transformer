@@ -99,7 +99,7 @@ class Predictor:
             record.annotations["phynteny score"] = self.scores[key]
             SeqIO.write(record, os.path.join(out, key + ".gb"), "genbank")
 
-    def read_model(self, model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate=0.0): 
+    def read_model(self, model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate=0.0, attention='circular', positional_encoding_type='fourier', pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4, output_dim=None): 
         """
         Read and load a model from the given path.
 
@@ -113,38 +113,92 @@ class Predictor:
         :param use_lstm: Whether to use LSTM in the model
         :param max_len: Maximum length for the model
         :param protein_dropout_rate: Dropout rate for protein features
+        :param attention: Type of attention mechanism
+        :param positional_encoding_type: Type of positional encoding
+        :param pre_norm: Whether to use pre-normalization
+        :param progressive_dropout: Whether to use progressive dropout
+        :param initial_dropout_rate: Initial dropout rate for progressive dropout
+        :param final_dropout_rate: Final dropout rate for progressive dropout
+        :param output_dim: Output dimension for the model
         :return: Loaded model
         """
-        # Read in the model 
-        model = torch.load(model_path, map_location=torch.device(self.device))
+        # Default output_dim to num_classes if not specified
+        if output_dim is None:
+            output_dim = num_classes
+        
+        # Read in the model state dict
+        state_dict = torch.load(model_path, map_location=torch.device(self.device))
 
-        logger.info(f'Reading model with input_dim={input_dim}, num_classes={num_classes}, num_heads={num_heads}, hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={dropout}, use_lstm={use_lstm}, max_len={max_len}, protein_dropout_rate={protein_dropout_rate}')
+        logger.info(f'Reading model with input_dim={input_dim}, num_classes={num_classes}, output_dim={output_dim}, num_heads={num_heads}, hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={dropout}, use_lstm={use_lstm}, max_len={max_len}, protein_dropout_rate={protein_dropout_rate}, attention={attention}, positional_encoding_type={positional_encoding_type}, pre_norm={pre_norm}')
 
-        # Create the predictor option 
-        predictor = model_onehot.TransformerClassifierCircularRelativeAttention(
-            input_dim=input_dim, 
-            num_classes=num_classes, 
-            num_heads=num_heads, 
-            hidden_dim=hidden_dim, 
-            lstm_hidden_dim=lstm_hidden_dim if use_lstm else None,  # Use lstm_hidden_dim if use_lstm is True
-            dropout=dropout, 
-            max_len=max_len,  # Specify max_len
-            use_lstm=use_lstm, 
-            positional_encoding=model_onehot.fourier_positional_encoding,  # Add positional_encoding argument
-            protein_dropout_rate=protein_dropout_rate  # Add protein_dropout_rate parameter
-        )
-    
-        # Resize model parameters to match the checkpoint
-        state_dict = model
-        for name, param in predictor.state_dict().items():
-            if name in state_dict:
-                if state_dict[name].shape != param.shape:
-                    state_dict[name] = param
-        predictor.load_state_dict(state_dict)
+        # Select the positional encoding function based on the type
+        positional_encoding_func = model_onehot.fourier_positional_encoding if positional_encoding_type == 'fourier' else model_onehot.sinusoidal_positional_encoding
+        
+        # Create the appropriate model based on attention type
+        if attention == 'circular':
+            model = model_onehot.TransformerClassifierCircularRelativeAttention(
+                input_dim=input_dim, 
+                num_classes=num_classes, 
+                num_heads=num_heads, 
+                hidden_dim=hidden_dim, 
+                lstm_hidden_dim=lstm_hidden_dim if use_lstm else None,
+                dropout=dropout, 
+                max_len=max_len,
+                use_lstm=use_lstm, 
+                positional_encoding=positional_encoding_func,
+                protein_dropout_rate=protein_dropout_rate,
+                pre_norm=pre_norm,
+                progressive_dropout=progressive_dropout,
+                initial_dropout_rate=initial_dropout_rate,
+                final_dropout_rate=final_dropout_rate,
+                output_dim=output_dim
+            )
+        elif attention == 'relative':
+            model = model_onehot.TransformerClassifierRelativeAttention(
+                input_dim=input_dim,
+                num_classes=num_classes,
+                num_heads=num_heads,
+                hidden_dim=hidden_dim,
+                lstm_hidden_dim=lstm_hidden_dim if use_lstm else None,
+                dropout=dropout,
+                max_len=max_len,
+                use_lstm=use_lstm,
+                positional_encoding=positional_encoding_func,
+                protein_dropout_rate=protein_dropout_rate,
+                output_dim=output_dim
+            )
+        elif attention == 'absolute':
+            model = model_onehot.TransformerClassifier(
+                input_dim=input_dim,
+                num_classes=num_classes,
+                num_heads=num_heads,
+                hidden_dim=hidden_dim,
+                lstm_hidden_dim=lstm_hidden_dim if use_lstm else None,
+                dropout=dropout,
+                num_layers=2,  # Default value
+                use_lstm=use_lstm,
+                positional_encoding=positional_encoding_func,
+                protein_dropout_rate=protein_dropout_rate,
+                output_dim=output_dim
+            )
+        else:
+            raise ValueError(f"Invalid attention type: {attention}")
+        
+        # Initialize protein feature dropout with dummy forward pass
+        if hasattr(model, 'protein_feature_dropout'):
+            logger.info("Initializing protein_feature_dropout buffers with dummy forward pass")
+            batch_size, seq_len = 2, 10  # Minimal batch for initialization
+            feature_dim = model.gene_feature_dim + (hidden_dim - model.gene_feature_dim)
+            dummy_input = torch.zeros((batch_size, seq_len, feature_dim), device=self.device)
+            dummy_idx = [torch.tensor([0, 1]) for _ in range(batch_size)]
+            model.protein_feature_dropout(dummy_input, dummy_idx)
+        
+        # Load the state dictionary with strict=False to handle missing/unexpected keys
+        model.load_state_dict(state_dict, strict=False)
+        
+        return model
 
-        return predictor
-
-    def read_models_from_directory(self, directory_path, input_dim=1280, num_classes=9, num_heads=4, hidden_dim=256, lstm_hidden_dim=512, dropout=0.1, use_lstm=True, max_len=1500, protein_dropout_rate=0.0):
+    def read_models_from_directory(self, directory_path, input_dim=1280, num_classes=9, num_heads=4, hidden_dim=256, lstm_hidden_dim=512, dropout=0.1, use_lstm=True, max_len=1500, protein_dropout_rate=0.0, attention='circular', positional_encoding_type='fourier', pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4, output_dim=None):
         """
         Read and load all models from the given directory.
 
@@ -158,13 +212,36 @@ class Predictor:
         :param use_lstm: Whether to use LSTM in the model
         :param max_len: Maximum length for the model
         :param protein_dropout_rate: Dropout rate for protein features
+        :param attention: Type of attention mechanism
+        :param positional_encoding_type: Type of positional encoding
+        :param pre_norm: Whether to use pre-normalization
+        :param progressive_dropout: Whether to use progressive dropout
+        :param initial_dropout_rate: Initial dropout rate for progressive dropout
+        :param final_dropout_rate: Final dropout rate for progressive dropout
+        :param output_dim: Output dimension for the model
         """
         print('Reading models from directory: ', directory_path)
+        
+        # Set default output_dim to num_classes if not specified
+        if output_dim is None:
+            output_dim = num_classes
+        
+        # Log parameters for debugging
+        logger.info(f"Loading models with parameters: input_dim={input_dim}, num_classes={num_classes}, output_dim={output_dim}, " 
+                    f"num_heads={num_heads}, hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, "
+                    f"dropout={dropout}, use_lstm={use_lstm}, max_len={max_len}, "
+                    f"protein_dropout_rate={protein_dropout_rate}, attention={attention}, "
+                    f"positional_encoding_type={positional_encoding_type}, pre_norm={pre_norm}")
 
         for filename in os.listdir(directory_path):
-            if filename.endswith(".model"):  # Assuming model files have .pt extension
+            if filename.endswith(".model"):  # Assuming model files have .model extension
                 model_path = os.path.join(directory_path, filename)
-                model = self.read_model(model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate)
+                model = self.read_model(
+                    model_path, input_dim, num_classes, num_heads, hidden_dim, 
+                    lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate,
+                    attention, positional_encoding_type, pre_norm, progressive_dropout,
+                    initial_dropout_rate, final_dropout_rate, output_dim
+                )
                 self.models.append(model)
 
     def compute_confidence(self, scores, confidence_dict, categories):
