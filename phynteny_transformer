@@ -1,19 +1,26 @@
 #!/usr/bin/env python
 
-import sys
+# Standard library imports
 import os
-import time
-sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
-from src import format_data
-from src import predictor
-import click 
-from loguru import logger 
-import numpy as np 
-import torch 
-from importlib_resources import files
 import pickle
-from Bio import SeqIO
+import sys
+import time
 
+# Third-party library imports
+import click
+from importlib_resources import files
+from loguru import logger
+import numpy as np
+import torch
+from torch.utils.data import DataLoader
+
+# BioPython imports
+from Bio import Seq, SeqIO, SeqRecord
+from Bio.SeqFeature import FeatureLocation, SeqFeature
+
+# Local application imports
+sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
+from src import format_data, model_onehot, predictor
 
 __author__ = "Susanna Grigson"
 __maintainer__ = "Susanna Grigson"
@@ -63,11 +70,34 @@ __status__ = "development"
 
 @click.option("-f", "--force", is_flag=True, help="Overwrite output directory")
 
+# Model configuration options
+@click.option('--input-dim', default=1280, help='Input dimension for the model.')
+@click.option('--num-classes', default=9, help='Number of classes for the model.')
+@click.option('--num-heads', default=8, help='Number of attention heads for the model.')
+@click.option('--hidden-dim', default=512, help='Hidden dimension for the model.')
+@click.option('--lstm-hidden-dim', default=512, help='LSTM hidden dimension for the model.')
+@click.option('--no-lstm', is_flag=True, help='Specify if LSTM should not be used in the model.')
+@click.option('--max-len', default=1500, help='Maximum length for the model.')
+@click.option('--protein-dropout-rate', default=0.6, help='Dropout rate for protein features.')
+@click.option('--attention', type=click.Choice(['absolute', 'relative', 'circular']), default='circular', help='Type of attention mechanism to use.')
+@click.option('--positional-encoding-type', type=click.Choice(['fourier', 'sinusoidal']), default='sinusoidal', help='Type of positional encoding to use.')
+@click.option('--pre-norm', is_flag=True, default=False, help='Use pre-normalization in transformer layers instead of post-normalization.')
+@click.option('--progressive-dropout', is_flag=True, default=True, help='Enable progressive dropout for protein features.')
+@click.option('--initial-dropout-rate', default=1.0, help='Initial dropout rate when using progressive dropout.')
+@click.option('--final-dropout-rate', default=0.4, help='Final dropout rate when using progressive dropout.')
+@click.option('--output-dim', default=None, type=int, help='Output dimension for the model. Defaults to num_classes if not specified.')
+@click.option('--num-layers', default=2, help='Number of transformer layers.')
+@click.option('--dropout', default=0.1, help='Dropout rate for the model.')
+@click.option('--batch-size', default=128, help='Batch size for processing data.')
+
 @click.version_option(version=__version__)
 
 
 
-def main(infile, out, esm_model, models, force, prefix):
+def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, num_heads, 
+         hidden_dim, lstm_hidden_dim, no_lstm, max_len, protein_dropout_rate, attention, 
+         positional_encoding_type, pre_norm, progressive_dropout, initial_dropout_rate, 
+         final_dropout_rate, output_dim, num_layers, dropout, batch_size):
 
     start_time = time.time()
     # instantiate output directory 
@@ -83,6 +113,9 @@ def main(infile, out, esm_model, models, force, prefix):
 
     # read in needed info on PHROGS 
     category_dict, phrog_integer_category = format_data.read_annotations_information() # what this this method even doing? 
+
+    # Determine whether to use LSTM based on the --no-lstm flag
+    use_lstm = not no_lstm
 
     # preamble 
     logger.info(f'Starting Phynteny transformer v{__version__}') 
@@ -114,17 +147,45 @@ def main(infile, out, esm_model, models, force, prefix):
 
     # Prepare data
     X, y = format_data.prepare_data(embeddings, gb_dict)
-    src_key_padding = format_data.pad_sequence(list(y.values()))
 
     # Need to add a one-hot encoding of the categories to the X data
-    X_one_hot = {key: torch.tensor(np.hstack((format_data.custom_one_hot_encode(y[key]), X[key]))) for key in X.keys()}
+    #X_one_hot = {key: torch.tensor(np.hstack((format_data.custom_one_hot_encode(y[key], num_classes=num_classes), X[key]))) for key in X.keys()}
+    #X_one_hot = {key: torch.tensor(np.hstack((format_data.custom_one_hot_encode(y[key], num_classes=num_classes), X[key]))) for key in X.keys()}
+    X_one_hot = X 
 
     logger.info("Creating predictor object")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     p = predictor.Predictor(device=device)
     
     logger.info(f"Reading models from directory: {models}")
-    p.read_models_from_directory(models)
+    logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}, num_heads={num_heads}, "
+                f"hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={dropout}, "
+                f"use_lstm={use_lstm}, max_len={max_len}, protein_dropout_rate={protein_dropout_rate}, "
+                f"attention={attention}, positional_encoding_type={positional_encoding_type}, "
+                f"pre_norm={pre_norm}, progressive_dropout={progressive_dropout}, "
+                f"initial_dropout_rate={initial_dropout_rate}, final_dropout_rate={final_dropout_rate}, "
+                f"output_dim={output_dim}, num_layers={num_layers}")
+                
+    p.read_models_from_directory(
+        models, 
+        input_dim=input_dim, 
+        num_classes=num_classes, 
+        num_heads=num_heads, 
+        hidden_dim=hidden_dim, 
+        lstm_hidden_dim=lstm_hidden_dim, 
+        dropout=dropout, 
+        use_lstm=use_lstm, 
+        max_len=max_len, 
+        protein_dropout_rate=protein_dropout_rate, 
+        attention=attention, 
+        positional_encoding_type=positional_encoding_type, 
+        pre_norm=pre_norm, 
+        progressive_dropout=progressive_dropout, 
+        initial_dropout_rate=initial_dropout_rate, 
+        final_dropout_rate=final_dropout_rate, 
+        output_dim=output_dim,
+        num_layers=num_layers
+    )
 
     # Read the confidence_dict from a pickled file
     confidence_dict_path = os.path.join(models, "confidence_dict.pkl")
@@ -136,16 +197,81 @@ def main(infile, out, esm_model, models, force, prefix):
         logger.error(f"Confidence dictionary file does not exist: {confidence_dict_path}")
         sys.exit(1)
 
-    logger.info("Making predictions")
-    scores = p.predict(X_one_hot, src_key_padding)
-    logger.info(f"f{scores}")
-
+    logger.info("Making predictions using batch inference")
+    
+    # Use the new batch inference method
+    all_scores = p.predict_inference(X_one_hot, y, batch_size=batch_size)
+    
+    # Convert all_scores format to match what's expected by compute_confidence
+    scores = [all_scores[key] for key in all_scores.keys()]
+    
+    logger.info(f"Number of valid scores collected: {len(scores)}")
     logger.info("Calculating confidence scores")
     predictions, confidence_scores = p.compute_confidence(scores, confidence_dict, phrog_integer_category)
+    logger.info(f'Confidence scores {confidence_scores}')
+    logger.info("Creating SeqRecord objects for GenBank output")
 
+    
+    seq_records = {}
+    for key in gb_dict:
+        try:
+            # If gb_dict already contains SeqRecord objects with features
+            if hasattr(gb_dict[key], 'features'):
+                seq_records[key] = gb_dict[key]
+            # If gb_dict contains a custom dictionary structure from fetch_data
+            elif isinstance(gb_dict[key], dict):
+                # Get sequences
+                sequences = gb_dict[key].get('sequence', [])
+                
+                # Create a parent sequence if available
+                if sequences:
+                    # Extract an overall sequence if available, or concatenate individual sequences
+                    full_seq = ""
+                    for seq_record in sequences:
+                        if hasattr(seq_record, 'seq'):
+                            full_seq += str(seq_record.seq)
+                    
+                    # Create a new SeqRecord
+                    record = SeqRecord.SeqRecord(
+                        Seq.Seq(full_seq),
+                        id=key,
+                        name=key,
+                        description=f"Created from Phynteny data for {key}"
+                    )
+                    
+                    # Create CDS features from position information
+                    features = []
+                    positions = gb_dict[key].get('position', [])
+                    senses = gb_dict[key].get('sense', [])
+                    phrogs = gb_dict[key].get('phrogs', [])
+                    
+                    for i in range(len(positions)):
+                        pos = positions[i]
+                        strand = 1 if senses[i] == '+' else -1
+                        
+                        feature = SeqFeature(
+                            FeatureLocation(pos[0], pos[1], strand=strand),  # Add strand to FeatureLocation, not SeqFeature
+                            type="CDS",
+                            qualifiers={"phrog": [phrogs[i]] if i < len(phrogs) else []}
+                        )
+                        features.append(feature)
+                    
+                    record.features = features
+                    seq_records[key] = record
+                    
+            else:
+                logger.warning(f"Could not process {key}: Unknown data structure")
+                
+        except Exception as e:
+            logger.error(f"Error creating SeqRecord for {key}: {e}")
+            
+    if not seq_records:
+        logger.error("Could not create any SeqRecord objects for output")
+        sys.exit(1)
+        
     logger.info("Writing predictions to genbank file")
     genbank_file = out + "/phynteny.gbk"
-    annotated_genes_count = format_data.save_genbank(gb_dict, genbank_file, predictions, scores, confidence_scores)
+    annotated_genes_count = format_data.save_genbank(seq_records, genbank_file, predictions, scores, confidence_scores)
     
     logger.info("Generating table...")
     table_file = out + "/phynteny.tsv"

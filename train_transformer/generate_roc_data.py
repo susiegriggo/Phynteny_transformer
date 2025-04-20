@@ -15,10 +15,12 @@ import shutil
 @click.option('--pharokka_x_path', required=True, type=click.Path(exists=True), help='Path to pharokka X data.')
 @click.option('--pharokka_y_path', required=True, type=click.Path(exists=True), help='Path to pharokka y data.')
 @click.option('--phold_y_path', required=True, type=click.Path(exists=True), help='Path to phold y data.')
+@click.option('--pharokka_only' , is_flag=True, help='Use only pharokka data for validation')
 @click.option('--model_dir', required=True, type=click.Path(exists=True), help='Directory containing the models.')
 @click.option('--output_dir', required=True, type=click.Path(), help='Directory to save the ROC data.')
 @click.option('--force', is_flag=True, help='Force overwrite the output directory if it exists.')
 # Add model parameter options
+@click.option('--mask_portion', default=0.15, help='Portion of the sequence to mask. Only use in pharokka_only mode')
 @click.option('--input_dim', default=1280, help='Input dimension for the model.')
 @click.option('--hidden_dim', default=256, help='Hidden dimension for the model.')
 @click.option('--lstm_hidden_dim', default=512, help='LSTM hidden dimension for the model.')
@@ -33,8 +35,8 @@ import shutil
 @click.option('--final_dropout_rate', default=0.4, help='Final dropout rate when using progressive dropout.')
 @click.option('--max_len', default=1500, help='Maximum sequence length.')
 @click.option('--output_dim', default=None, type=int, help='Output dimension for the model. Defaults to num_classes if not specified.')
-def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, force, 
-         input_dim, hidden_dim, lstm_hidden_dim, num_heads, dropout, use_lstm,
+def main(pharokka_x_path, pharokka_y_path, phold_y_path, pharokka_only, model_dir, output_dir, force, 
+         mask_portion, input_dim, hidden_dim, lstm_hidden_dim, num_heads, dropout, use_lstm,
          positional_encoding_type, pre_norm, protein_dropout_rate, progressive_dropout,
          initial_dropout_rate, final_dropout_rate, max_len, output_dim):
     # Create output directory if it does not exist, or clear it if force is specified
@@ -96,15 +98,26 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, 
         val_labels = [v for v in val_labels if phold_y.get(v) != None]
         
         # Get embeddings and categories
-        validation_embeddings = [pharokka_X.get(v) for v in val_labels]
-        validation_categories = [pharokka_y.get(v) for v in val_labels]
-        validation_phold = [phold_y.get(v) for v in val_labels]
-        logger.info(f'Number of validation samples: {len(validation_phold)}')
+        if pharokka_only:
+            logger.info("Using only pharokka data for validation")
+            validation_embeddings = [pharokka_X.get(v) for v in val_labels]
+            validation_categories = [pharokka_y.get(v) for v in val_labels]
 
-        # Create validation dataset
-        validation_dataset = model_onehot.EmbeddingDataset(validation_embeddings, validation_categories, mask_portion=0, labels=val_labels)
-        validation_dataset.set_validation(validation_phold)
-        validation_loader = DataLoader(validation_dataset, batch_size=64, collate_fn=model_onehot.collate_fn)
+            validation_dataset = model_onehot.EmbeddingDataset(validation_embeddings, validation_categories, mask_portion=mask_portion, labels=val_labels)
+            validation_dataset.set_training()
+            validation_loader = DataLoader(validation_dataset, batch_size=64, collate_fn=model_onehot.collate_fn)
+    
+        else: 
+            logger.info("Using phold data for validation")
+            validation_embeddings = [pharokka_X.get(v) for v in val_labels]
+            validation_categories = [pharokka_y.get(v) for v in val_labels]
+            validation_phold = [phold_y.get(v) for v in val_labels]
+            logger.info(f'Number of validation samples: {len(validation_phold)}')
+
+            # Create validation dataset
+            validation_dataset = model_onehot.EmbeddingDataset(validation_embeddings, validation_categories, mask_portion=0, labels=val_labels)
+            validation_dataset.set_validation(validation_phold)
+            validation_loader = DataLoader(validation_dataset, batch_size=64, collate_fn=model_onehot.collate_fn)
 
         # Select positional encoding function
         positional_encoding_func = model_onehot.fourier_positional_encoding if positional_encoding_type == 'fourier' else model_onehot.sinusoidal_positional_encoding

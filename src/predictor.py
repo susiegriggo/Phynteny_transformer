@@ -11,6 +11,7 @@ import numpy  as np
 from sklearn.neighbors import KernelDensity
 from Bio import SeqIO  # Add this import
 from loguru import logger  # Add this import
+from torch.utils.data import DataLoader  # Add this import at the top of the file
 
 class Predictor: 
 
@@ -87,6 +88,88 @@ class Predictor:
         self.scores = all_scores
         return all_scores  # Remove the TODO comment if the return statement is necessary
     
+    def predict_inference(self, X, y, batch_size=128):
+        """
+        Predict using batch processing for inference.
+        
+        :param X: Dictionary of embeddings with keys as identifiers
+        :param y: Dictionary of categories with keys as identifiers
+        :param batch_size: Size of batches for processing
+        :return: Dictionary of predicted scores with keys matching input dictionaries
+        """
+        logger.info(f"Starting batch inference with batch size {batch_size}")
+        
+        # Prepare for batch processing
+        self.models = [model.to(self.device) for model in self.models]
+        for model in self.models:
+            model.eval()
+        
+        # Create dataset
+        keys_list = list(X.keys())
+        dataset = model_onehot.EmbeddingDataset(
+            list(X.values()), 
+            list(y.values()), 
+            keys_list,
+            mask_portion=0  # No masking for inference
+        )
+        
+        # Set inference mode
+        dataset.training = False
+        dataset.validation = False
+        
+        # Create DataLoader
+        data_loader = DataLoader(
+            dataset, 
+            batch_size=batch_size, 
+            collate_fn=model_onehot.collate_fn
+        )
+        
+        logger.info(f"Processing {len(keys_list)} samples in batches of {batch_size}")
+        
+        # Process batches
+        all_scores = {}
+        batches_processed = 0
+        
+        for embeddings_batch, categories_batch, masks_batch, idx_batch in data_loader:
+            try:
+                # Move tensors to device
+                embeddings_batch = embeddings_batch.to(self.device)
+                masks_batch = masks_batch.to(self.device)
+                src_key_padding_mask = (masks_batch != -2).to(self.device)
+                
+                # Get predictions for this batch
+                batch_scores = self.predict_batch(embeddings_batch, src_key_padding_mask)
+                
+                # Store scores by their original keys
+                for i in range(len(idx_batch)):
+                    if i < len(keys_list):
+                        key = keys_list[i]
+                        
+                        if isinstance(batch_scores, torch.Tensor):
+                            if i < batch_scores.shape[0]:
+                                all_scores[key] = batch_scores[i].cpu().numpy()
+                        else:
+                            # It's already a numpy array
+                            if i < len(batch_scores):
+                                all_scores[key] = batch_scores[i]
+                
+                batches_processed += 1
+                if batches_processed % 10 == 0:
+                    logger.info(f"Processed {batches_processed} batches...")
+                    
+            except Exception as e:
+                logger.error(f"Error processing batch: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+                continue
+        
+        logger.info(f"Total batches processed: {batches_processed}")
+        logger.info(f"Collected scores for {len(all_scores)} samples")
+        
+        # Store scores for compatibility with other methods
+        self.scores = all_scores
+        return all_scores
+
     def write_genbank(self,  gb_dict, out):
         """
         Write the predicted scores to a Genbank file.
@@ -99,7 +182,7 @@ class Predictor:
             record.annotations["phynteny score"] = self.scores[key]
             SeqIO.write(record, os.path.join(out, key + ".gb"), "genbank")
 
-    def read_model(self, model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate=0.0, attention='circular', positional_encoding_type='fourier', pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4, output_dim=None): 
+    def read_model(self, model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate=0.0, attention='circular', positional_encoding_type='fourier', pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4, output_dim=None, num_layers=2): 
         """
         Read and load a model from the given path.
 
@@ -120,6 +203,7 @@ class Predictor:
         :param initial_dropout_rate: Initial dropout rate for progressive dropout
         :param final_dropout_rate: Final dropout rate for progressive dropout
         :param output_dim: Output dimension for the model
+        :param num_layers: Number of transformer layers
         :return: Loaded model
         """
         # Default output_dim to num_classes if not specified
@@ -129,7 +213,7 @@ class Predictor:
         # Read in the model state dict
         state_dict = torch.load(model_path, map_location=torch.device(self.device))
 
-        logger.info(f'Reading model with input_dim={input_dim}, num_classes={num_classes}, output_dim={output_dim}, num_heads={num_heads}, hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={dropout}, use_lstm={use_lstm}, max_len={max_len}, protein_dropout_rate={protein_dropout_rate}, attention={attention}, positional_encoding_type={positional_encoding_type}, pre_norm={pre_norm}')
+        logger.info(f'Reading model with input_dim={input_dim}, num_classes={num_classes}, output_dim={output_dim}, num_heads={num_heads}, hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={dropout}, use_lstm={use_lstm}, max_len={max_len}, protein_dropout_rate={protein_dropout_rate}, attention={attention}, positional_encoding_type={positional_encoding_type}, pre_norm={pre_norm}, num_layers={num_layers}')
 
         # Select the positional encoding function based on the type
         positional_encoding_func = model_onehot.fourier_positional_encoding if positional_encoding_type == 'fourier' else model_onehot.sinusoidal_positional_encoding
@@ -175,7 +259,7 @@ class Predictor:
                 hidden_dim=hidden_dim,
                 lstm_hidden_dim=lstm_hidden_dim if use_lstm else None,
                 dropout=dropout,
-                num_layers=2,  # Default value
+                num_layers=num_layers,  # Use the passed parameter instead of hardcoded value
                 use_lstm=use_lstm,
                 positional_encoding=positional_encoding_func,
                 protein_dropout_rate=protein_dropout_rate,
@@ -198,7 +282,7 @@ class Predictor:
         
         return model
 
-    def read_models_from_directory(self, directory_path, input_dim=1280, num_classes=9, num_heads=4, hidden_dim=256, lstm_hidden_dim=512, dropout=0.1, use_lstm=True, max_len=1500, protein_dropout_rate=0.0, attention='circular', positional_encoding_type='fourier', pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4, output_dim=None):
+    def read_models_from_directory(self, directory_path, input_dim=1280, num_classes=9, num_heads=8, hidden_dim=512, lstm_hidden_dim=512, dropout=0.1, use_lstm=True, max_len=1500, protein_dropout_rate=0.6, attention='circular', positional_encoding_type='sinusoidal', pre_norm=False, progressive_dropout=True, initial_dropout_rate=1.0, final_dropout_rate=0.4, output_dim=None, num_layers=2):
         """
         Read and load all models from the given directory.
 
@@ -219,6 +303,7 @@ class Predictor:
         :param initial_dropout_rate: Initial dropout rate for progressive dropout
         :param final_dropout_rate: Final dropout rate for progressive dropout
         :param output_dim: Output dimension for the model
+        :param num_layers: Number of transformer layers
         """
         print('Reading models from directory: ', directory_path)
         
@@ -240,9 +325,10 @@ class Predictor:
                     model_path, input_dim, num_classes, num_heads, hidden_dim, 
                     lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate,
                     attention, positional_encoding_type, pre_norm, progressive_dropout,
-                    initial_dropout_rate, final_dropout_rate, output_dim
+                    initial_dropout_rate, final_dropout_rate, output_dim, num_layers
                 )
                 self.models.append(model)
+
 
     def compute_confidence(self, scores, confidence_dict, categories):
         """
@@ -371,6 +457,7 @@ def build_confidence_dict(label, prediction, scores, bandwidth, categories):
         }
 
     return confidence_dict
+
 
 
 
