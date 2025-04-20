@@ -1249,7 +1249,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         strand_embeds = self.strand_embedding(strand_ids.float())
         length_embeds = self.length_embedding(gene_length)
         protein_embeds = self.embedding_layer(protein_embeds)
-        
+
         # Concatenate the embeddings 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
 
@@ -2550,9 +2550,6 @@ class MaskedTokenFeatureDropout(nn.Module):
 
                 # Upate only the maksed token features 
                 result[b, idx[b], self.protein_idx:] = dropped_features
-            else: 
-                logger.info(f'Not in loop')
-                logger.info(f'idx: {idx[b]}') # is this contains data and not an empty list then we have an isssue
         return result
 
 
