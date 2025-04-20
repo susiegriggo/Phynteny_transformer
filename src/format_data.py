@@ -14,6 +14,7 @@ import pickle
 import os
 import pandas as pd
 import sys
+import click  # Add this import for click.open_file
 from transformers import EsmModel, EsmTokenizer
 from transformers import EsmForMaskedLM
 
@@ -770,7 +771,7 @@ def pad_sequence(y):
         src_key_padding[i][torch.nonzero(y[i] == -1, as_tuple=False)] = 1
     return src_key_padding
 
-def custom_one_hot_encode(data, num_classes=10):
+def custom_one_hot_encode(data, num_classes=9):
     """
     Generate a one-hot encoding for the given data.
 
@@ -791,27 +792,58 @@ def custom_one_hot_encode(data, num_classes=10):
 
 def save_genbank(gb_dict, genbank_file, predictions, scores, confidence_scores):
     """
-    Save the predictions to a Genbank file.
+    Save the genbank file with predictions.
 
-    :param gb_dict: Dictionary of Genbank records
-    :param genbank_file: Path to the output Genbank file
-    :param predictions: Dictionary of predictions
-    :param scores: Dictionary of scores
-    :param confidence_scores: Dictionary of confidence scores
+    :param gb_dict: Dictionary of genbank records or dictionary with record field
+    :param genbank_file: Path to save the genbank file
+    :param predictions: List of predictions
+    :param scores: List of scores
+    :param confidence_scores: List of confidence scores
+    :return: Number of genes annotated with confidence above threshold
     """
-    with open(genbank_file, "w") as output_handle:
-        for k in gb_dict.keys():
-            # update the annotations 
-            cds = [i for i in gb_dict.get(k).features if i.type == "CDS"]
-            for i in range(len(cds)):
-                # only annotate genes that are not currently known 
-                if cds[i].qualifiers['phrog'] != "No_PHROG":
-                    cds[i].qualifiers["category"] = predictions[k][i]
-                    cds[i].qualifiers["phynteny confidence"] = confidence_scores[k][i]
-                    cds[i].qualifiers["phynteny score"] = scores[k][i]
-            SeqIO.write(gb_dict.get(k), output_handle, "genbank")
-            logger.info(f"Annotations updated for {k}")
-    output_handle.close()
+    # Threshold for considering a gene as annotated
+    threshold = 0.9
+    annotated = 0
+
+    with open(genbank_file, "w") as handle:
+        for i, k in enumerate(gb_dict.keys()):
+            # Handle different possible structures of gb_dict
+            if isinstance(gb_dict[k], dict) and "record" in gb_dict[k]:
+                # Extract the record from a dictionary structure
+                record = gb_dict[k]["record"]
+            elif hasattr(gb_dict[k], "features"):
+                # It's directly a SeqRecord object
+                record = gb_dict[k]
+            else:
+                logger.warning(f"Skipping {k}: Could not extract SeqRecord object")
+                continue
+
+            # Get CDS features
+            cds = [f for f in record.features if f.type == "CDS"]
+            
+            # Add annotations
+            for j, feature in enumerate(cds):
+                if j < len(scores[i]):
+                    if "phynteny" not in feature.qualifiers:
+                        feature.qualifiers["phynteny"] = []
+                    feature.qualifiers["phynteny"] = str(int(predictions[i][j]))
+                    
+                    if "phynteny_score" not in feature.qualifiers:
+                        feature.qualifiers["phynteny_score"] = []
+                    feature.qualifiers["phynteny_score"] = str(scores[i][j])
+                    
+                    if "phynteny_confidence" not in feature.qualifiers:
+                        feature.qualifiers["phynteny_confidence"] = []
+                    feature.qualifiers["phynteny_confidence"] = str(confidence_scores[i])
+                    
+                    # Count genes annotated with high confidence
+                    if confidence_scores[i] > threshold:
+                        annotated += 1
+                        
+            # Write record to handle
+            SeqIO.write(record, handle, "genbank")
+    
+    return annotated
 
 def generate_table(outfile, gb_dict, categories, phrog_integer):
     """

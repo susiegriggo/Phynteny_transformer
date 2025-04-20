@@ -1174,7 +1174,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         self.strand_embedding = nn.Linear(2, strand_embedding_dim).to(device)
         self.length_embedding = nn.Linear(1, length_embedding_dim).to(device)
         self.gene_feature_dim = function_embedding_dim + strand_embedding_dim + length_embedding_dim
-        logger.info(f'gene feature dim: {self.gene_feature_dim}')
+        #logger.info(f'gene feature dim: {self.gene_feature_dim}')
         self.embedding_layer = nn.Linear(input_dim, hidden_dim - self.gene_feature_dim).to(device)
         self.num_layers = num_layers
         self.num_heads = num_heads

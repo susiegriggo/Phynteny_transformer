@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import glob
+import os
 import setuptools 
 
 def get_version():
@@ -10,16 +11,14 @@ def get_version():
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
-packages = setuptools.find_packages()
-print(packages)
+packages = setuptools.find_packages(include=['phynteny_utils', 'phynteny_utils.*', 'train_transformer', 'train_transformer.*', 'src'])
+print("Packages found:", packages)
+
+# Define package_data to include directory structure but not necessarily the model files
 package_data = {
-    "phynteny_utils": [
-        "phynteny_utils/*",
-        "phynteny_utils/models/*",
-        "phynteny_utils/phrog_annotation_info/*",
-    ],
-    "train_transformer": ["train_transformer/*"],
-    "src": ["src/*"],
+    "phynteny_utils": ["*"],
+    "phynteny_utils.models": ["__init__.py"],  # Just include the package marker
+    "phynteny_utils.phrog_annotation_info": ["*"],
 }
 
 install_requires = [
@@ -34,8 +33,10 @@ install_requires = [
         "tqdm",
     ]
 
-model_files = glob.glob("phynteny_utils/models/*")
-data_files = [(".", ["LICENSE", "README.md"])]
+# Don't include model files in data_files
+data_files = [
+    (".", ["LICENSE", "README.md"])
+]
 
 setuptools.setup(
     name="phynteny",
