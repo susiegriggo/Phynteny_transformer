@@ -138,11 +138,11 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, 
             m.protein_feature_dropout(dummy_input, dummy_idx)
             
         # Load state dict with strict=False to handle parameter differences
-        state_dict = torch.load(f'{model_dir}/fold_{k+1}/transformer_state_dict.pth', map_location=torch.device(device))
+        state_dict = torch.load(f'{model_dir}/fold_{k+1}transformer.model', map_location=torch.device(device))
         m.load_state_dict(state_dict, strict=False)
         m.to(device)
         m.eval()
-        logger.info(f"Model loaded from {model_dir}/fold_{k+1}/transformer_state_dict.pth")
+        logger.info(f"Model loaded from {model_dir}/fold_{k+1}transformer.model")
 
         # Get predictions
         all_probs = []
