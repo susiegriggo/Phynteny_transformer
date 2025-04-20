@@ -52,7 +52,7 @@ phynteny_transformer  test_data/test_phage.gbk -o test_output
 
 
 ### Brief Overview 
-
+![Brief Overview](Figure1.2.svg)
 
 
 
