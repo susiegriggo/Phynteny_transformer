@@ -9,6 +9,7 @@ from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
 from Bio.SeqFeature import SeqFeature, FeatureLocation
 from loguru import logger
+import traceback
 import re
 import shutil
 import pickle
@@ -900,7 +901,7 @@ def save_genbank(gb_dict, genbank_file, predictions, scores, confidence_scores):
     
     return annotated
 
-def generate_table(outfile, gb_dict, categories, phrog_integer, threshold=0.9):
+def generate_table(outfile, gb_dict, categories, phrog_integer, predictions=None, scores=None, confidence_scores=None, threshold=0.9, categories_map=None):
     """
     Generate table summary of the annotations made.
 
@@ -908,108 +909,110 @@ def generate_table(outfile, gb_dict, categories, phrog_integer, threshold=0.9):
     :param gb_dict: Dictionary of Genbank records
     :param categories: Dictionary of categories
     :param phrog_integer: Dictionary mapping phrog annotations to integers
-    :param threshold: Confidence threshold for high-confidence predictions (default: 0.9)
-    :return: Number of genes annotated with high confidence
+    :param predictions: List of predictions for each sequence (optional)
+    :param scores: List of scores for each prediction (optional)
+    :param confidence_scores: List of confidence scores for each prediction (optional) 
+    :param threshold: Confidence threshold (default: 0.9)
+    :param categories_map: Dictionary mapping prediction numbers to human-readable labels
+    :return: None
     """
-    # get the list of phages to loop through
+    # Get the list of phages to loop through
     keys = list(gb_dict.keys())
 
-    # count the number of genes found
-    found = 0
+    logger.info(f"Generating table")
 
-    logger.info(f"Generating table with confidence threshold {threshold}")
-
-    # convert annotations made to a text file
+    # Convert annotations made to a text file
     with click.open_file(outfile, "wt") if outfile != ".tsv" else sys.stdout as f:
         f.write(
             "ID\tstart\tend\tstrand\tphrog_id\tphrog_category\tphynteny_category\tphynteny_score\tconfidence\tphage\n"
         )
 
-        for k in keys:
+        for genome_idx, k in enumerate(keys):
             logger.info(f"Processing genome {k} for table output")
             
             try:
-                # Check if gb_dict[k] is a dictionary with sequence field or a direct SeqRecord
+                # Check if gb_dict[k] is a dictionary with sequence field
                 if isinstance(gb_dict.get(k), dict) and 'sequence' in gb_dict.get(k):
                     sequences = gb_dict.get(k)['sequence']
                     
                     # For each sequence in the genome
-                    for i, record in enumerate(sequences):
-                        # Try to get phrog information
+                    for seq_idx, record in enumerate(sequences):
+                        # Get phrog information from the record
                         phrog_id = "No_PHROG"
-                        phynteny_category = "NA"
-                        phynteny_score = "NA"
-                        phynteny_confidence = "NA"
-                        
-                        # Get feature information if available
                         if hasattr(record, 'features') and record.features:
                             for feature in record.features:
-                                if feature.type == "CDS":
-                                    if 'phrog' in feature.qualifiers:
-                                        phrog_id = feature.qualifiers['phrog'][0]
-                                    
-                                    if 'phynteny_category' in feature.qualifiers:
-                                        phynteny_category = feature.qualifiers['phynteny_category'][0]
-                                    
-                                    if 'phynteny_score' in feature.qualifiers:
-                                        score_val = feature.qualifiers['phynteny_score'][0]
-                                        # Format as float with 4 decimal places if possible
-                                        try:
-                                            phynteny_score = f"{float(score_val):.4f}"
-                                        except ValueError:
-                                            phynteny_score = score_val
-                                    
-                                    if 'phynteny_confidence' in feature.qualifiers:
-                                        confidence_val = feature.qualifiers['phynteny_confidence'][0]
-                                        try:
-                                            conf_float = float(confidence_val)
-                                            phynteny_confidence = f"{conf_float:.4f}"
-                                            if conf_float > threshold:
-                                                found += 1
-                                        except ValueError:
-                                            phynteny_confidence = confidence_val
+                                if feature.type == "CDS" and 'phrog' in feature.qualifiers:
+                                    phrog_id = feature.qualifiers['phrog'][0]
+                                    break
                         
-                        # Use annotation if features are not available
-                        elif hasattr(record, 'annotations'):
-                            if 'phynteny_category' in record.annotations:
-                                phynteny_category = record.annotations['phynteny_category']
-                            
-                            if 'phynteny_score' in record.annotations:
-                                score_val = record.annotations['phynteny_score']
-                                try:
-                                    phynteny_score = f"{float(score_val):.4f}"
-                                except ValueError:
-                                    phynteny_score = score_val
-                            
-                            if 'phynteny_confidence' in record.annotations:
-                                confidence_val = record.annotations['phynteny_confidence']
-                                try:
-                                    conf_float = float(confidence_val)
-                                    phynteny_confidence = f"{conf_float:.4f}"
-                                    if conf_float > threshold:
-                                        found += 1
-                                except ValueError:
-                                    phynteny_confidence = confidence_val
-                        
-                        # Get position information
+                        # Get position and strand information
                         start = 0
                         end = len(record.seq) if hasattr(record, 'seq') else 0
                         strand = "+"  # Default strand
                         
-                        # Try to get strand information from gb_dict structure if available
-                        if 'sense' in gb_dict.get(k) and i < len(gb_dict.get(k)['sense']):
-                            strand = gb_dict.get(k)['sense'][i]
+                        if 'position' in gb_dict.get(k) and seq_idx < len(gb_dict.get(k)['position']):
+                            start, end = gb_dict.get(k)['position'][seq_idx]
                         
-                        # Try to get position information if available
-                        if 'position' in gb_dict.get(k) and i < len(gb_dict.get(k)['position']):
-                            start, end = gb_dict.get(k)['position'][i]
+                        if 'sense' in gb_dict.get(k) and seq_idx < len(gb_dict.get(k)['sense']):
+                            strand = gb_dict.get(k)['sense'][seq_idx]
                         
-                        # Try to convert phrog to category
+                        # Get phrog category
                         try:
                             phrog_as_int = int(phrog_id) if phrog_id != "No_PHROG" else phrog_id
                             phrog_category = categories.get(phrog_integer.get(phrog_as_int), "unknown function")
                         except (ValueError, TypeError):
                             phrog_category = "unknown function"
+                        
+                        # Check if we should add predictions (only for unknown function)
+                        should_add_predictions = True
+                        
+                        # Check for function in qualifiers
+                        if 'all_qualifiers' in gb_dict.get(k) and seq_idx < len(gb_dict.get(k)['all_qualifiers']):
+                            qualifiers = gb_dict.get(k)['all_qualifiers'][seq_idx]
+                            if 'function' in qualifiers:
+                                function_value = qualifiers['function'][0].lower() if isinstance(qualifiers['function'], list) else qualifiers['function'].lower()
+                                if function_value != "unknown function" and function_value != "unknown":
+                                    should_add_predictions = False
+                        
+                        # Default values for prediction columns
+                        phynteny_category = "NA"
+                        phynteny_score = "NA"
+                        phynteny_confidence = "NA"
+                        
+                        # Add prediction information only if should_add_predictions is True
+                        if should_add_predictions:
+                            # Extract prediction if available
+                            if predictions is not None and genome_idx < len(predictions):
+                                if seq_idx < len(predictions[genome_idx]):
+                                    pred = predictions[genome_idx][seq_idx]
+                                    pred_int = int(pred)
+                                    
+                                    # Convert prediction number to label if categories_map is provided
+                                    if categories_map is not None and pred_int in categories_map:
+                                        phynteny_category = categories_map[pred_int]
+                                    else:
+                                        phynteny_category = str(pred_int)
+                            
+                            # Extract score if available
+                            if scores is not None and genome_idx < len(scores):
+                                if seq_idx < len(scores[genome_idx]):
+                                    score_arr = scores[genome_idx][seq_idx]
+                                    if isinstance(score_arr, np.ndarray) and len(score_arr) > 0:
+                                        if pred_int < len(score_arr):
+                                            max_score = float(score_arr[pred_int])
+                                            phynteny_score = f"{max_score:.4f}"
+                                    else:
+                                        phynteny_score = f"{float(score_arr):.4f}"
+                            
+                            # Extract confidence if available
+                            if confidence_scores is not None and genome_idx < len(confidence_scores):
+                                if isinstance(confidence_scores[genome_idx], np.ndarray):
+                                    if seq_idx < len(confidence_scores[genome_idx]):
+                                        conf = confidence_scores[genome_idx][seq_idx]
+                                        phynteny_confidence = f"{float(conf):.4f}"
+                                else:
+                                    conf = confidence_scores[genome_idx]
+                                    phynteny_confidence = f"{float(conf):.4f}"
                         
                         # Write to table
                         f.write(f"{record.id}\t{start}\t{end}\t{strand}\t{phrog_id}\t{phrog_category}\t"
@@ -1021,8 +1024,7 @@ def generate_table(outfile, gb_dict, categories, phrog_integer, threshold=0.9):
             
             except Exception as e:
                 logger.error(f"Error processing genome {k} for table: {str(e)}")
-                import traceback
                 logger.error(traceback.format_exc())
     
-    logger.info(f"Table generation complete. Found {found} high-confidence predictions (threshold={threshold}).")
-    return found
+    logger.info(f"Table generation complete.")
+    return None

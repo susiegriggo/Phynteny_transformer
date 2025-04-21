@@ -173,21 +173,21 @@ class Predictor:
         self.scores = all_scores
         return all_scores
 
-    def write_predictions_to_genbank(self, gb_dict, output_file, predictions, scores, confidence_scores, threshold=0.9):
+    def write_predictions_to_genbank(self, gb_dict, output_file, predictions, scores, confidence_scores, threshold=0.9, categories_map=None):
         """
         Write the predictions to a GenBank file, creating one record per genome with sequences as features.
+        Only add Phynteny predictions when function is unknown or missing.
         
         :param gb_dict: Dictionary containing genome information with nested sequence records
         :param output_file: Path to the output GenBank file
         :param predictions: List of predictions for each sequence
         :param scores: List of scores for each prediction
         :param confidence_scores: List of confidence scores for each prediction
-        :param threshold: Confidence threshold for high-confidence predictions (default: 0.9)
-        :return: Number of genes annotated with high confidence
+        :param threshold: Confidence threshold (default: 0.9)
+        :param categories_map: Dictionary mapping category numbers to human-readable labels
+        :return: None
         """
-        high_confidence_count = 0
-        
-        logger.info(f"Writing predictions to GenBank file: {output_file} with confidence threshold: {threshold}")
+        logger.info(f"Writing predictions to GenBank file: {output_file}")
         
         try:
             with open(output_file, "w") as handle:
@@ -268,10 +268,6 @@ class Predictor:
                                             conf = confidence_scores[genome_idx][seq_idx]
                                     else:
                                         conf = confidence_scores[genome_idx]
-                                    
-                                    # Count high confidence predictions
-                                    if conf > threshold:
-                                        high_confidence_count += 1
                             
                             # Get position information
                             start = 0
@@ -287,45 +283,56 @@ class Predictor:
                             # Start with an empty set of qualifiers
                             qualifiers = {}
                             
-                            logger.info(f'record {record}')
-                            # First, preserve ALL qualifiers from the original record
-                            if hasattr(record, 'features') and record.features:
-                                logger.info(f'record.features {record.features}')
+                            # Try to get qualifiers from the all_qualifiers field first (most comprehensive)
+                            if 'all_qualifiers' in genome_data and seq_idx < len(genome_data['all_qualifiers']):
+                                qualifiers = genome_data['all_qualifiers'][seq_idx].copy()
+                            
+                            # Next, check features (fallback)
+                            elif hasattr(record, 'features') and record.features:
                                 for feature in record.features:
-                                    # CDS is the typical feature we want to preserve
-                                    logger.info(f'feature.qualifiers {feature.qualifiers}')
                                     if feature.type == "CDS":
                                         # Deep copy ALL qualifiers from the original feature
-                                        for key, value in feature.qualifiers.items():
-                                            qualifiers[key] = value[:] if isinstance(value, list) else [value]
-                                        
-                                        # Skip the rest once we found a CDS feature
+                                        qualifiers = {key: value[:] if isinstance(value, list) else [value] 
+                                                     for key, value in feature.qualifiers.items()}
                                         break
+                            else:
+                                logger.warning(f"No qualifiers found for {record.id} - creating basic set")
                             
-                            # Preserve original sequence's ID and description as translation and product
-                            # if not already present in qualifiers
+                            # Ensure we have the essential qualifiers
                             if 'translation' not in qualifiers:
                                 qualifiers['translation'] = [str(record.seq)]
                             
-                            if 'product' not in qualifiers and hasattr(record, 'description'):
-                                if record.description and record.description != record.id:
-                                    qualifiers['product'] = [record.description]
-                                else:
-                                    qualifiers['product'] = [f"protein_{seq_idx}"]
-                            elif 'product' not in qualifiers:
+                            # Add product qualifier if not present
+                            if 'product' not in qualifiers:
                                 qualifiers['product'] = [f"protein_{seq_idx}"]
                             
-                            # Add protein_id if available and not already present
+                            # Add protein_id if available and not present
                             if 'protein_id' not in qualifiers and hasattr(record, 'id'):
                                 qualifiers['protein_id'] = [record.id]
                             
-                            # Now add our prediction qualifiers, potentially overwriting any existing values
-                            if prediction is not None:
-                                qualifiers["phynteny_category"] = [str(prediction)]
-                            if max_score is not None:
-                                qualifiers["phynteny_score"] = [f"{max_score:.4f}"]
-                            if conf is not None:
-                                qualifiers["phynteny_confidence"] = [f"{conf:.4f}"]
+                            # Check if we should add Phynteny predictions
+                            should_add_predictions = True
+                            
+                            # Only add predictions if function is unknown or not present
+                            if 'function' in qualifiers:
+                                function_value = qualifiers['function'][0].lower() if isinstance(qualifiers['function'], list) else qualifiers['function'].lower()
+                                if function_value != "unknown function" and function_value != "unknown":
+                                    should_add_predictions = False
+                                    logger.debug(f"Skipping Phynteny annotation for {record.id}: Known function: {function_value}")
+                            
+                            # Add our prediction qualifiers only for unknown function
+                            if should_add_predictions:
+                                if prediction is not None:
+                                    #qualifiers["phynteny_category"] = [str(prediction)]
+                                    
+                                    # Add the category label if categories_map is provided
+                                    if categories_map is not None and prediction in categories_map:
+                                        qualifiers["phynteny_category"] = [categories_map[prediction]]
+                                        
+                                if max_score is not None:
+                                    qualifiers["phynteny_score"] = [f"{max_score:.4f}"]
+                                if conf is not None:
+                                    qualifiers["phynteny_confidence"] = [f"{conf:.4f}"]
                             
                             # Create the feature with ALL original qualifiers plus our additions
                             feature = SeqFeature(
@@ -344,16 +351,15 @@ class Predictor:
                     SeqIO.write(genome_record, handle, "genbank")
                 
                 logger.info(f"Successfully wrote predictions to {output_file}")
-                logger.info(f"Found {high_confidence_count} high-confidence predictions (>= {threshold})")
                     
-            return high_confidence_count
+            return None
             
         except Exception as e:
             logger.error(f"Error writing to GenBank file {output_file}: {str(e)}")
             logger.error(traceback.format_exc())
-            return 0
+            return None
 
-    def write_genbank(self, gb_dict, out, predictions=None, scores=None, confidence_scores=None, threshold=0.9):
+    def write_genbank(self, gb_dict, out, predictions=None, scores=None, confidence_scores=None, threshold=0.9, categories_map=None):
         """
         Write the predicted scores to Genbank files.
 
@@ -362,10 +368,11 @@ class Predictor:
         :param predictions: List of predictions (optional)
         :param scores: List of scores (optional)
         :param confidence_scores: List of confidence scores (optional)
-        :param threshold: Confidence threshold for high-confidence predictions (default: 0.9)
-        :return: Number of genes annotated with confidence above threshold
+        :param threshold: Confidence threshold (default: 0.9)
+        :param categories_map: Dictionary mapping category numbers to human-readable labels
+        :return: None
         """
-        return self.write_predictions_to_genbank(gb_dict, out, predictions, scores, confidence_scores, threshold)
+        return self.write_predictions_to_genbank(gb_dict, out, predictions, scores, confidence_scores, threshold, categories_map)
 
     def read_model(self, model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate=0.0, attention='circular', positional_encoding_type='fourier', pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4, output_dim=None, num_layers=2): 
         """
@@ -611,7 +618,6 @@ def count_critical_points(arr):
     """
     return np.sum(np.diff(np.sign(np.diff(arr))) != 0)
  
-
 def build_confidence_dict(label, prediction, scores, bandwidth, categories):
     """
     Build a dictionary containing confidence information for each category.
@@ -639,6 +645,10 @@ def build_confidence_dict(label, prediction, scores, bandwidth, categories):
 
         # fetch the scores associated with these predictions
         this_scores = scores[prediction == cat]
+
+        # separate false positives and true positives
+        TP_scores = this_scores[this_labels == cat]
+        FP_scores = this_scores[this_labels != cat]
 
         print(f"Category {cat}: TP_scores shape: {TP_scores.shape}, FP_scores shape: {FP_scores.shape}")
 
@@ -674,7 +684,3 @@ def build_confidence_dict(label, prediction, scores, bandwidth, categories):
         }
 
     return confidence_dict
-
-
-
-

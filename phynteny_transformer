@@ -124,7 +124,6 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     logger.info(f'Repository homepage is https://github.com/susiegriggo/Phynteny_transformer/tree/main')
     logger.info(f"Written by {__author__}: {__email__}")
 
-
     # read in genbank file
     gb_dict = format_data.read_genbank_file(infile, phrog_integer_category) # what categories the genes belong to is missing 
     logger.info("Genbank file read")
@@ -149,11 +148,7 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     # Prepare data
     X, y = format_data.prepare_data(embeddings, gb_dict)
 
-    # Need to add a one-hot encoding of the categories to the X data
-    #X_one_hot = {key: torch.tensor(np.hstack((format_data.custom_one_hot_encode(y[key], num_classes=num_classes), X[key]))) for key in X.keys()}
-    #X_one_hot = {key: torch.tensor(np.hstack((format_data.custom_one_hot_encode(y[key], num_classes=num_classes), X[key]))) for key in X.keys()}
-    X_one_hot = X 
-
+    # Get the models 
     logger.info("Creating predictor object")
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     p = predictor.Predictor(device=device)
@@ -200,8 +195,8 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
 
     logger.info("Making predictions using batch inference")
     
-    # Use the new batch inference method
-    all_scores = p.predict_inference(X_one_hot, y, batch_size=batch_size)
+    # Use the batch inference method
+    all_scores = p.predict_inference(X, y, batch_size=batch_size)
     #logger.info(f'all_scores: {all_scores}')
     
     # Convert all_scores format to match what's expected by compute_confidence
@@ -217,24 +212,37 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     # Log structure information for debugging
     logger.debug(f'gb_dict keys: {gb_dict.keys()}')
         
-    logger.info(f"Writing predictions to genbank file using Predictor.write_genbank with confidence threshold {confidence_threshold}")
+    logger.info(f"Writing predictions to genbank file")
     genbank_file = out + "/phynteny.gbk"
-    
-    # Pass the confidence_threshold parameter to write_genbank
-    annotated_genes_count = p.write_genbank(
+
+    # Create the categories map from confidence_dict
+    categories_map = dict(zip(range(len(confidence_dict.keys())), confidence_dict.keys()))
+    logger.info(f"Using categories map: {categories_map}")
+
+    # Write predictions to GenBank file
+    p.write_genbank(
         gb_dict, 
         genbank_file, 
         predictions, 
         scores, 
         confidence_scores,
-        threshold=confidence_threshold  # Pass the threshold parameter
+        threshold=confidence_threshold,
+        categories_map=categories_map
     )
     
     logger.info("Generating table...")
     table_file = out + "/phynteny.tsv"
-    format_data.generate_table(table_file, gb_dict, category_dict, phrog_integer_category, threshold=confidence_threshold)
-    
-    logger.info(f"Number of genes annotated with confidence above {confidence_threshold*100}%: {annotated_genes_count}")
+    format_data.generate_table(
+        table_file, 
+        gb_dict, 
+        category_dict, 
+        phrog_integer_category,
+        predictions=predictions,
+        scores=scores,
+        confidence_scores=confidence_scores,
+        threshold=confidence_threshold,
+        categories_map=categories_map  # Pass the same categories_map used for GenBank
+    )
     
     logger.info("Predictions completed")
     end_time = time.time()
