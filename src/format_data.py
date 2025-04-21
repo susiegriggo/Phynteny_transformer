@@ -7,6 +7,7 @@ import pathlib
 from Bio import SeqIO
 from Bio.Seq import Seq
 from Bio.SeqRecord import SeqRecord
+from Bio.SeqFeature import SeqFeature, FeatureLocation
 from loguru import logger
 import re
 import shutil
@@ -183,16 +184,41 @@ def extract_features(this_phage, key):
     protein_id = [p[0] if p is not None else None for p in protein_id]
     phrogs = [this_CDS[i].qualifiers.get("phrog") for i in range(len(this_CDS))]
     phrogs = ["No_PHROG" if i is None else i[0] for i in phrogs]
+    
+    # Save all original feature qualifiers - critical for preserving information
+    all_qualifiers = []
+    for i in range(len(this_CDS)):
+        feature_qualifiers = {}
+        for key_qual, value_qual in this_CDS[i].qualifiers.items():
+            # Copy all qualifiers to preserve them for later
+            feature_qualifiers[key_qual] = value_qual
+        all_qualifiers.append(feature_qualifiers)
+
+    logger.debug(f"Extracted {len(all_qualifiers)} sets of qualifiers from {key}")
 
     # get sequence and replace ambiguous amino acid J with X
-    sequence = [
-        SeqRecord(
-            Seq(this_CDS[i].qualifiers.get("translation")[0].replace("J", "X").rstrip('*')),
+    sequence = []
+    for i in range(len(this_CDS)):
+        # Get the translation if it exists
+        translation = this_CDS[i].qualifiers.get("translation", [""])[0].replace("J", "X").rstrip('*')
+        
+        record = SeqRecord(
+            Seq(translation),
             id=key + "_" + str(i),
             description=key + "_" + str(i),
         )
-        for i in range(len(this_CDS))
-    ]
+        
+        # Important: Add original qualifiers to the record features
+        if translation:
+            # Create a CDS feature with all the original qualifiers
+            feature = SeqFeature(
+                FeatureLocation(0, len(translation)),
+                type="CDS",
+                qualifiers=all_qualifiers[i]
+            )
+            record.features = [feature]
+            
+        sequence.append(record)
 
     return {
         "length": phage_length,
@@ -201,6 +227,7 @@ def extract_features(this_phage, key):
         "sense": sense,
         "position": position,
         "sequence": sequence,
+        "all_qualifiers": all_qualifiers,  # Store all qualifiers explicitly
     }
 
 
@@ -472,7 +499,7 @@ def extract_embeddings(
         model = model.cuda()
         logger.info("USING CUDA :)")
     else:
-        logger.info("NO CUDA :()")
+        logger.info("CUDA NOT IN USE :(")
 
     # Read and batch the fasta file
     headers, sequences = read_fasta(fasta_file)
@@ -728,7 +755,7 @@ def read_genbank_file(infile, phrog_integer):
         click.echo("Error: no sequences found in genbank file")
         logger.critcal("No sequences found in genbank file. Nothing to annotate")
         sys.exit()
-    logger.info("Genbank file keys")
+
     return gb_dict
 
 def extract_features_and_embeddings(gb_dict, out, esm_model):
@@ -787,14 +814,14 @@ def custom_one_hot_encode(data, num_classes=9):
         else:
             one_hot_row = [0] * num_classes
             one_hot_row[value] = 1
-            one_hot_encoded.append(one_hot_row)
+        one_hot_encoded.append(one_hot_row)
     return np.array(one_hot_encoded)
 
 def save_genbank(gb_dict, genbank_file, predictions, scores, confidence_scores):
     """
     Save the genbank file with predictions.
 
-    :param gb_dict: Dictionary of genbank records or dictionary with record field
+    :param gb_dict: Dictionary of genbank records
     :param genbank_file: Path to save the genbank file
     :param predictions: List of predictions
     :param scores: List of scores
@@ -808,44 +835,72 @@ def save_genbank(gb_dict, genbank_file, predictions, scores, confidence_scores):
     with open(genbank_file, "w") as handle:
         for i, k in enumerate(gb_dict.keys()):
             # Handle different possible structures of gb_dict
-            if isinstance(gb_dict[k], dict) and "record" in gb_dict[k]:
-                # Extract the record from a dictionary structure
-                record = gb_dict[k]["record"]
+            if isinstance(gb_dict[k], dict) and "sequence" in gb_dict[k]:
+                # Extract the sequence list from a dictionary structure
+                sequence_records = gb_dict[k]["sequence"]
+                
+                # Process each SeqRecord in the sequence list
+                for j, record in enumerate(sequence_records):
+                    if j < len(scores[i]) and hasattr(record, 'features'):
+                        # Add annotations directly to the record
+                        if not hasattr(record, 'annotations'):
+                            record.annotations = {}
+                        
+                        # Add required molecule_type annotation for GenBank format
+                        if "molecule_type" not in record.annotations:
+                            record.annotations["molecule_type"] = "protein"
+                        
+                        record.annotations["phynteny"] = str(int(predictions[i][j]))
+                        record.annotations["phynteny_score"] = str(scores[i][j])
+                        record.annotations["phynteny_confidence"] = str(confidence_scores[i])
+                        
+                        # Count genes annotated with high confidence
+                        logger.info(f"Confidence score for {k}: {confidence_scores[i]}")
+                        if confidence_scores[i][j] > threshold:
+                            annotated += 1
+                        
+                        # Write record to handle
+                        SeqIO.write(record, handle, "genbank")
             elif hasattr(gb_dict[k], "features"):
                 # It's directly a SeqRecord object
                 record = gb_dict[k]
+                
+                # Add required molecule_type annotation for GenBank format
+                if not hasattr(record, 'annotations'):
+                    record.annotations = {}
+                if "molecule_type" not in record.annotations:
+                    record.annotations["molecule_type"] = "DNA"
+                
+                # Get CDS features
+                cds = [f for f in record.features if f.type == "CDS"]
+                
+                # Add annotations
+                for j, feature in enumerate(cds):
+                    if j < len(scores[i]):
+                        if "phynteny" not in feature.qualifiers:
+                            feature.qualifiers["phynteny"] = []
+                        feature.qualifiers["phynteny"] = str(int(predictions[i][j]))
+                        
+                        if "phynteny_score" not in feature.qualifiers:
+                            feature.qualifiers["phynteny_score"] = []
+                        feature.qualifiers["phynteny_score"] = str(scores[i][j])
+                        
+                        if "phynteny_confidence" not in feature.qualifiers:
+                            feature.qualifiers["phynteny_confidence"] = []
+                        feature.qualifiers["phynteny_confidence"] = str(confidence_scores[i])
+                        
+                        # Count genes annotated with high confidence
+                        if confidence_scores[i] > threshold:
+                            annotated += 1
+                
+                # Write record to handle
+                SeqIO.write(record, handle, "genbank")
             else:
                 logger.warning(f"Skipping {k}: Could not extract SeqRecord object")
-                continue
-
-            # Get CDS features
-            cds = [f for f in record.features if f.type == "CDS"]
-            
-            # Add annotations
-            for j, feature in enumerate(cds):
-                if j < len(scores[i]):
-                    if "phynteny" not in feature.qualifiers:
-                        feature.qualifiers["phynteny"] = []
-                    feature.qualifiers["phynteny"] = str(int(predictions[i][j]))
-                    
-                    if "phynteny_score" not in feature.qualifiers:
-                        feature.qualifiers["phynteny_score"] = []
-                    feature.qualifiers["phynteny_score"] = str(scores[i][j])
-                    
-                    if "phynteny_confidence" not in feature.qualifiers:
-                        feature.qualifiers["phynteny_confidence"] = []
-                    feature.qualifiers["phynteny_confidence"] = str(confidence_scores[i])
-                    
-                    # Count genes annotated with high confidence
-                    if confidence_scores[i] > threshold:
-                        annotated += 1
-                        
-            # Write record to handle
-            SeqIO.write(record, handle, "genbank")
     
     return annotated
 
-def generate_table(outfile, gb_dict, categories, phrog_integer):
+def generate_table(outfile, gb_dict, categories, phrog_integer, threshold=0.9):
     """
     Generate table summary of the annotations made.
 
@@ -853,12 +908,16 @@ def generate_table(outfile, gb_dict, categories, phrog_integer):
     :param gb_dict: Dictionary of Genbank records
     :param categories: Dictionary of categories
     :param phrog_integer: Dictionary mapping phrog annotations to integers
+    :param threshold: Confidence threshold for high-confidence predictions (default: 0.9)
+    :return: Number of genes annotated with high confidence
     """
     # get the list of phages to loop through
     keys = list(gb_dict.keys())
 
     # count the number of genes found
     found = 0
+
+    logger.info(f"Generating table with confidence threshold {threshold}")
 
     # convert annotations made to a text file
     with click.open_file(outfile, "wt") if outfile != ".tsv" else sys.stdout as f:
@@ -867,68 +926,103 @@ def generate_table(outfile, gb_dict, categories, phrog_integer):
         )
 
         for k in keys:
-            # obtain the sequence
-            seq = gb_dict.get(k).seq
-
-            # get the genes
-            cds = [f for f in gb_dict.get(k).features if f.type == "CDS"]
-
-            # extract the features for the cds
-            start = [c.location.start for c in cds]
-            end = [c.location.end for c in cds]
-            seq = [str(seq[start[i] : end[i]]) for i in range(len(cds))]
-
-            strand = [c.strand for c in cds]
-
-            # generate list of protein ids
-            ID = [
-                c.qualifiers.get("protein_id")[0]
-                if "protein_id" in c.qualifiers
-                else ""
-                for c in cds
-            ]
-
-            if len(ID) == 0:
-                ID = [
-                    c.qualifiers.get("ID")[0] if "ID" in c.qualifiers else ""
-                    for c in cds
-                ]
-
-            # lists to iterate through
-            phrog = []
-            phynteny_category = []
-            phynteny_score = []
-            phynteny_confidence = []
-
-            # extract details for genes
-            for c in cds:
-                if "phrog" in c.qualifiers.keys():
-                    phrog.append(c.qualifiers.get("phrog")[0])
+            logger.info(f"Processing genome {k} for table output")
+            
+            try:
+                # Check if gb_dict[k] is a dictionary with sequence field or a direct SeqRecord
+                if isinstance(gb_dict.get(k), dict) and 'sequence' in gb_dict.get(k):
+                    sequences = gb_dict.get(k)['sequence']
+                    
+                    # For each sequence in the genome
+                    for i, record in enumerate(sequences):
+                        # Try to get phrog information
+                        phrog_id = "No_PHROG"
+                        phynteny_category = "NA"
+                        phynteny_score = "NA"
+                        phynteny_confidence = "NA"
+                        
+                        # Get feature information if available
+                        if hasattr(record, 'features') and record.features:
+                            for feature in record.features:
+                                if feature.type == "CDS":
+                                    if 'phrog' in feature.qualifiers:
+                                        phrog_id = feature.qualifiers['phrog'][0]
+                                    
+                                    if 'phynteny_category' in feature.qualifiers:
+                                        phynteny_category = feature.qualifiers['phynteny_category'][0]
+                                    
+                                    if 'phynteny_score' in feature.qualifiers:
+                                        score_val = feature.qualifiers['phynteny_score'][0]
+                                        # Format as float with 4 decimal places if possible
+                                        try:
+                                            phynteny_score = f"{float(score_val):.4f}"
+                                        except ValueError:
+                                            phynteny_score = score_val
+                                    
+                                    if 'phynteny_confidence' in feature.qualifiers:
+                                        confidence_val = feature.qualifiers['phynteny_confidence'][0]
+                                        try:
+                                            conf_float = float(confidence_val)
+                                            phynteny_confidence = f"{conf_float:.4f}"
+                                            if conf_float > threshold:
+                                                found += 1
+                                        except ValueError:
+                                            phynteny_confidence = confidence_val
+                        
+                        # Use annotation if features are not available
+                        elif hasattr(record, 'annotations'):
+                            if 'phynteny_category' in record.annotations:
+                                phynteny_category = record.annotations['phynteny_category']
+                            
+                            if 'phynteny_score' in record.annotations:
+                                score_val = record.annotations['phynteny_score']
+                                try:
+                                    phynteny_score = f"{float(score_val):.4f}"
+                                except ValueError:
+                                    phynteny_score = score_val
+                            
+                            if 'phynteny_confidence' in record.annotations:
+                                confidence_val = record.annotations['phynteny_confidence']
+                                try:
+                                    conf_float = float(confidence_val)
+                                    phynteny_confidence = f"{conf_float:.4f}"
+                                    if conf_float > threshold:
+                                        found += 1
+                                except ValueError:
+                                    phynteny_confidence = confidence_val
+                        
+                        # Get position information
+                        start = 0
+                        end = len(record.seq) if hasattr(record, 'seq') else 0
+                        strand = "+"  # Default strand
+                        
+                        # Try to get strand information from gb_dict structure if available
+                        if 'sense' in gb_dict.get(k) and i < len(gb_dict.get(k)['sense']):
+                            strand = gb_dict.get(k)['sense'][i]
+                        
+                        # Try to get position information if available
+                        if 'position' in gb_dict.get(k) and i < len(gb_dict.get(k)['position']):
+                            start, end = gb_dict.get(k)['position'][i]
+                        
+                        # Try to convert phrog to category
+                        try:
+                            phrog_as_int = int(phrog_id) if phrog_id != "No_PHROG" else phrog_id
+                            phrog_category = categories.get(phrog_integer.get(phrog_as_int), "unknown function")
+                        except (ValueError, TypeError):
+                            phrog_category = "unknown function"
+                        
+                        # Write to table
+                        f.write(f"{record.id}\t{start}\t{end}\t{strand}\t{phrog_id}\t{phrog_category}\t"
+                                f"{phynteny_category}\t{phynteny_score}\t{phynteny_confidence}\t{k}\n")
+                
                 else:
-                    phrog.append("No_PHROG")
-
-                if "phynteny" in c.qualifiers.keys():
-                    phynteny_category.append(c.qualifiers.get("phynteny"))
-                    phynteny_score.append(c.qualifiers.get("phynteny_score"))
-                    phynteny_confidence.append(c.qualifiers.get("phynteny_confidence"))
-
-                    # update the number of genes found
-                    if float(c.qualifiers.get("phynteny_confidence")) > 0.9:
-                        found += 1
-
-                else:
-                    phynteny_category.append(np.nan)
-                    phynteny_score.append(np.nan)
-                    phynteny_confidence.append(np.nan)
-
-            phrog = [int(p) if p not in ["No_PHROG", "vfdb", "acr", "card", "defensefinder"] else p for p in phrog]
-            known_category = [categories.get(phrog_integer.get(p)) for p in phrog]
-            known_category = [
-                "unknown function" if c == None else c for c in known_category
-            ]
-
-            # write to table
-            for i in range(len(cds)):
-                f.write(
-                    f"{ID[i]}\t{start[i]}\t{end[i]}\t{strand[i]}\t{phrog[i]}\t{known_category[i]}\t{phynteny_category[i]}\t{phynteny_score[i]}\t{phynteny_confidence[i]}\t{k}\n"
-                )
+                    # Handle old-style direct SeqRecord objects (for backward compatibility)
+                    logger.warning(f"Genome {k} does not have expected structure. Skipping...")
+            
+            except Exception as e:
+                logger.error(f"Error processing genome {k} for table: {str(e)}")
+                import traceback
+                logger.error(traceback.format_exc())
+    
+    logger.info(f"Table generation complete. Found {found} high-confidence predictions (threshold={threshold}).")
+    return found

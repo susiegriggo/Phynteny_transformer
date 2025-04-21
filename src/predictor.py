@@ -7,11 +7,15 @@ from src import format_data
 import torch
 import torch.nn.functional as F
 import os
-import numpy  as np 
+import numpy as np
 from sklearn.neighbors import KernelDensity
-from Bio import SeqIO  # Add this import
-from loguru import logger  # Add this import
-from torch.utils.data import DataLoader  # Add this import at the top of the file
+from Bio import SeqIO
+from Bio.Seq import Seq
+from Bio.SeqRecord import SeqRecord
+from Bio.SeqFeature import SeqFeature, FeatureLocation
+from loguru import logger
+from torch.utils.data import DataLoader
+import traceback
 
 class Predictor: 
 
@@ -159,7 +163,6 @@ class Predictor:
                     
             except Exception as e:
                 logger.error(f"Error processing batch: {e}")
-                import traceback
                 logger.error(traceback.format_exc())
                 continue
         
@@ -170,17 +173,199 @@ class Predictor:
         self.scores = all_scores
         return all_scores
 
-    def write_genbank(self,  gb_dict, out):
+    def write_predictions_to_genbank(self, gb_dict, output_file, predictions, scores, confidence_scores, threshold=0.9):
         """
-        Write the predicted scores to a Genbank file.
+        Write the predictions to a GenBank file, creating one record per genome with sequences as features.
+        
+        :param gb_dict: Dictionary containing genome information with nested sequence records
+        :param output_file: Path to the output GenBank file
+        :param predictions: List of predictions for each sequence
+        :param scores: List of scores for each prediction
+        :param confidence_scores: List of confidence scores for each prediction
+        :param threshold: Confidence threshold for high-confidence predictions (default: 0.9)
+        :return: Number of genes annotated with high confidence
+        """
+        high_confidence_count = 0
+        
+        logger.info(f"Writing predictions to GenBank file: {output_file} with confidence threshold: {threshold}")
+        
+        try:
+            with open(output_file, "w") as handle:
+                # For each genome in the gb_dict
+                for genome_idx, (genome_id, genome_data) in enumerate(gb_dict.items()):
+                    logger.info(f"Processing genome: {genome_id}")
+                    
+                    if 'sequence' not in genome_data:
+                        logger.warning(f"No sequence field found for genome {genome_id}")
+                        continue
+                    
+                    sequences = genome_data.get('sequence', [])
+                    
+                    if not sequences:
+                        logger.warning(f"No sequences found for genome {genome_id}")
+                        continue
+                    
+                    # Create a new record for this genome
+                    # Use the first sequence record to extract metadata if available
+                    sample_record = sequences[0]
+                    
+                    # Get length information if available
+                    genome_length = genome_data.get('length', 0)
+                    if genome_length == 0:
+                        # Calculate total length from positions if available
+                        if 'position' in genome_data:
+                            positions = genome_data['position']
+                            if positions:
+                                # Find the furthest endpoint
+                                genome_length = max([pos[1] for pos in positions])
+                    
+                    # Create a genomic sequence (placeholder if actual sequence not available)
+                    genome_seq = Seq('N' * genome_length) if genome_length > 0 else Seq('')
+                    
+                    # Create the genome record
+                    genome_record = SeqRecord(
+                        seq=genome_seq,
+                        id=genome_id,
+                        name=genome_id,
+                        description=f"{genome_id} - Phynteny annotated genome"
+                    )
+                    
+                    # Set required molecule_type
+                    genome_record.annotations["molecule_type"] = "DNA"
+                    
+                    # Copy any other useful annotations from the first record if available
+                    if sequences and hasattr(sequences[0], 'annotations'):
+                        # List of annotations to preserve at the genome level
+                        preserve_annotations = ['taxonomy', 'organism', 'source', 'date', 'accessions']
+                        
+                        for ann in preserve_annotations:
+                            if ann in sequences[0].annotations:
+                                genome_record.annotations[ann] = sequences[0].annotations[ann]
+                    
+                    # Process each sequence/gene in this genome
+                    for seq_idx, record in enumerate(sequences):
+                        try:
+                            # Get prediction and confidence for this sequence
+                            prediction = None
+                            max_score = None
+                            conf = None
+                            
+                            if genome_idx < len(predictions) and seq_idx < len(predictions[genome_idx]):
+                                prediction = int(predictions[genome_idx][seq_idx])
+                                
+                                # Extract max score (at predicted category)
+                                if isinstance(scores, list) and genome_idx < len(scores):
+                                    score_array = scores[genome_idx][seq_idx]
+                                    if isinstance(score_array, np.ndarray) and len(score_array) > prediction:
+                                        max_score = float(score_array[prediction])
+                                    else:
+                                        max_score = score_array
+                                
+                                # Get confidence score
+                                if isinstance(confidence_scores, list) and genome_idx < len(confidence_scores):
+                                    if isinstance(confidence_scores[genome_idx], np.ndarray):
+                                        if seq_idx < len(confidence_scores[genome_idx]):
+                                            conf = confidence_scores[genome_idx][seq_idx]
+                                    else:
+                                        conf = confidence_scores[genome_idx]
+                                    
+                                    # Count high confidence predictions
+                                    if conf > threshold:
+                                        high_confidence_count += 1
+                            
+                            # Get position information
+                            start = 0
+                            end = len(record.seq)
+                            if 'position' in genome_data and seq_idx < len(genome_data['position']):
+                                start, end = genome_data['position'][seq_idx]
+                            
+                            # Get strand information
+                            strand = 1  # Default to forward strand
+                            if 'sense' in genome_data and seq_idx < len(genome_data['sense']):
+                                strand = 1 if genome_data['sense'][seq_idx] == '+' else -1
+                            
+                            # Start with an empty set of qualifiers
+                            qualifiers = {}
+                            
+                            logger.info(f'record {record}')
+                            # First, preserve ALL qualifiers from the original record
+                            if hasattr(record, 'features') and record.features:
+                                logger.info(f'record.features {record.features}')
+                                for feature in record.features:
+                                    # CDS is the typical feature we want to preserve
+                                    logger.info(f'feature.qualifiers {feature.qualifiers}')
+                                    if feature.type == "CDS":
+                                        # Deep copy ALL qualifiers from the original feature
+                                        for key, value in feature.qualifiers.items():
+                                            qualifiers[key] = value[:] if isinstance(value, list) else [value]
+                                        
+                                        # Skip the rest once we found a CDS feature
+                                        break
+                            
+                            # Preserve original sequence's ID and description as translation and product
+                            # if not already present in qualifiers
+                            if 'translation' not in qualifiers:
+                                qualifiers['translation'] = [str(record.seq)]
+                            
+                            if 'product' not in qualifiers and hasattr(record, 'description'):
+                                if record.description and record.description != record.id:
+                                    qualifiers['product'] = [record.description]
+                                else:
+                                    qualifiers['product'] = [f"protein_{seq_idx}"]
+                            elif 'product' not in qualifiers:
+                                qualifiers['product'] = [f"protein_{seq_idx}"]
+                            
+                            # Add protein_id if available and not already present
+                            if 'protein_id' not in qualifiers and hasattr(record, 'id'):
+                                qualifiers['protein_id'] = [record.id]
+                            
+                            # Now add our prediction qualifiers, potentially overwriting any existing values
+                            if prediction is not None:
+                                qualifiers["phynteny_category"] = [str(prediction)]
+                            if max_score is not None:
+                                qualifiers["phynteny_score"] = [f"{max_score:.4f}"]
+                            if conf is not None:
+                                qualifiers["phynteny_confidence"] = [f"{conf:.4f}"]
+                            
+                            # Create the feature with ALL original qualifiers plus our additions
+                            feature = SeqFeature(
+                                FeatureLocation(start, end, strand=strand),
+                                type="CDS",
+                                qualifiers=qualifiers
+                            )
+                            
+                            genome_record.features.append(feature)
+                            
+                        except Exception as e:
+                            logger.error(f"Error processing sequence {seq_idx} in genome {genome_id}: {str(e)}")
+                            logger.error(traceback.format_exc())
+                    
+                    # Write the complete genome record with all features
+                    SeqIO.write(genome_record, handle, "genbank")
+                
+                logger.info(f"Successfully wrote predictions to {output_file}")
+                logger.info(f"Found {high_confidence_count} high-confidence predictions (>= {threshold})")
+                    
+            return high_confidence_count
+            
+        except Exception as e:
+            logger.error(f"Error writing to GenBank file {output_file}: {str(e)}")
+            logger.error(traceback.format_exc())
+            return 0
+
+    def write_genbank(self, gb_dict, out, predictions=None, scores=None, confidence_scores=None, threshold=0.9):
+        """
+        Write the predicted scores to Genbank files.
 
         :param gb_dict: Dictionary of Genbank records
-        :param out: Output directory
+        :param out: Output directory or output file path
+        :param predictions: List of predictions (optional)
+        :param scores: List of scores (optional)
+        :param confidence_scores: List of confidence scores (optional)
+        :param threshold: Confidence threshold for high-confidence predictions (default: 0.9)
+        :return: Number of genes annotated with confidence above threshold
         """
-        for key in self.scores.keys():
-            record = gb_dict[key]
-            record.annotations["phynteny score"] = self.scores[key]
-            SeqIO.write(record, os.path.join(out, key + ".gb"), "genbank")
+        return self.write_predictions_to_genbank(gb_dict, out, predictions, scores, confidence_scores, threshold)
 
     def read_model(self, model_path, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate=0.0, attention='circular', positional_encoding_type='fourier', pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4, output_dim=None, num_layers=2): 
         """
@@ -332,50 +517,86 @@ class Predictor:
 
     def compute_confidence(self, scores, confidence_dict, categories):
         """
-        Compute the confidence of a Phynteny prediction.
-
-        :param scores: List of Phynteny scores
+        Compute confidence of predictions in a highly efficient vectorized manner.
+        Processes all genomes simultaneously for each category to minimize redundant operations.
+        
+        :param scores: List of score arrays for the genomes
         :param confidence_dict: Dictionary containing confidence information
         :param categories: Dictionary of categories
-        :return: Tuple of predictions and confidence scores
+        :return: Tuple of predictions and confidence scores lists
         """
-        # get the prediction for each score
-        score_predictions = np.array([np.argmax(score) for idx, score in enumerate(scores)])
-
-        # make an array to store the confidence of each prediction
-        confidence_out = np.zeros(len(scores))
-        predictions_out = np.zeros(len(scores))
-
-        # loop through each of potential categories
-        for i in range(0, 9):
-            # get the scores relevant to the current category
-            cat_scores = np.array(scores)[score_predictions == i]
-
-            if len(cat_scores) > 0:
-                # compute the kernel density estimates
-                e_TP = np.exp(
-                    confidence_dict.get(categories.get(i))
-                    .get("kde_TP")
-                    .score_samples(cat_scores[:, i].reshape(-1, 1))
-                )
-                e_FP = np.exp(
-                    confidence_dict.get(categories.get(i))
-                    .get("kde_FP")
-                    .score_samples(cat_scores[:, i].reshape(-1, 1))
-                )
-
-                # fetch the number of TP and FP
-                num_TP = confidence_dict.get(categories.get(i)).get("num_TP")
-                num_FP = confidence_dict.get(categories.get(i)).get("num_FP")
-
-                # compute the confidence scores
-                conf_kde = (e_TP * num_TP) / (e_TP * num_TP + e_FP * num_FP)
-
-                # save the scores to the output vector
-                confidence_out[score_predictions == i] = conf_kde
-                predictions_out[score_predictions == i] = [i for k in range(len(conf_kde))]
-
-        return predictions_out, confidence_out
+        # Convert to list if a single score array was provided
+        if isinstance(scores, np.ndarray) and scores.ndim > 1:
+            scores = [scores]
+        
+        num_genomes = len(scores)
+        logger.info(f'Processing confidence for {num_genomes} genomes')
+        
+        # Create the category mapping once
+        categories_map = dict(zip(range(len(confidence_dict.keys())), confidence_dict.keys()))
+        
+        # Calculate predictions for all genomes first
+        all_predictions = []
+        all_confidence = []
+        
+        # Pre-allocate arrays for results
+        for i, genome_scores in enumerate(scores):
+            # Get predictions for this genome
+            predictions = np.argmax(genome_scores, axis=1)
+            all_predictions.append(np.zeros_like(predictions, dtype=float))
+            all_confidence.append(np.zeros(len(predictions), dtype=float))
+        
+        # Process each category once for all genomes
+        for category in range(9):  # Assuming 9 categories (0-8)
+            category_key = categories_map.get(category)
+            if category_key not in confidence_dict:
+                logger.warning(f"Category {category} (key={category_key}) not found in confidence dict")
+                continue
+            
+            # Get the model for this category
+            category_model = confidence_dict.get(category_key)
+            
+            # Skip if missing key components
+            required_keys = ["kde_TP", "kde_FP", "num_TP", "num_FP"]
+            if not all(key in category_model for key in required_keys):
+                logger.warning(f"Missing required keys in confidence model for category {category}")
+                continue
+            
+            # Process this category for all genomes at once
+            for g, genome_scores in enumerate(scores):
+                # Find positions where this category is predicted
+                predictions = np.argmax(genome_scores, axis=1)
+                category_mask = (predictions == category)
+                
+                # Skip if no predictions for this category in this genome
+                if not np.any(category_mask):
+                    continue
+                    
+                # Get relevant scores for this category
+                category_scores = genome_scores[category_mask, category].reshape(-1, 1)
+                
+                try:
+                    # Calculate confidence values for this category
+                    e_TP = np.exp(category_model["kde_TP"].score_samples(category_scores))
+                    e_FP = np.exp(category_model["kde_FP"].score_samples(category_scores))
+                    
+                    num_TP = category_model["num_TP"]
+                    num_FP = category_model["num_FP"]
+                    
+                    # Calculate confidence scores
+                    conf = (e_TP * num_TP) / (e_TP * num_TP + e_FP * num_FP)
+                    
+                    # Store results
+                    all_predictions[g][category_mask] = category
+                    all_confidence[g][category_mask] = conf
+                except Exception as e:
+                    logger.error(f"Error calculating confidence for category {category}: {str(e)}")
+                    # Set defaults
+                    all_predictions[g][category_mask] = category
+                    all_confidence[g][category_mask] = 0.5  # Conservative default
+        
+        logger.info(f"Completed confidence calculation for {num_genomes} genomes")
+        return all_predictions, all_confidence
 
 
 ########
@@ -418,10 +639,6 @@ def build_confidence_dict(label, prediction, scores, bandwidth, categories):
 
         # fetch the scores associated with these predictions
         this_scores = scores[prediction == cat]
-
-        # separate false positives and true positives
-        TP_scores = this_scores[this_labels == cat]
-        FP_scores = this_scores[this_labels != cat]
 
         print(f"Category {cat}: TP_scores shape: {TP_scores.shape}, FP_scores shape: {FP_scores.shape}")
 

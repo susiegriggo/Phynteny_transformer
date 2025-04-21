@@ -89,6 +89,7 @@ __status__ = "development"
 @click.option('--num-layers', default=2, help='Number of transformer layers.')
 @click.option('--dropout', default=0.1, help='Dropout rate for the model.')
 @click.option('--batch-size', default=128, help='Batch size for processing data.')
+@click.option('--confidence-threshold', default=0.9, type=float, help='Confidence threshold for high-confidence predictions (0.0-1.0).')
 
 @click.version_option(version=__version__)
 
@@ -97,7 +98,7 @@ __status__ = "development"
 def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, num_heads, 
          hidden_dim, lstm_hidden_dim, no_lstm, max_len, protein_dropout_rate, attention, 
          positional_encoding_type, pre_norm, progressive_dropout, initial_dropout_rate, 
-         final_dropout_rate, output_dim, num_layers, dropout, batch_size):
+         final_dropout_rate, output_dim, num_layers, dropout, batch_size, confidence_threshold):
 
     start_time = time.time()
     # instantiate output directory 
@@ -201,83 +202,39 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     
     # Use the new batch inference method
     all_scores = p.predict_inference(X_one_hot, y, batch_size=batch_size)
+    #logger.info(f'all_scores: {all_scores}')
     
     # Convert all_scores format to match what's expected by compute_confidence
     scores = [all_scores[key] for key in all_scores.keys()]
     
     logger.info(f"Number of valid scores collected: {len(scores)}")
     logger.info("Calculating confidence scores")
+    logger.info(f'confidence_dict: {confidence_dict}')
     predictions, confidence_scores = p.compute_confidence(scores, confidence_dict, phrog_integer_category)
     logger.info(f'Confidence scores {confidence_scores}')
     logger.info("Creating SeqRecord objects for GenBank output")
 
-    
-    seq_records = {}
-    for key in gb_dict:
-        try:
-            # If gb_dict already contains SeqRecord objects with features
-            if hasattr(gb_dict[key], 'features'):
-                seq_records[key] = gb_dict[key]
-            # If gb_dict contains a custom dictionary structure from fetch_data
-            elif isinstance(gb_dict[key], dict):
-                # Get sequences
-                sequences = gb_dict[key].get('sequence', [])
-                
-                # Create a parent sequence if available
-                if sequences:
-                    # Extract an overall sequence if available, or concatenate individual sequences
-                    full_seq = ""
-                    for seq_record in sequences:
-                        if hasattr(seq_record, 'seq'):
-                            full_seq += str(seq_record.seq)
-                    
-                    # Create a new SeqRecord
-                    record = SeqRecord.SeqRecord(
-                        Seq.Seq(full_seq),
-                        id=key,
-                        name=key,
-                        description=f"Created from Phynteny data for {key}"
-                    )
-                    
-                    # Create CDS features from position information
-                    features = []
-                    positions = gb_dict[key].get('position', [])
-                    senses = gb_dict[key].get('sense', [])
-                    phrogs = gb_dict[key].get('phrogs', [])
-                    
-                    for i in range(len(positions)):
-                        pos = positions[i]
-                        strand = 1 if senses[i] == '+' else -1
-                        
-                        feature = SeqFeature(
-                            FeatureLocation(pos[0], pos[1], strand=strand),  # Add strand to FeatureLocation, not SeqFeature
-                            type="CDS",
-                            qualifiers={"phrog": [phrogs[i]] if i < len(phrogs) else []}
-                        )
-                        features.append(feature)
-                    
-                    record.features = features
-                    seq_records[key] = record
-                    
-            else:
-                logger.warning(f"Could not process {key}: Unknown data structure")
-                
-        except Exception as e:
-            logger.error(f"Error creating SeqRecord for {key}: {e}")
-            
-    if not seq_records:
-        logger.error("Could not create any SeqRecord objects for output")
-        sys.exit(1)
+    # Log structure information for debugging
+    logger.debug(f'gb_dict keys: {gb_dict.keys()}')
         
-    logger.info("Writing predictions to genbank file")
+    logger.info(f"Writing predictions to genbank file using Predictor.write_genbank with confidence threshold {confidence_threshold}")
     genbank_file = out + "/phynteny.gbk"
-    annotated_genes_count = format_data.save_genbank(seq_records, genbank_file, predictions, scores, confidence_scores)
+    
+    # Pass the confidence_threshold parameter to write_genbank
+    annotated_genes_count = p.write_genbank(
+        gb_dict, 
+        genbank_file, 
+        predictions, 
+        scores, 
+        confidence_scores,
+        threshold=confidence_threshold  # Pass the threshold parameter
+    )
     
     logger.info("Generating table...")
     table_file = out + "/phynteny.tsv"
-    format_data.generate_table(table_file, gb_dict, category_dict, phrog_integer_category)
+    format_data.generate_table(table_file, gb_dict, category_dict, phrog_integer_category, threshold=confidence_threshold)
     
-    logger.info(f"Number of genes annotated with confidence above 90%: {annotated_genes_count}")
+    logger.info(f"Number of genes annotated with confidence above {confidence_threshold*100}%: {annotated_genes_count}")
     
     logger.info("Predictions completed")
     end_time = time.time()
