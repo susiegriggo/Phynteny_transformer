@@ -15,16 +15,15 @@ import shutil
 @click.option('--pharokka_x_path', required=True, type=click.Path(exists=True), help='Path to pharokka X data.')
 @click.option('--pharokka_y_path', required=True, type=click.Path(exists=True), help='Path to pharokka y data.')
 @click.option('--phold_y_path', required=True, type=click.Path(exists=True), help='Path to phold y data.')
-@click.option('--pharokka_only' , is_flag=True, help='Use only pharokka data for validation')
 @click.option('--model_dir', required=True, type=click.Path(exists=True), help='Directory containing the models.')
 @click.option('--output_dir', required=True, type=click.Path(), help='Directory to save the ROC data.')
 @click.option('--force', is_flag=True, help='Force overwrite the output directory if it exists.')
 # Add model parameter options
-@click.option('--mask_portion', default=0.15, help='Portion of the sequence to mask. Only use in pharokka_only mode')
 @click.option('--input_dim', default=1280, help='Input dimension for the model.')
 @click.option('--hidden_dim', default=256, help='Hidden dimension for the model.')
 @click.option('--lstm_hidden_dim', default=512, help='LSTM hidden dimension for the model.')
 @click.option('--num_heads', default=4, help='Number of attention heads for the model.')
+@click.option('--num_layers', default=2, help='Number of transformer layers for the model.')
 @click.option('--dropout', default=0.1, help='Dropout rate for the model.')
 @click.option('--use_lstm/--no_lstm', default=True, help='Whether to use LSTM in the model.')
 @click.option('--positional_encoding_type', type=click.Choice(['fourier', 'sinusoidal']), default='fourier', help='Type of positional encoding to use.')
@@ -35,10 +34,10 @@ import shutil
 @click.option('--final_dropout_rate', default=0.4, help='Final dropout rate when using progressive dropout.')
 @click.option('--max_len', default=1500, help='Maximum sequence length.')
 @click.option('--output_dim', default=None, type=int, help='Output dimension for the model. Defaults to num_classes if not specified.')
-def main(pharokka_x_path, pharokka_y_path, phold_y_path, pharokka_only, model_dir, output_dir, force, 
-         mask_portion, input_dim, hidden_dim, lstm_hidden_dim, num_heads, dropout, use_lstm,
+def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, force, 
+         input_dim, hidden_dim, lstm_hidden_dim, num_heads, dropout, use_lstm,
          positional_encoding_type, pre_norm, protein_dropout_rate, progressive_dropout,
-         initial_dropout_rate, final_dropout_rate, max_len, output_dim):
+         initial_dropout_rate, final_dropout_rate, max_len, output_dim, num_layers):
     # Create output directory if it does not exist, or clear it if force is specified
     if os.path.exists(output_dir):
         if force:
@@ -75,7 +74,7 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, pharokka_only, model_di
 
     # Log model parameters
     logger.info(f"Model parameters: input_dim={input_dim}, hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, "
-                f"num_heads={num_heads}, dropout={dropout}, use_lstm={use_lstm}, positional_encoding_type={positional_encoding_type}, "
+                f"num_heads={num_heads}, num_layers={num_layers}, dropout={dropout}, use_lstm={use_lstm}, positional_encoding_type={positional_encoding_type}, "
                 f"pre_norm={pre_norm}, protein_dropout_rate={protein_dropout_rate}, progressive_dropout={progressive_dropout}, "
                 f"initial_dropout_rate={initial_dropout_rate}, final_dropout_rate={final_dropout_rate}, max_len={max_len}, "
                 f"output_dim={output_dim or num_classes}")
@@ -98,26 +97,15 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, pharokka_only, model_di
         val_labels = [v for v in val_labels if phold_y.get(v) != None]
         
         # Get embeddings and categories
-        if pharokka_only:
-            logger.info("Using only pharokka data for validation")
-            validation_embeddings = [pharokka_X.get(v) for v in val_labels]
-            validation_categories = [pharokka_y.get(v) for v in val_labels]
+        validation_embeddings = [pharokka_X.get(v) for v in val_labels]
+        validation_categories = [pharokka_y.get(v) for v in val_labels]
+        validation_phold = [phold_y.get(v) for v in val_labels]
+        logger.info(f'Number of validation samples: {len(validation_phold)}')
 
-            validation_dataset = model_onehot.EmbeddingDataset(validation_embeddings, validation_categories, mask_portion=mask_portion, labels=val_labels)
-            validation_dataset.set_training()
-            validation_loader = DataLoader(validation_dataset, batch_size=64, collate_fn=model_onehot.collate_fn)
-    
-        else: 
-            logger.info("Using phold data for validation")
-            validation_embeddings = [pharokka_X.get(v) for v in val_labels]
-            validation_categories = [pharokka_y.get(v) for v in val_labels]
-            validation_phold = [phold_y.get(v) for v in val_labels]
-            logger.info(f'Number of validation samples: {len(validation_phold)}')
-
-            # Create validation dataset
-            validation_dataset = model_onehot.EmbeddingDataset(validation_embeddings, validation_categories, mask_portion=0, labels=val_labels)
-            validation_dataset.set_validation(validation_phold)
-            validation_loader = DataLoader(validation_dataset, batch_size=64, collate_fn=model_onehot.collate_fn)
+        # Create validation dataset
+        validation_dataset = model_onehot.EmbeddingDataset(validation_embeddings, validation_categories, mask_portion=0, labels=val_labels)
+        validation_dataset.set_validation(validation_phold)
+        validation_loader = DataLoader(validation_dataset, batch_size=64, collate_fn=model_onehot.collate_fn)
 
         # Select positional encoding function
         positional_encoding_func = model_onehot.fourier_positional_encoding if positional_encoding_type == 'fourier' else model_onehot.sinusoidal_positional_encoding
@@ -127,6 +115,7 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, pharokka_only, model_di
             input_dim=input_dim,
             num_classes=num_classes,
             num_heads=num_heads,
+            num_layers=num_layers,
             hidden_dim=hidden_dim,
             lstm_hidden_dim=lstm_hidden_dim,
             dropout=dropout,
@@ -151,7 +140,8 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, pharokka_only, model_di
             m.protein_feature_dropout(dummy_input, dummy_idx)
             
         # Load state dict with strict=False to handle parameter differences
-        state_dict = torch.load(f'{model_dir}/fold_{k+1}transformer.model', map_location=torch.device(device))
+        #state_dict = torch.load(f'{model_dir}/fold_{k+1}/transformer_state_dict.pth', map_location=torch.device(device))
+        state_dict = torch.load(f'{model_dir}/fold_{k+1}transformer.model', map_location=device)
         m.load_state_dict(state_dict, strict=False)
         m.to(device)
         m.eval()
