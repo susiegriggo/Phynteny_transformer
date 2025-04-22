@@ -89,11 +89,9 @@ __status__ = "development"
 @click.option('--num-layers', default=2, help='Number of transformer layers.')
 @click.option('--dropout', default=0.1, help='Dropout rate for the model.')
 @click.option('--batch-size', default=128, help='Batch size for processing data.')
-@click.option('--confidence-threshold', default=0.9, type=float, help='Confidence threshold for high-confidence predictions (0.0-1.0).')
+@click.option('--confidence-threshold', default=0.8, type=float, help='Confidence threshold for high-confidence predictions (0.0-1.0).')
 
 @click.version_option(version=__version__)
-
-
 
 def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, num_heads, 
          hidden_dim, lstm_hidden_dim, no_lstm, max_len, protein_dropout_rate, attention, 
@@ -204,20 +202,14 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     
     logger.info(f"Number of valid scores collected: {len(scores)}")
     logger.info("Calculating confidence scores")
-    logger.info(f'confidence_dict: {confidence_dict}')
     predictions, confidence_scores = p.compute_confidence(scores, confidence_dict, phrog_integer_category)
-    logger.info(f'Confidence scores {confidence_scores}')
     logger.info("Creating SeqRecord objects for GenBank output")
-
-    # Log structure information for debugging
-    logger.debug(f'gb_dict keys: {gb_dict.keys()}')
         
     logger.info(f"Writing predictions to genbank file")
     genbank_file = out + "/phynteny.gbk"
 
     # Create the categories map from confidence_dict
     categories_map = dict(zip(range(len(confidence_dict.keys())), confidence_dict.keys()))
-    logger.info(f"Using categories map: {categories_map}")
 
     # Write predictions to GenBank file
     p.write_genbank(
@@ -240,8 +232,7 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
         predictions=predictions,
         scores=scores,
         confidence_scores=confidence_scores,
-        threshold=confidence_threshold,
-        categories_map=categories_map  # Pass the same categories_map used for GenBank
+        categories_map=categories_map  # Don't apply threshold for table generation
     )
     
     logger.info("Predictions completed")

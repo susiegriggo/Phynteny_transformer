@@ -219,8 +219,14 @@ class Predictor:
                                 # Find the furthest endpoint
                                 genome_length = max([pos[1] for pos in positions])
                     
-                    # Create a genomic sequence (placeholder if actual sequence not available)
-                    genome_seq = Seq('N' * genome_length) if genome_length > 0 else Seq('')
+                    # Use the original genome sequence if available, otherwise use placeholder
+                    genome_seq = None
+                    if 'original_sequence' in genome_data and genome_data['original_sequence']:
+                        genome_seq = Seq(genome_data['original_sequence'])
+                    else:
+                        # Fallback to placeholder sequence
+                        genome_seq = Seq('N' * genome_length) if genome_length > 0 else Seq('')
+                        logger.warning(f"Using placeholder sequence for genome {genome_id} - original sequence not found")
                     
                     # Create the genome record
                     genome_record = SeqRecord(
@@ -318,7 +324,12 @@ class Predictor:
                                 function_value = qualifiers['function'][0].lower() if isinstance(qualifiers['function'], list) else qualifiers['function'].lower()
                                 if function_value != "unknown function" and function_value != "unknown":
                                     should_add_predictions = False
-                                    logger.debug(f"Skipping Phynteny annotation for {record.id}: Known function: {function_value}")
+                                    #logger.debug(f"Skipping Phynteny annotation for {record.id}: Known function: {function_value}")
+
+                            # Only add predictions if the confidence score is above the threshold
+                            if conf is not None and conf < threshold:
+                                should_add_predictions = False
+                                #logger.debug(f"Skipping Phynteny annotation for {record.id}: Low confidence score: {conf:.4f}")
                             
                             # Add our prediction qualifiers only for unknown function
                             if should_add_predictions:
