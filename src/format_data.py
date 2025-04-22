@@ -221,6 +221,9 @@ def extract_features(this_phage, key):
             
         sequence.append(record)
 
+    # Store the original genome sequence
+    original_sequence = str(this_phage.seq)
+
     return {
         "length": phage_length,
         "phrogs": phrogs,
@@ -229,6 +232,7 @@ def extract_features(this_phage, key):
         "position": position,
         "sequence": sequence,
         "all_qualifiers": all_qualifiers,  # Store all qualifiers explicitly
+        "original_sequence": original_sequence,  # Store the original genome sequence
     }
 
 
@@ -578,12 +582,7 @@ def prepare_data(
     y = list()
     removed = []
 
-    #logger.info(f'ESm vectors: {esm_vectors}')
-    #logger.info(f'Esm vector keys: {esm_vectors.keys()}')
-
     for g in genomes:
-
-        #logger.info(f"Processing genome {g}")   
 
         # get the genes in this genome
         this_genes = genome_details.get(g)
@@ -749,7 +748,7 @@ def read_genbank_file(infile, phrog_integer):
     :return: genbank dictionary
     """
     logger.info("Reading genbank file!")
-    #gb_dict = get_genbank(infile)
+
     logger.info("Infile: " + infile)
     gb_dict = fetch_data(infile, 0, phrog_integer)
     if not gb_dict:
@@ -957,9 +956,11 @@ def generate_table(outfile, gb_dict, categories, phrog_integer, predictions=None
                             strand = gb_dict.get(k)['sense'][seq_idx]
                         
                         # Get phrog category
+                        phrog_as_int = int(phrog_id) if phrog_id != "No_PHROG" else phrog_id
+                        phrog_category = categories.get(phrog_integer.get(phrog_as_int), "unknown function")
                         try:
                             phrog_as_int = int(phrog_id) if phrog_id != "No_PHROG" else phrog_id
-                            phrog_category = categories.get(phrog_integer.get(phrog_as_int), "unknown function")
+                            phrog_category = categories.get(phrog_as_int, "unknown function")
                         except (ValueError, TypeError):
                             phrog_category = "unknown function"
                         
