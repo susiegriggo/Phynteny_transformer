@@ -19,6 +19,7 @@ import sys
 import click  # Add this import for click.open_file
 from transformers import EsmModel, EsmTokenizer
 from transformers import EsmForMaskedLM
+import pkg_resources
 
 
 def get_dict(dict_path):
@@ -195,7 +196,7 @@ def extract_features(this_phage, key):
             feature_qualifiers[key_qual] = value_qual
         all_qualifiers.append(feature_qualifiers)
 
-    logger.debug(f"Extracted {len(all_qualifiers)} sets of qualifiers from {key}")
+    logger.debug(f"Extracted {len(all_qualifiers)} genes from {key}")
 
     # get sequence and replace ambiguous amino acid J with X
     sequence = []
@@ -521,7 +522,7 @@ def extract_embeddings(
     # Start processing batches
     with torch.no_grad():
         for batch_idx, batch in enumerate(batches):
-            logger.info(f"Processing batch {batch_idx + 1} of {len(batches)}")
+            logger.debug(f"Processing batch {batch_idx + 1} of {len(batches)}")
 
             # Tokenize the batch
             inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=max_length)
@@ -700,10 +701,31 @@ def read_annotations_information():
 
     :return: tuple of category_dict and phrog_integer_category
     """
-    phrogs = pd.read_csv(
-        "src/phrog_annotation_info/phrog_annot_v4.tsv",
-        sep="\t",
-    )
+    # Try to find the phrog_annot_v4.tsv file using pkg_resources
+    try:
+        phrog_file_path = pkg_resources.resource_filename('src', 'phrog_annotation_info/phrog_annot_v4.tsv')
+        if not os.path.exists(phrog_file_path):
+            # Fallback to alternate locations
+            alternate_paths = [
+                pkg_resources.resource_filename('phynteny_utils', 'phrog_annotation_info/phrog_annot_v4.tsv'),
+                os.path.join(os.path.dirname(__file__), 'phrog_annotation_info/phrog_annot_v4.tsv'),
+                "src/phrog_annotation_info/phrog_annot_v4.tsv"  # Original path as last resort
+            ]
+            
+            for path in alternate_paths:
+                if os.path.exists(path):
+                    phrog_file_path = path
+                    break
+        
+        logger.info(f"Using phrog annotation file: {phrog_file_path}")
+        phrogs = pd.read_csv(phrog_file_path, sep="\t")
+        
+    except (pkg_resources.DistributionNotFound, FileNotFoundError) as e:
+        logger.error(f"Error finding phrog_annot_v4.tsv: {e}")
+        # Fallback to original path
+        logger.warning("Falling back to hardcoded path")
+        phrogs = pd.read_csv("src/phrog_annotation_info/phrog_annot_v4.tsv", sep="\t")
+    
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
 
     # manually add additional categories that may be found with phold 
@@ -713,12 +735,28 @@ def read_annotations_information():
     category_dict['card'] = 'moron, auxiliary metabolic gene and host takeover'
     category_dict['defensefinder'] = 'moron, auxiliary metabolic gene and host takeover'
 
-    phrog_integer = pickle.load(
-        open(
-            "phynteny_utils/integer_category.pkl", #TODO change this to a path
-            "rb",
-        )
-    )
+    # Try to find the integer_category.pkl file
+    try:
+        integer_file_path = pkg_resources.resource_filename('phynteny_utils', 'integer_category.pkl')
+        if not os.path.exists(integer_file_path):
+            alternate_paths = [
+                "phynteny_utils/integer_category.pkl",  # Original path
+                os.path.join(os.path.dirname(__file__), '../phynteny_utils/integer_category.pkl')
+            ]
+            for path in alternate_paths:
+                if os.path.exists(path):
+                    integer_file_path = path
+                    break
+                    
+        logger.info(f"Using integer category file: {integer_file_path}")
+        phrog_integer = pickle.load(open(integer_file_path, "rb"))
+        
+    except (pkg_resources.DistributionNotFound, FileNotFoundError) as e:
+        logger.error(f"Error finding integer_category.pkl: {e}")
+        # Fallback to original path
+        logger.warning("Falling back to hardcoded path")
+        phrog_integer = pickle.load(open("phynteny_utils/integer_category.pkl", "rb"))
+    
     phrog_integer = dict(
         zip(
             [i - 1 for i in list(phrog_integer.keys())],
@@ -918,109 +956,109 @@ def generate_table(outfile, gb_dict, categories, phrog_integer, predictions=None
     # Get the list of phages to loop through
     keys = list(gb_dict.keys())
 
-    logger.info(f"Generating table")
-
     # Convert annotations made to a text file
     with click.open_file(outfile, "wt") if outfile != ".tsv" else sys.stdout as f:
         f.write(
-            "ID\tstart\tend\tstrand\tphrog_id\tphrog_category\tphynteny_category\tphynteny_score\tconfidence\tphage\n"
+            "ID\tstart\tend\tstrand\tphrog_id\tphrog_category\tphynteny_category\tphynteny_score\tphynteny_confidence\tphage\n"
         )
 
         for genome_idx, k in enumerate(keys):
-            logger.info(f"Processing genome {k} for table output")
+            logger.debug(f"Processing genome #{genome_idx}: {k}")
             
             try:
                 # Check if gb_dict[k] is a dictionary with sequence field
                 if isinstance(gb_dict.get(k), dict) and 'sequence' in gb_dict.get(k):
                     sequences = gb_dict.get(k)['sequence']
+                    logger.debug(f"Genome {k} has {len(sequences)} sequences")
+                    
+                    # Check availability of prediction data for this genome
+                    has_predictions = predictions is not None and genome_idx < len(predictions)
+                    has_scores = scores is not None and genome_idx < len(scores)
+                    has_confidence = confidence_scores is not None and genome_idx < len(confidence_scores)
+                    
+                    logger.debug(f"Has predictions: {has_predictions}, Has scores: {has_scores}, Has confidence: {has_confidence}")
                     
                     # For each sequence in the genome
                     for seq_idx, record in enumerate(sequences):
-                        # Get phrog information from the record
-                        phrog_id = "No_PHROG"
-                        if hasattr(record, 'features') and record.features:
-                            for feature in record.features:
-                                if feature.type == "CDS" and 'phrog' in feature.qualifiers:
-                                    phrog_id = feature.qualifiers['phrog'][0]
-                                    break
+                        # Get sequence ID
+                        seq_id = record.id if hasattr(record, 'id') else f"{k}_{seq_idx}"
                         
-                        # Get position and strand information
+                        # Get position information
                         start = 0
-                        end = len(record.seq) if hasattr(record, 'seq') else 0
-                        strand = "+"  # Default strand
+                        end = len(record.seq)
+                        if 'position' in gb_dict[k] and seq_idx < len(gb_dict[k]['position']):
+                            start, end = gb_dict[k]['position'][seq_idx]
                         
-                        if 'position' in gb_dict.get(k) and seq_idx < len(gb_dict.get(k)['position']):
-                            start, end = gb_dict.get(k)['position'][seq_idx]
+                        # Get strand information
+                        strand = "+"
+                        if 'sense' in gb_dict[k] and seq_idx < len(gb_dict[k]['sense']):
+                            strand = gb_dict[k]['sense'][seq_idx]
                         
-                        if 'sense' in gb_dict.get(k) and seq_idx < len(gb_dict.get(k)['sense']):
-                            strand = gb_dict.get(k)['sense'][seq_idx]
-                        
-                        # Get phrog category
-                        phrog_as_int = int(phrog_id) if phrog_id != "No_PHROG" else phrog_id
-                        phrog_category = categories.get(phrog_integer.get(phrog_as_int), "unknown function")
-                        try:
-                            phrog_as_int = int(phrog_id) if phrog_id != "No_PHROG" else phrog_id
-                            phrog_category = categories.get(phrog_as_int, "unknown function")
-                        except (ValueError, TypeError):
-                            phrog_category = "unknown function"
-                        
-                        # Check if we should add predictions (only for unknown function)
-                        should_add_predictions = True
-                        
-                        # Check for function in qualifiers
-                        if 'all_qualifiers' in gb_dict.get(k) and seq_idx < len(gb_dict.get(k)['all_qualifiers']):
-                            qualifiers = gb_dict.get(k)['all_qualifiers'][seq_idx]
-                            if 'function' in qualifiers:
-                                function_value = qualifiers['function'][0].lower() if isinstance(qualifiers['function'], list) else qualifiers['function'].lower()
-                                if function_value != "unknown function" and function_value != "unknown":
-                                    should_add_predictions = False
+                        # Get PHROG information
+                        phrog_id = "No_PHROG"
+                        phrog_category = "unknown function"
+                        if 'phrogs' in gb_dict[k] and seq_idx < len(gb_dict[k]['phrogs']):
+                            phrog_id = gb_dict[k]['phrogs'][seq_idx]
+                            if phrog_id in categories:
+                                phrog_category = categories[phrog_id]
                         
                         # Default values for prediction columns
                         phynteny_category = "NA"
                         phynteny_score = "NA"
                         phynteny_confidence = "NA"
                         
-                        # Add prediction information only if should_add_predictions is True
-                        if should_add_predictions:
-                            # Extract prediction if available
-                            if predictions is not None and genome_idx < len(predictions):
-                                if seq_idx < len(predictions[genome_idx]):
-                                    pred = predictions[genome_idx][seq_idx]
-                                    pred_int = int(pred)
-                                    
-                                    # Convert prediction number to label if categories_map is provided
-                                    if categories_map is not None and pred_int in categories_map:
-                                        phynteny_category = categories_map[pred_int]
-                                    else:
-                                        phynteny_category = str(pred_int)
+                        if has_predictions and seq_idx < len(predictions[genome_idx]):
+                            pred = predictions[genome_idx][seq_idx]
+                            pred_int = int(pred)
+                            logger.debug(f"Prediction for {k}, seq {seq_idx}: {pred_int}")
                             
-                            # Extract score if available
-                            if scores is not None and genome_idx < len(scores):
-                                if seq_idx < len(scores[genome_idx]):
-                                    score_arr = scores[genome_idx][seq_idx]
-                                    if isinstance(score_arr, np.ndarray) and len(score_arr) > 0:
-                                        if pred_int < len(score_arr):
-                                            max_score = float(score_arr[pred_int])
-                                            phynteny_score = f"{max_score:.4f}"
-                                    else:
-                                        phynteny_score = f"{float(score_arr):.4f}"
+                            # Convert prediction number to label if categories_map is provided
+                            if categories_map is not None and pred_int in categories_map:
+                                phynteny_category = categories_map[pred_int]
+                                logger.debug(f"Category mapped to: {phynteny_category}")
+                            else:
+                                phynteny_category = str(pred_int)
+                                if categories_map is not None:
+                                    logger.warning(f"Category {pred_int} not found in categories_map ({list(categories_map.keys())[:5]}...)")
+                        else:
+                            logger.debug(f"No predictions array for genome {k}")
                             
-                            # Extract confidence if available
-                            if confidence_scores is not None and genome_idx < len(confidence_scores):
-                                if isinstance(confidence_scores[genome_idx], np.ndarray):
-                                    if seq_idx < len(confidence_scores[genome_idx]):
-                                        conf = confidence_scores[genome_idx][seq_idx]
-                                        phynteny_confidence = f"{float(conf):.4f}"
+                        # Extract score if available
+                        if has_scores and seq_idx < len(scores[genome_idx]):
+                            score_arr = scores[genome_idx][seq_idx]
+                            logger.debug(f"Score array for {k}, seq {seq_idx}: {type(score_arr)}")
+                            
+                            if isinstance(score_arr, np.ndarray) and len(score_arr) > 0 and 'pred_int' in locals():
+                                if pred_int < len(score_arr):
+                                    max_score = float(score_arr[pred_int])
+                                    phynteny_score = f"{max_score:.4f}"
+                                    logger.debug(f"Score: {phynteny_score}")
                                 else:
-                                    conf = confidence_scores[genome_idx]
+                                    logger.warning(f"Score index out of range: pred_int {pred_int} >= len(score_arr) {len(score_arr)}")
+                            else:
+                                try:
+                                    phynteny_score = f"{float(score_arr):.4f}"
+                                except (TypeError, ValueError):
+                                    logger.warning(f"Could not convert score to float: {score_arr}")
+                                    
+                        # Extract confidence if available
+                        if has_confidence:
+                            if isinstance(confidence_scores[genome_idx], np.ndarray):
+                                if seq_idx < len(confidence_scores[genome_idx]):
+                                    conf = confidence_scores[genome_idx][seq_idx]
                                     phynteny_confidence = f"{float(conf):.4f}"
+                                    logger.debug(f"Confidence: {phynteny_confidence}")
+                                else:
+                                    logger.warning(f"Confidence index out of bounds: seq_idx {seq_idx} >= len(confidence_scores[genome_idx]) {len(confidence_scores[genome_idx])}")
+                            else:
+                                conf = confidence_scores[genome_idx]
+                                phynteny_confidence = f"{float(conf):.4f}"
+                                logger.debug(f"Genome-level confidence: {phynteny_confidence}")
                         
-                        # Write to table
-                        f.write(f"{record.id}\t{start}\t{end}\t{strand}\t{phrog_id}\t{phrog_category}\t"
-                                f"{phynteny_category}\t{phynteny_score}\t{phynteny_confidence}\t{k}\n")
+                        # Write row to table file
+                        f.write(f"{seq_id}\t{start}\t{end}\t{strand}\t{phrog_id}\t{phrog_category}\t{phynteny_category}\t{phynteny_score}\t{phynteny_confidence}\t{k}\n")
                 
                 else:
-                    # Handle old-style direct SeqRecord objects (for backward compatibility)
                     logger.warning(f"Genome {k} does not have expected structure. Skipping...")
             
             except Exception as e:

@@ -90,19 +90,35 @@ __status__ = "development"
 @click.option('--dropout', default=0.1, help='Dropout rate for the model.')
 @click.option('--batch-size', default=128, help='Batch size for processing data.')
 @click.option('--confidence-threshold', default=0.8, type=float, help='Confidence threshold for high-confidence predictions (0.0-1.0).')
+@click.option('--debug', is_flag=True, help='Enable verbose debug logging to console.')
 
 @click.version_option(version=__version__)
 
 def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, num_heads, 
          hidden_dim, lstm_hidden_dim, no_lstm, max_len, protein_dropout_rate, attention, 
          positional_encoding_type, pre_norm, progressive_dropout, initial_dropout_rate, 
-         final_dropout_rate, output_dim, num_layers, dropout, batch_size, confidence_threshold):
+         final_dropout_rate, output_dim, num_layers, dropout, batch_size, confidence_threshold,
+         debug):
 
     start_time = time.time()
     # instantiate output directory 
     format_data.instantiate_output_directory(out, force)
-    logger.add(out + "/phynteny.log", level="DEBUG")
-
+    
+    # Configure logging based on debug flag
+    if debug:
+        # When debug mode is enabled:
+        # 1. Always log DEBUG level to the log file
+        # 2. Also show DEBUG level logs on the console
+        logger.remove()  # Remove default handlers
+        logger.add(sys.stderr, level="DEBUG")  # Add console handler with DEBUG level
+        logger.add(out + "/phynteny.log", level="DEBUG")  # Add file handler
+        logger.info("Debug mode enabled - showing verbose logs")
+    else:
+        # Normal mode: DEBUG to file, INFO to console
+        logger.remove()  # Remove default handlers
+        logger.add(sys.stderr, level="INFO")  # Add console handler with INFO level
+        logger.add(out + "/phynteny.log", level="DEBUG")  # Add file handler
+    
     # Check if the models directory exists
     if not os.path.exists(models):
         logger.error(f"Models directory does not exist: {models}")
@@ -125,8 +141,20 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     # read in genbank file
     gb_dict = format_data.read_genbank_file(infile, phrog_integer_category) # what categories the genes belong to is missing 
     logger.info("Genbank file read")
+    
+    # Log initial data dimensions
+    num_genomes = len(gb_dict)
+    logger.info(f"Number of genomes loaded from GenBank: {num_genomes}")
+    
+    # Log number of genes in each genome
+    for genome_id, genome_data in gb_dict.items():
+        if isinstance(genome_data, dict) and 'sequence' in genome_data:
+            sequences = genome_data.get('sequence', [])
+            #logger.debug(f"Genome {genome_id} has {len(sequences)} genes")
+        else:
+            logger.warning(f"Genome {genome_id} does not have expected structure")
 
-    # Extract fasta from the genbank files
+    # Extract fasta from thqe genbank files
     logger.info("Extracting fasta from genbank")
     data_keys = list(gb_dict.keys())
     fasta_out = os.path.join(out, f"{prefix}.fasta")
@@ -145,6 +173,29 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
 
     # Prepare data
     X, y = format_data.prepare_data(embeddings, gb_dict)
+    
+    # Check data structure alignment
+    logger.info(f"Data preparation complete. Checking dimensions:")
+    logger.info(f"Number of genomes in gb_dict: {len(gb_dict)}")
+    logger.info(f"Number of genomes in X: {len(X)}")
+    logger.info(f"Number of genomes in y: {len(y)}")
+    
+    # Check if any genomes were dropped during data preparation
+    if len(X) != len(gb_dict) or len(y) != len(gb_dict):
+        missing_in_X = set(gb_dict.keys()) - set(X.keys())
+        missing_in_y = set(gb_dict.keys()) - set(y.keys())
+        logger.warning(f"Some genomes are missing in prepared data. Missing in X: {missing_in_X}, Missing in y: {missing_in_y}")
+    
+    # Check gene counts match between gb_dict and X/y for each genome
+    for genome_id in X.keys():
+        if genome_id in gb_dict:
+            genome_data = gb_dict[genome_id]
+            if isinstance(genome_data, dict) and 'sequence' in genome_data:
+                num_genes_gb = len(genome_data['sequence'])
+                num_genes_X = X[genome_id].shape[0]
+                num_genes_y = y[genome_id].shape[0]
+                if num_genes_gb != num_genes_X or num_genes_gb != num_genes_y:
+                    logger.warning(f"Gene count mismatch for genome {genome_id}: gb_dict={num_genes_gb}, X={num_genes_X}, y={num_genes_y}")
 
     # Get the models 
     logger.info("Creating predictor object")
@@ -201,8 +252,41 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     scores = [all_scores[key] for key in all_scores.keys()]
     
     logger.info(f"Number of valid scores collected: {len(scores)}")
+    logger.info(f"Number of genomes in original data: {len(gb_dict)}")
+    logger.info(f"Number of genomes in X: {len(X)}")
+    
+    # Verify that we got scores for all genomes
+    if len(scores) != len(X):
+        logger.warning(f"Score count mismatch: {len(scores)} scores vs {len(X)} genomes in X")
+        # Identify which genomes are missing
+        genome_ids = list(X.keys())
+        if len(genome_ids) > len(scores):
+            logger.warning(f"Missing scores for some genomes")
+
     logger.info("Calculating confidence scores")
     predictions, confidence_scores = p.compute_confidence(scores, confidence_dict, phrog_integer_category)
+    
+    # Check predictions and confidence scores dimensions
+    logger.info(f"Data dimensions after prediction:")
+    logger.info(f"Number of prediction arrays: {len(predictions)}")
+    logger.info(f"Number of score arrays: {len(scores)}")
+    logger.info(f"Number of confidence score arrays: {len(confidence_scores)}")
+    
+    # Check if predictions match the expected number of genomes and genes
+    if len(predictions) != len(scores):
+        logger.error(f"Prediction count mismatch: {len(predictions)} prediction arrays vs {len(scores)} score arrays")
+    
+    # Check gene count for each genome in predictions
+    for i, (genome_id, genome_scores) in enumerate(zip(X.keys(), scores)):
+        if genome_id in gb_dict:
+            genome_data = gb_dict[genome_id]
+            if isinstance(genome_data, dict) and 'sequence' in genome_data:
+                num_genes_gb = len(genome_data['sequence'])
+                num_predictions = len(predictions[i]) if i < len(predictions) else 0
+                
+                if num_genes_gb != num_predictions:
+                    logger.warning(f"Gene prediction mismatch for genome {genome_id}: gb_dict={num_genes_gb}, predictions={num_predictions}")
+    
     logger.info("Creating SeqRecord objects for GenBank output")
         
     logger.info(f"Writing predictions to genbank file")
@@ -210,7 +294,14 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
 
     # Create the categories map from confidence_dict
     categories_map = dict(zip(range(len(confidence_dict.keys())), confidence_dict.keys()))
-
+    
+    logger.info("Creating GenBank and table outputs")
+    
+    # Create ordered list of genome IDs for consistent indexing
+    genome_ids = list(gb_dict.keys())
+    logger.info(f"Writing GenBank and table data for {len(genome_ids)} genomes")
+    logger.info(f"First 5 genome IDs: {genome_ids[:5] if len(genome_ids) >= 5 else genome_ids}")
+    
     # Write predictions to GenBank file
     p.write_genbank(
         gb_dict, 
@@ -222,7 +313,14 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
         categories_map=categories_map
     )
     
-    logger.info("Generating table...")
+    # Log final data structure info before generating the table
+    logger.info("Final data structure check before table generation:")
+    logger.info(f"Number of genomes in gb_dict: {len(gb_dict)}")
+    logger.info(f"Number of prediction arrays: {len(predictions)}")
+    logger.info(f"Number of score arrays: {len(scores)}")
+    logger.info(f"Number of confidence score arrays: {len(confidence_scores)}")
+    
+    # Generate the table
     table_file = out + "/phynteny.tsv"
     format_data.generate_table(
         table_file, 
@@ -232,7 +330,7 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
         predictions=predictions,
         scores=scores,
         confidence_scores=confidence_scores,
-        categories_map=categories_map  # Don't apply threshold for table generation
+        categories_map=categories_map
     )
     
     logger.info("Predictions completed")

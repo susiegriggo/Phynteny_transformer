@@ -133,8 +133,12 @@ class Predictor:
         # Process batches
         all_scores = {}
         batches_processed = 0
+        total_samples_processed = 0
         
-        for embeddings_batch, categories_batch, masks_batch, idx_batch in data_loader:
+        # Track which indices we've processed for debugging
+        processed_indices = set()
+        
+        for batch_idx, (embeddings_batch, categories_batch, masks_batch, idx_batch) in enumerate(data_loader):
             try:
                 # Move tensors to device
                 embeddings_batch = embeddings_batch.to(self.device)
@@ -142,32 +146,51 @@ class Predictor:
                 src_key_padding_mask = (masks_batch != -2).to(self.device)
                 
                 # Get predictions for this batch
+                logger.debug(f"Processing batch {batch_idx} with {len(idx_batch)} items")
                 batch_scores = self.predict_batch(embeddings_batch, src_key_padding_mask)
                 
                 # Store scores by their original keys
+                # Calculate the absolute index in the dataset for this batch
+                batch_start_idx = batch_idx * batch_size
+                
+                # This is the critical part: map batch positions to original keys properly
                 for i in range(len(idx_batch)):
-                    if i < len(keys_list):
-                        key = keys_list[i]
+                    absolute_idx = batch_start_idx + i
+                    if absolute_idx < len(keys_list):
+                        key = keys_list[absolute_idx]
+                        processed_indices.add(absolute_idx)
                         
                         if isinstance(batch_scores, torch.Tensor):
                             if i < batch_scores.shape[0]:
                                 all_scores[key] = batch_scores[i].cpu().numpy()
+                                total_samples_processed += 1
                         else:
                             # It's already a numpy array
                             if i < len(batch_scores):
                                 all_scores[key] = batch_scores[i]
+                                total_samples_processed += 1
                 
                 batches_processed += 1
-                if batches_processed % 10 == 0:
-                    logger.info(f"Processed {batches_processed} batches...")
+                logger.info(f"Processed batch {batches_processed} with {len(idx_batch)} items (total: {total_samples_processed}/{len(keys_list)} samples)")
                     
             except Exception as e:
-                logger.error(f"Error processing batch: {e}")
+                logger.error(f"Error processing batch {batch_idx}: {e}")
                 logger.error(traceback.format_exc())
                 continue
         
+        # Check if we processed all genomes
+        if len(all_scores) < len(keys_list):
+            missing = len(keys_list) - len(all_scores)
+            logger.warning(f"Missing scores for {missing} genomes after processing all batches")
+            
+            # Find missing keys
+            processed_keys = set(all_scores.keys())
+            all_keys = set(keys_list)
+            missing_keys = all_keys - processed_keys
+            logger.warning(f"Missing keys: {list(missing_keys)[:10]}...")
+        
         logger.info(f"Total batches processed: {batches_processed}")
-        logger.info(f"Collected scores for {len(all_scores)} samples")
+        logger.info(f"Collected scores for {len(all_scores)}/{len(keys_list)} samples")
         
         # Store scores for compatibility with other methods
         self.scores = all_scores
@@ -189,11 +212,27 @@ class Predictor:
         """
         logger.info(f"Writing predictions to GenBank file: {output_file}")
         
+        # Track statistics for diagnostics
+        unknown_function_count = 0
+        predictions_added_count = 0
+        low_confidence_count = 0
+        known_function_count = 0
+        
+        # Log the dimensions of the data arrays
+        logger.info(f"Number of genomes in gb_dict: {len(gb_dict)}")
+        logger.info(f"Number of prediction arrays: {len(predictions) if predictions is not None else 'None'}")
+        logger.info(f"Number of score arrays: {len(scores) if scores is not None else 'None'}")
+        logger.info(f"Number of confidence arrays: {len(confidence_scores) if confidence_scores is not None else 'None'}")
+        
+        # Log the first few genome IDs to verify alignment
+        genome_ids = list(gb_dict.keys())
+        logger.info(f"First 5 genome IDs: {genome_ids[:5] if len(genome_ids) >= 5 else genome_ids}")
+        
         try:
             with open(output_file, "w") as handle:
                 # For each genome in the gb_dict
                 for genome_idx, (genome_id, genome_data) in enumerate(gb_dict.items()):
-                    logger.info(f"Processing genome: {genome_id}")
+                    logger.info(f"Processing genome #{genome_idx}: {genome_id}")
                     
                     if 'sequence' not in genome_data:
                         logger.warning(f"No sequence field found for genome {genome_id}")
@@ -204,6 +243,24 @@ class Predictor:
                     if not sequences:
                         logger.warning(f"No sequences found for genome {genome_id}")
                         continue
+                    
+                    logger.info(f"Genome {genome_id} has {len(sequences)} sequences")
+                    
+                    # Check if we have predictions for this genome index
+                    has_predictions = predictions is not None and genome_idx < len(predictions)
+                    logger.debug(f"Has predictions for genome {genome_id}: {has_predictions}")
+                    if has_predictions:
+                        logger.debug(f"Number of predictions for genome {genome_id}: {len(predictions[genome_idx])}")
+                    
+                    # Check if we have scores for this genome index
+                    has_scores = scores is not None and genome_idx < len(scores)
+                    logger.debug(f"Has scores for genome {genome_id}: {has_scores}")
+                    if has_scores:
+                        logger.debug(f"Number of scores for genome {genome_id}: {len(scores[genome_idx])}")
+                    
+                    # Check if we have confidence scores for this genome index
+                    has_confidence = confidence_scores is not None and genome_idx < len(confidence_scores)
+                    logger.debug(f"Has confidence scores for genome {genome_id}: {has_confidence}")
                     
                     # Create a new record for this genome
                     # Use the first sequence record to extract metadata if available
@@ -251,29 +308,47 @@ class Predictor:
                     # Process each sequence/gene in this genome
                     for seq_idx, record in enumerate(sequences):
                         try:
+                            logger.debug(f"Processing sequence #{seq_idx} in genome {genome_id}")
+                            
                             # Get prediction and confidence for this sequence
                             prediction = None
                             max_score = None
                             conf = None
                             
-                            if genome_idx < len(predictions) and seq_idx < len(predictions[genome_idx]):
+                            # Check array bounds before accessing
+                            if has_predictions and seq_idx < len(predictions[genome_idx]):
                                 prediction = int(predictions[genome_idx][seq_idx])
+                                logger.debug(f"Genome {genome_id}, sequence {seq_idx}: Prediction = {prediction}")
                                 
                                 # Extract max score (at predicted category)
-                                if isinstance(scores, list) and genome_idx < len(scores):
+                                if has_scores and seq_idx < len(scores[genome_idx]):
                                     score_array = scores[genome_idx][seq_idx]
+                                    logger.debug(f"Genome {genome_id}, sequence {seq_idx}: Score array shape = {score_array.shape if hasattr(score_array, 'shape') else 'scalar'}")
+                                    
                                     if isinstance(score_array, np.ndarray) and len(score_array) > prediction:
                                         max_score = float(score_array[prediction])
+                                        logger.debug(f"Genome {genome_id}, sequence {seq_idx}: Max score = {max_score}")
                                     else:
                                         max_score = score_array
+                                        logger.debug(f"Genome {genome_id}, sequence {seq_idx}: Score = {max_score}")
+                                else:
+                                    logger.warning(f"Score array missing or index out of bounds for genome {genome_id}, sequence {seq_idx}")
                                 
                                 # Get confidence score
-                                if isinstance(confidence_scores, list) and genome_idx < len(confidence_scores):
+                                if has_confidence:
                                     if isinstance(confidence_scores[genome_idx], np.ndarray):
                                         if seq_idx < len(confidence_scores[genome_idx]):
                                             conf = confidence_scores[genome_idx][seq_idx]
+                                            logger.debug(f"Genome {genome_id}, sequence {seq_idx}: Confidence = {conf}")
+                                        else:
+                                            logger.warning(f"Confidence index out of bounds: seq_idx {seq_idx} >= len(confidence_scores[genome_idx]) {len(confidence_scores[genome_idx])}")
                                     else:
                                         conf = confidence_scores[genome_idx]
+                                        logger.debug(f"Genome {genome_id}: Genome-level confidence = {conf}")
+                            else:
+                                logger.warning(f"Prediction missing or index out of bounds for genome {genome_id}, sequence {seq_idx}")
+                                if has_predictions:
+                                    logger.warning(f"Array bounds issue: seq_idx={seq_idx}, predictions array length={len(predictions[genome_idx])}")
                             
                             # Get position information
                             start = 0
@@ -319,31 +394,52 @@ class Predictor:
                             # Check if we should add Phynteny predictions
                             should_add_predictions = True
                             
+                            # Check if this is a gene with unknown function
+                            has_unknown_function = False
+                            if 'function' not in qualifiers:
+                                has_unknown_function = True
+                                unknown_function_count += 1
+                                logger.debug(f"Gene {record.id} has no function annotation")
+                            else:
+                                function_value = qualifiers['function'][0].lower() if isinstance(qualifiers['function'], list) else qualifiers['function'].lower()
+                                if function_value == "unknown function" or function_value == "unknown":
+                                    has_unknown_function = True
+                                    unknown_function_count += 1
+                                    logger.debug(f"Gene {record.id} has unknown function: {function_value}")
+                                else:
+                                    known_function_count += 1
+                                    should_add_predictions = False
+                                    logger.debug(f"Skipping Phynteny annotation for {record.id}: Known function: {function_value}")
+
                             # Only add predictions if function is unknown or not present
                             if 'function' in qualifiers:
                                 function_value = qualifiers['function'][0].lower() if isinstance(qualifiers['function'], list) else qualifiers['function'].lower()
                                 if function_value != "unknown function" and function_value != "unknown":
                                     should_add_predictions = False
-                                    #logger.debug(f"Skipping Phynteny annotation for {record.id}: Known function: {function_value}")
-
+                                    logger.debug(f"Skipping Phynteny annotation for {record.id}: Known function: {function_value}")
+                            
                             # Only add predictions if the confidence score is above the threshold
                             if conf is not None and conf < threshold:
                                 should_add_predictions = False
-                                #logger.debug(f"Skipping Phynteny annotation for {record.id}: Low confidence score: {conf:.4f}")
+                                low_confidence_count += 1
+                                logger.debug(f"Skipping Phynteny annotation for {record.id}: Low confidence score: {conf:.4f}")
                             
                             # Add our prediction qualifiers only for unknown function
                             if should_add_predictions:
+                                logger.debug(f'prediction: {prediction}')
                                 if prediction is not None:
-                                    #qualifiers["phynteny_category"] = [str(prediction)]
-                                    
                                     # Add the category label if categories_map is provided
                                     if categories_map is not None and prediction in categories_map:
                                         qualifiers["phynteny_category"] = [categories_map[prediction]]
+                                        predictions_added_count += 1
+                                        logger.debug(f"Added prediction for {record.id}: {categories_map[prediction]}")
                                         
                                 if max_score is not None:
                                     qualifiers["phynteny_score"] = [f"{max_score:.4f}"]
                                 if conf is not None:
                                     qualifiers["phynteny_confidence"] = [f"{conf:.4f}"]
+                            elif has_unknown_function:
+                                logger.debug(f"Unknown function gene {record.id} not predicted. Prediction: {prediction}, Confidence: {conf}")
                             
                             # Create the feature with ALL original qualifiers plus our additions
                             feature = SeqFeature(
@@ -362,6 +458,8 @@ class Predictor:
                     SeqIO.write(genome_record, handle, "genbank")
                 
                 logger.info(f"Successfully wrote predictions to {output_file}")
+                logger.info(f"Statistics: {unknown_function_count} genes with unknown function, {predictions_added_count} predictions added")
+                logger.info(f"Skipped: {low_confidence_count} due to low confidence, {known_function_count} with known function")
                     
             return None
             
