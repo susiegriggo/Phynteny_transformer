@@ -1,0 +1,8 @@
+include VERSION
+include LICENSE
+include README.md
+recursive-include phynteny_utils *
+recursive-include phynteny_utils/models *
+recursive-include phynteny_utils/phrog_annotation_info *
+recursive-include train_transformer *
+recursive-include src *
