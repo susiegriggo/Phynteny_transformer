@@ -45,8 +45,9 @@ for param, desc in PARAMETERS.items():
 @click.option('--positional-encoding-type', type=click.Choice(['fourier', 'sinusoidal']), default='fourier', help='Type of positional encoding to use.')
 @click.option('--pre-norm', is_flag=True, default=False, help='Use pre-normalization in transformer layers instead of post-normalization.')
 @click.option('--output-dim', default=None, type=int, help='Output dimension for the model. Defaults to num_classes if not specified.')
+@click.option('--num-layers', default=2, type=int, help='Number of transformer layers in the model.')
 
-def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, no_lstm, max_len, attention, positional_encoding_type, pre_norm, output_dim):
+def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, no_lstm, max_len, attention, positional_encoding_type, pre_norm, output_dim, num_layers):
     """
     Main function to compute confidence scores.
 
@@ -69,6 +70,7 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     :param positional_encoding_type: Type of positional encoding (fourier or sinusoidal)
     :param pre_norm: Use pre-normalization in transformer layers
     :param output_dim: Output dimension for the model
+    :param num_layers: Number of transformer layers in the model
     """
     use_lstm = not no_lstm
     # Use num_classes as output_dim if not specified
@@ -96,7 +98,7 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     final_dropout_rate = 0.0  # Not used for inference
     
     p = create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate, 
-                         attention, positional_encoding_type, pre_norm, progressive_dropout, initial_dropout_rate, final_dropout_rate, output_dim)
+                         attention, positional_encoding_type, pre_norm, progressive_dropout, initial_dropout_rate, final_dropout_rate, output_dim, num_layers)
     logger.info(f'Predictor models: {p.models}')
     logger.info("Creating the dataset and dataloader.")
     conf_dataset_loader = create_dataloader(embeddings, categories, validation_categories, batch_size)
@@ -138,7 +140,7 @@ def load_data(embeddings_path, categories_path, validation_categories_path, inte
 
 
 def create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate=0.0, 
-                    attention='circular', positional_encoding_type='fourier', pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4, output_dim=None):
+                    attention='circular', positional_encoding_type='fourier', pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4, output_dim=None, num_layers=2):
     """
     Create the predictor object.
 
@@ -160,6 +162,7 @@ def create_predictor(model_directory, device, input_dim, num_classes, num_heads,
     :param initial_dropout_rate: Initial dropout rate when using progressive dropout
     :param final_dropout_rate: Final dropout rate when using progressive dropout
     :param output_dim: Output dimension for the model
+    :param num_layers: Number of transformer layers
     :return: Predictor object
     """
     logger.info("Creating the predictor object.")
@@ -179,7 +182,7 @@ def create_predictor(model_directory, device, input_dim, num_classes, num_heads,
                 f"hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={inference_dropout}, "
                 f"use_lstm={use_lstm}, max_len={max_len}, protein_dropout_rate={inference_protein_dropout_rate}, "
                 f"attention={attention}, positional_encoding_type={positional_encoding_type}, pre_norm={pre_norm}, "
-                f"output_dim={output_dim}")
+                f"output_dim={output_dim}, num_layers={num_layers}")
     
     # Read models with updated parameters
     p.read_models_from_directory(
@@ -199,7 +202,8 @@ def create_predictor(model_directory, device, input_dim, num_classes, num_heads,
         progressive_dropout=False,  # Disable progressive dropout for inference
         initial_dropout_rate=0.0,   # Not used but set to 0 for clarity
         final_dropout_rate=0.0,     # Not used but set to 0 for clarity
-        output_dim=output_dim
+        output_dim=output_dim,
+        num_layers=num_layers
     )
     
     logger.info(f"Loaded models: {len(p.models)} models loaded.")
