@@ -46,8 +46,13 @@ for param, desc in PARAMETERS.items():
 @click.option('--pre-norm', is_flag=True, default=False, help='Use pre-normalization in transformer layers instead of post-normalization.')
 @click.option('--output-dim', default=None, type=int, help='Output dimension for the model. Defaults to num_classes if not specified.')
 @click.option('--num-layers', default=2, type=int, help='Number of transformer layers in the model.')
+@click.option('--dropout', default=0.0, help='Dropout rate for the model. Should be 0 for inference.', type=float)
+@click.option('--protein-dropout-rate', default=0.0, help='Dropout rate for protein features. Should be 0 for inference.', type=float)
+@click.option('--progressive-dropout', is_flag=True, default=False, help='Enable progressive dropout for protein features.')
+@click.option('--initial-dropout-rate', default=1.0, help='Initial dropout rate when using progressive dropout.', type=float)
+@click.option('--final-dropout-rate', default=0.4, help='Final dropout rate when using progressive dropout.', type=float)
 
-def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, no_lstm, max_len, attention, positional_encoding_type, pre_norm, output_dim, num_layers):
+def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, no_lstm, max_len, attention, positional_encoding_type, pre_norm, output_dim, num_layers, dropout, protein_dropout_rate, progressive_dropout, initial_dropout_rate, final_dropout_rate):
     """
     Main function to compute confidence scores.
 
@@ -71,6 +76,11 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     :param pre_norm: Use pre-normalization in transformer layers
     :param output_dim: Output dimension for the model
     :param num_layers: Number of transformer layers in the model
+    :param dropout: Dropout rate for the model
+    :param protein_dropout_rate: Dropout rate for protein features
+    :param progressive_dropout: Enable progressive dropout for protein features
+    :param initial_dropout_rate: Initial dropout rate when using progressive dropout
+    :param final_dropout_rate: Final dropout rate when using progressive dropout
     """
     use_lstm = not no_lstm
     # Use num_classes as output_dim if not specified
@@ -89,13 +99,6 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
         logger.info("Using CPU for computation.")
     
     embeddings, categories, validation_categories, phrog_integer = load_data(embeddings_path, categories_path, validation_categories_path, integer_category_path)
-    
-    # Setting fixed values for dropout-related parameters that we don't need as CLI arguments
-    dropout = 0.0  # Always 0 for inference
-    protein_dropout_rate = 0.0  # Always 0 for inference
-    progressive_dropout = False  # Always False for inference
-    initial_dropout_rate = 0.0  # Not used for inference
-    final_dropout_rate = 0.0  # Not used for inference
     
     p = create_predictor(model_directory, device, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, protein_dropout_rate, 
                          attention, positional_encoding_type, pre_norm, progressive_dropout, initial_dropout_rate, final_dropout_rate, output_dim, num_layers)
@@ -172,40 +175,74 @@ def create_predictor(model_directory, device, input_dim, num_classes, num_heads,
     if output_dim is None:
         output_dim = num_classes
     
-    # Set all dropout-related parameters to 0 for inference
-    logger.info("Setting all dropout rates to 0 for inference")
-    inference_dropout = 0.0
-    inference_protein_dropout_rate = 0.0
-    
     # Log the model parameters being used
     logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}, num_heads={num_heads}, "
-                f"hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={inference_dropout}, "
-                f"use_lstm={use_lstm}, max_len={max_len}, protein_dropout_rate={inference_protein_dropout_rate}, "
+                f"hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={dropout}, "
+                f"use_lstm={use_lstm}, max_len={max_len}, protein_dropout_rate={protein_dropout_rate}, "
                 f"attention={attention}, positional_encoding_type={positional_encoding_type}, pre_norm={pre_norm}, "
-                f"output_dim={output_dim}, num_layers={num_layers}")
+                f"output_dim={output_dim}, num_layers={num_layers}, "
+                f"progressive_dropout={progressive_dropout}, initial_dropout_rate={initial_dropout_rate}, final_dropout_rate={final_dropout_rate}")
     
-    # Read models with updated parameters
-    p.read_models_from_directory(
-        model_directory, 
-        input_dim, 
-        num_classes, 
-        num_heads, 
-        hidden_dim, 
-        lstm_hidden_dim, 
-        dropout=inference_dropout,  # Set to 0 for inference
-        use_lstm=use_lstm, 
-        max_len=max_len, 
-        protein_dropout_rate=inference_protein_dropout_rate,  # Set to 0 for inference
-        attention=attention,
-        positional_encoding_type=positional_encoding_type,
-        pre_norm=pre_norm,
-        progressive_dropout=False,  # Disable progressive dropout for inference
-        initial_dropout_rate=0.0,   # Not used but set to 0 for clarity
-        final_dropout_rate=0.0,     # Not used but set to 0 for clarity
-        output_dim=output_dim,
-        num_layers=num_layers
-    )
+    # Select positional encoding function
+    positional_encoding_func = model_onehot.fourier_positional_encoding if positional_encoding_type == 'fourier' else model_onehot.sinusoidal_positional_encoding
     
+    # Read models with updated parameters - using consistent approach with generate_roc_data.py
+    models = []
+    
+    for k in range(10):  # Assuming 10 folds like in generate_roc_data.py
+        try:
+            # Create model instance directly 
+            m = model_onehot.TransformerClassifierCircularRelativeAttention(
+                input_dim=input_dim,
+                num_classes=num_classes,
+                num_heads=num_heads,
+                num_layers=num_layers,
+                hidden_dim=hidden_dim,
+                lstm_hidden_dim=lstm_hidden_dim,
+                dropout=dropout,
+                max_len=max_len,
+                use_lstm=use_lstm,
+                positional_encoding=positional_encoding_func,
+                protein_dropout_rate=protein_dropout_rate,
+                pre_norm=pre_norm,
+                progressive_dropout=progressive_dropout,
+                initial_dropout_rate=initial_dropout_rate,
+                final_dropout_rate=final_dropout_rate,
+                output_dim=output_dim
+            )
+            
+            # Initialize buffers with dummy forward pass if needed
+            if hasattr(m, 'protein_feature_dropout'):
+                logger.info(f"Initializing protein_feature_dropout buffers for model {k+1} with dummy forward pass")
+                batch_size, seq_len = 2, 10  # Minimal batch for initialization
+                feature_dim = m.gene_feature_dim + (hidden_dim - m.gene_feature_dim)
+                dummy_input = torch.zeros((batch_size, seq_len, feature_dim), device=device)
+                dummy_idx = [torch.tensor([0, 1]) for _ in range(batch_size)]
+                # Run a forward pass with the dummy data to initialize any dynamic buffers
+                m.protein_feature_dropout(dummy_input, dummy_idx)
+            
+            # Try both file path patterns for models
+            try:
+                # First try the pattern used in generate_roc_data.py
+                model_path = f'{model_directory}/fold_{k+1}transformer.model'
+                state_dict = torch.load(model_path, map_location=device)
+                logger.info(f"Loading model from {model_path}")
+            except FileNotFoundError:
+                # Fall back to the pattern with slash
+                model_path = f'{model_directory}/fold_{k+1}/transformer_state_dict.pth'
+                state_dict = torch.load(model_path, map_location=device)
+                logger.info(f"Loading model from {model_path}")
+                
+            # Load state dict with strict=False to handle parameter differences
+            m.load_state_dict(state_dict, strict=False)
+            m.to(device)
+            m.eval()
+            models.append(m)
+            logger.info(f"Successfully loaded model {k+1}")
+        except Exception as e:
+            logger.warning(f"Could not load model for fold {k+1}: {str(e)}")
+    
+    p.models = models
     logger.info(f"Loaded models: {len(p.models)} models loaded.")
     return p
 
