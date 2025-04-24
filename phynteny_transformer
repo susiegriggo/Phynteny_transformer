@@ -176,9 +176,9 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     
     # Check data structure alignment
     logger.info(f"Data preparation complete. Checking dimensions:")
-    logger.info(f"Number of genomes in gb_dict: {len(gb_dict)}")
-    logger.info(f"Number of genomes in X: {len(X)}")
-    logger.info(f"Number of genomes in y: {len(y)}")
+    logger.info(f"Number of genomes: {len(gb_dict)}")
+    logger.debug(f"Number of genomes in X: {len(X)}")
+    logger.debug(f"Number of genomes in y: {len(y)}")
     
     # Check if any genomes were dropped during data preparation
     if len(X) != len(gb_dict) or len(y) != len(gb_dict):
@@ -251,9 +251,9 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     # Convert all_scores format to match what's expected by compute_confidence
     scores = [all_scores[key] for key in all_scores.keys()]
     
-    logger.info(f"Number of valid scores collected: {len(scores)}")
-    logger.info(f"Number of genomes in original data: {len(gb_dict)}")
-    logger.info(f"Number of genomes in X: {len(X)}")
+    logger.debug(f"Number of valid scores collected: {len(scores)}")
+    logger.debug(f"Number of genomes in original data: {len(gb_dict)}")
+    logger.debug(f"Number of genomes in X: {len(X)}")
     
     # Verify that we got scores for all genomes
     if len(scores) != len(X):
@@ -267,14 +267,17 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     predictions, confidence_scores = p.compute_confidence(scores, confidence_dict, phrog_integer_category)
     
     # Check predictions and confidence scores dimensions
-    logger.info(f"Data dimensions after prediction:")
-    logger.info(f"Number of prediction arrays: {len(predictions)}")
-    logger.info(f"Number of score arrays: {len(scores)}")
-    logger.info(f"Number of confidence score arrays: {len(confidence_scores)}")
+    logger.debug(f"Data dimensions after prediction:")
+    logger.debug(f"Number of prediction arrays: {len(predictions)}")
+    logger.debug(f"Number of score arrays: {len(scores)}")
+    logger.debug(f"Number of confidence score arrays: {len(confidence_scores)}")
     
     # Check if predictions match the expected number of genomes and genes
     if len(predictions) != len(scores):
         logger.error(f"Prediction count mismatch: {len(predictions)} prediction arrays vs {len(scores)} score arrays")
+    
+    # Debug logging for batching and padding issues
+    logger.info("Checking gene predictions against GenBank data - padding may affect results")
     
     # Check gene count for each genome in predictions
     for i, (genome_id, genome_scores) in enumerate(zip(X.keys(), scores)):
@@ -282,10 +285,27 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
             genome_data = gb_dict[genome_id]
             if isinstance(genome_data, dict) and 'sequence' in genome_data:
                 num_genes_gb = len(genome_data['sequence'])
+                num_genes_X = X[genome_id].shape[0]
                 num_predictions = len(predictions[i]) if i < len(predictions) else 0
                 
+                # Log the detailed structure for this genome
+                logger.debug(f"Genome {genome_id} - GenBank genes: {num_genes_gb}, X tensor shape: {X[genome_id].shape}, "
+                             f"predictions: {num_predictions}")
+                
                 if num_genes_gb != num_predictions:
-                    logger.warning(f"Gene prediction mismatch for genome {genome_id}: gb_dict={num_genes_gb}, predictions={num_predictions}")
+                    logger.warning(f"Gene prediction mismatch for genome {genome_id}: gb_dict={num_genes_gb}, "
+                                  f"X tensor={num_genes_X}, predictions={num_predictions}")
+                    
+                    # Check if the predictions array contains padding
+                    if num_predictions > num_genes_gb:
+                        logger.info(f"Predictions may contain padding - will truncate to match gene count")
+                        # Truncate predictions to match actual gene count if needed
+                        if i < len(predictions):
+                            predictions[i] = predictions[i][:num_genes_gb]
+                            for score_idx in range(len(scores[i])):
+                                if isinstance(scores[i][score_idx], np.ndarray) and len(scores[i][score_idx]) > num_genes_gb:
+                                    scores[i][score_idx] = scores[i][score_idx][:num_genes_gb]
+                            logger.info(f"Truncated predictions for {genome_id}: now {len(predictions[i])} (was {num_predictions})")
     
     logger.info("Creating SeqRecord objects for GenBank output")
         
@@ -300,7 +320,6 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     # Create ordered list of genome IDs for consistent indexing
     genome_ids = list(gb_dict.keys())
     logger.info(f"Writing GenBank and table data for {len(genome_ids)} genomes")
-    logger.info(f"First 5 genome IDs: {genome_ids[:5] if len(genome_ids) >= 5 else genome_ids}")
     
     # Write predictions to GenBank file
     p.write_genbank(

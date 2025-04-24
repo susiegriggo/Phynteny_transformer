@@ -171,7 +171,7 @@ class Predictor:
                                 total_samples_processed += 1
                 
                 batches_processed += 1
-                logger.info(f"Processed batch {batches_processed} with {len(idx_batch)} items (total: {total_samples_processed}/{len(keys_list)} samples)")
+                logger.debug(f"Processed batch {batches_processed} with {len(idx_batch)} items (total: {total_samples_processed}/{len(keys_list)} samples)")
                     
             except Exception as e:
                 logger.error(f"Error processing batch {batch_idx}: {e}")
@@ -219,10 +219,10 @@ class Predictor:
         known_function_count = 0
         
         # Log the dimensions of the data arrays
-        logger.info(f"Number of genomes in gb_dict: {len(gb_dict)}")
-        logger.info(f"Number of prediction arrays: {len(predictions) if predictions is not None else 'None'}")
-        logger.info(f"Number of score arrays: {len(scores) if scores is not None else 'None'}")
-        logger.info(f"Number of confidence arrays: {len(confidence_scores) if confidence_scores is not None else 'None'}")
+        logger.debug(f"Number of genomes in gb_dict: {len(gb_dict)}")
+        logger.debug(f"Number of prediction arrays: {len(predictions) if predictions is not None else 'None'}")
+        logger.debug(f"Number of score arrays: {len(scores) if scores is not None else 'None'}")
+        logger.debug(f"Number of confidence arrays: {len(confidence_scores) if confidence_scores is not None else 'None'}")
         
         # Log the first few genome IDs to verify alignment
         genome_ids = list(gb_dict.keys())
