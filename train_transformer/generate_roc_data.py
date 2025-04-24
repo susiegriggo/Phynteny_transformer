@@ -14,7 +14,7 @@ import shutil
 @click.command()
 @click.option('--pharokka_x_path', required=True, type=click.Path(exists=True), help='Path to pharokka X data.')
 @click.option('--pharokka_y_path', required=True, type=click.Path(exists=True), help='Path to pharokka y data.')
-@click.option('--phold_y_path', required=True, type=click.Path(exists=True), help='Path to phold y data.')
+@click.option('--phold_y_path', required=False, type=click.Path(exists=True), help='Path to phold y data. Required unless --use_random_masking is enabled.')
 @click.option('--model_dir', required=True, type=click.Path(exists=True), help='Directory containing the models.')
 @click.option('--output_dir', required=True, type=click.Path(), help='Directory to save the ROC data.')
 @click.option('--force', is_flag=True, help='Force overwrite the output directory if it exists.')
@@ -34,10 +34,14 @@ import shutil
 @click.option('--final_dropout_rate', default=0.4, help='Final dropout rate when using progressive dropout.')
 @click.option('--max_len', default=1500, help='Maximum sequence length.')
 @click.option('--output_dim', default=None, type=int, help='Output dimension for the model. Defaults to num_classes if not specified.')
+# Add new option for random masking
+@click.option('--use_random_masking', is_flag=True, default=False, help='Use random masking like during training instead of phold_y data.')
+@click.option('--mask_portion', default=0.15, help='Portion of tokens to mask when use_random_masking is enabled.')
 def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, force, 
          input_dim, hidden_dim, lstm_hidden_dim, num_heads, dropout, use_lstm,
          positional_encoding_type, pre_norm, protein_dropout_rate, progressive_dropout,
-         initial_dropout_rate, final_dropout_rate, max_len, output_dim, num_layers):
+         initial_dropout_rate, final_dropout_rate, max_len, output_dim, num_layers, 
+         use_random_masking, mask_portion):
     # Create output directory if it does not exist, or clear it if force is specified
     if os.path.exists(output_dir):
         if force:
@@ -52,15 +56,27 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, 
     else:
         os.makedirs(output_dir)
     
+    # Validate that we have phold_y_path if not using random masking
+    if not use_random_masking and phold_y_path is None:
+        raise ValueError("phold_y_path is required when not using random masking")
+    
+    # Log parameters
+    logger.info(f"Parameters: pharokka_x_path={pharokka_x_path}, pharokka_y_path={pharokka_y_path}, " +
+               f"phold_y_path={phold_y_path if not use_random_masking else 'Not used (random masking enabled)'}, " +
+               f"model_dir={model_dir}, output_dir={output_dir}, use_random_masking={use_random_masking}")
+    
     # Load data with error handling
     try:
-        logger.info(f"Parameters: pharokka_x_path={pharokka_x_path}, pharokka_y_path={pharokka_y_path}, phold_y_path={phold_y_path}, model_dir={model_dir}, output_dir={output_dir}")
         pharokka_y = pickle.load(open(pharokka_y_path, 'rb'))
         logger.info(f"Number of pharokka_y samples: {len(pharokka_y)}")
         pharokka_X = pickle.load(open(pharokka_x_path, 'rb'))
         logger.info(f"Number of pharokka_X samples: {len(pharokka_X)}")
-        phold_y = pickle.load(open(phold_y_path, 'rb'))
-        logger.info(f"Number of phold_y samples: {len(phold_y)}")
+        
+        # Only load phold_y if not using random masking
+        phold_y = None
+        if not use_random_masking:
+            phold_y = pickle.load(open(phold_y_path, 'rb'))
+            logger.info(f"Number of phold_y samples: {len(phold_y)}")
     except FileNotFoundError as e:
         logger.error(f"File not found: {e}")
         return
@@ -93,18 +109,38 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, 
         # Get validation data
         val_labels = [line.strip() for line in open(f'{model_dir}/val_kfold_keys/val_kfold_labels_fold{k+1}.txt').readlines()]
         
-        # Remove labels that are not in phold_y
-        val_labels = [v for v in val_labels if phold_y.get(v) != None]
+        if not use_random_masking:
+            # Remove labels that are not in phold_y when using phold_y validation
+            val_labels = [v for v in val_labels if phold_y.get(v) != None]
         
         # Get embeddings and categories
         validation_embeddings = [pharokka_X.get(v) for v in val_labels]
         validation_categories = [pharokka_y.get(v) for v in val_labels]
-        validation_phold = [phold_y.get(v) for v in val_labels]
-        logger.info(f'Number of validation samples: {len(validation_phold)}')
 
-        # Create validation dataset
-        validation_dataset = model_onehot.EmbeddingDataset(validation_embeddings, validation_categories, mask_portion=0, labels=val_labels)
-        validation_dataset.set_validation(validation_phold)
+        # Create validation dataset with appropriate settings
+        if use_random_masking:
+            # Use training mode with random masking for validation
+            validation_dataset = model_onehot.EmbeddingDataset(
+                validation_embeddings, 
+                validation_categories,
+                mask_portion=mask_portion,  # Use the specified mask portion
+                labels=val_labels
+            )
+            # Set to training mode to enable random masking
+            validation_dataset.set_training(True)
+            logger.info(f'Using random masking with mask_portion={mask_portion} for validation')
+        else:
+            # Use phold_y for validation as in the original code
+            validation_phold = [phold_y.get(v) for v in val_labels]
+            logger.info(f'Number of validation samples: {len(validation_phold)}')
+            validation_dataset = model_onehot.EmbeddingDataset(
+                validation_embeddings, 
+                validation_categories,
+                mask_portion=0,
+                labels=val_labels
+            )
+            validation_dataset.set_validation(validation_phold)
+        
         validation_loader = DataLoader(validation_dataset, batch_size=64, collate_fn=model_onehot.collate_fn)
 
         # Select positional encoding function
@@ -173,21 +209,24 @@ def main(pharokka_x_path, pharokka_y_path, phold_y_path, model_dir, output_dir, 
             outputs = m(embeddings, src_key_padding_mask=src_key_padding_mask.to(device))
             probs = F.softmax(outputs, dim=2)
             
-            # Get predictions
+            # Get predictions based on the masking approach
             for i in range(batch_size):
-                all_probs.extend(probs[i][idx[i]].tolist())
-                all_categories.extend(categories[i][idx[i]].tolist())
-                # Update category counts
-                for cat in categories[i][idx[i]].tolist():
-                    category_counts[cat] += 1
-                # Update label counts
-                for prob in probs[i][idx[i]].tolist():
-                    label_counts[np.argmax(prob)] += 1
+                if i < len(idx):  # Check if index is valid
+                    # Use the provided idx for each batch item
+                    batch_idx = idx[i]
+                    all_probs.extend(probs[i][batch_idx].tolist())
+                    all_categories.extend(categories[i][batch_idx].tolist())
+                    # Update category counts
+                    for cat in categories[i][batch_idx].tolist():
+                        if cat != -1:  # Skip padding tokens
+                            category_counts[cat] += 1
+                    # Update label counts
+                    for prob in probs[i][batch_idx].tolist():
+                        label_counts[np.argmax(prob)] += 1
 
             batch_count += 1
             if batch_count % 50 == 0:
                 logger.info(f"...processing batch {batch_count}")
-
                 # Log the number of predictions made for each category
                 logger.info(f"Category counts: {category_counts}")
 
