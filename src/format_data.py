@@ -999,62 +999,68 @@ def generate_table(outfile, gb_dict, categories, phrog_integer, predictions=None
                         phrog_category = "unknown function"
                         if 'phrogs' in gb_dict[k] and seq_idx < len(gb_dict[k]['phrogs']):
                             phrog_id = gb_dict[k]['phrogs'][seq_idx]
+                            phrog_id = int(phrog_id) if phrog_id.isdigit() else phrog_id
                             if phrog_id in categories:
                                 phrog_category = categories[phrog_id]
+
                         
                         # Default values for prediction columns
                         phynteny_category = "NA"
                         phynteny_score = "NA"
                         phynteny_confidence = "NA"
                         
-                        if has_predictions and seq_idx < len(predictions[genome_idx]):
-                            pred = predictions[genome_idx][seq_idx]
-                            pred_int = int(pred)
-                            logger.debug(f"Prediction for {k}, seq {seq_idx}: {pred_int}")
-                            
-                            # Convert prediction number to label if categories_map is provided
-                            if categories_map is not None and pred_int in categories_map:
-                                phynteny_category = categories_map[pred_int]
-                                logger.debug(f"Category mapped to: {phynteny_category}")
-                            else:
-                                phynteny_category = str(pred_int)
-                                if categories_map is not None:
-                                    logger.warning(f"Category {pred_int} not found in categories_map ({list(categories_map.keys())[:5]}...)")
-                        else:
-                            logger.debug(f"No predictions array for genome {k}")
-                            
-                        # Extract score if available
-                        if has_scores and seq_idx < len(scores[genome_idx]):
-                            score_arr = scores[genome_idx][seq_idx]
-                            logger.debug(f"Score array for {k}, seq {seq_idx}: {type(score_arr)}")
-                            
-                            if isinstance(score_arr, np.ndarray) and len(score_arr) > 0 and 'pred_int' in locals():
-                                if pred_int < len(score_arr):
-                                    max_score = float(score_arr[pred_int])
-                                    phynteny_score = f"{max_score:.4f}"
-                                    logger.debug(f"Score: {phynteny_score}")
+                        # if the phrog is unknown in the genbank file 
+                        if phrog_category == "unknown function":
+
+                            # Extract Category if available 
+                            if has_predictions and seq_idx < len(predictions[genome_idx]):
+                                pred = predictions[genome_idx][seq_idx]
+                                pred_int = int(pred)
+                                logger.debug(f"Prediction for {k}, seq {seq_idx}: {pred_int}")
+                                
+                                # Convert prediction number to label if categories_map is provided
+                                if categories_map is not None and pred_int in categories_map:
+                                    phynteny_category = categories_map[pred_int]
+                                    logger.debug(f"Category mapped to: {phynteny_category}")
                                 else:
-                                    logger.warning(f"Score index out of range: pred_int {pred_int} >= len(score_arr) {len(score_arr)}")
+                                    phynteny_category = str(pred_int)
+                                    if categories_map is not None:
+                                        logger.warning(f"Category {pred_int} not found in categories_map ({list(categories_map.keys())[:5]}...)")
                             else:
-                                try:
-                                    phynteny_score = f"{float(score_arr):.4f}"
-                                except (TypeError, ValueError):
-                                    logger.warning(f"Could not convert score to float: {score_arr}")
-                                    
-                        # Extract confidence if available
-                        if has_confidence:
-                            if isinstance(confidence_scores[genome_idx], np.ndarray):
-                                if seq_idx < len(confidence_scores[genome_idx]):
-                                    conf = confidence_scores[genome_idx][seq_idx]
+                                logger.debug(f"No predictions array for genome {k}")
+                                
+                            # Extract score if available
+                            if has_scores and seq_idx < len(scores[genome_idx]):
+                                score_arr = scores[genome_idx][seq_idx]
+                                logger.debug(f"Score array for {k}, seq {seq_idx}: {type(score_arr)}")
+                                
+                                if isinstance(score_arr, np.ndarray) and len(score_arr) > 0 and 'pred_int' in locals():
+                                    if pred_int < len(score_arr):
+                                        max_score = float(score_arr[pred_int])
+                                        phynteny_score = f"{max_score:.4f}"
+                                        logger.debug(f"Score: {phynteny_score}")
+                                    else:
+                                        logger.warning(f"Score index out of range: pred_int {pred_int} >= len(score_arr) {len(score_arr)}")
+                                else:
+                                    try:
+                                        phynteny_score = f"{float(score_arr):.4f}"
+                                    except (TypeError, ValueError):
+                                        logger.warning(f"Could not convert score to float: {score_arr}")
+                                        
+                            # Extract confidence if available
+                            if has_confidence:
+                                if isinstance(confidence_scores[genome_idx], np.ndarray):
+                                    if seq_idx < len(confidence_scores[genome_idx]):
+                                        conf = confidence_scores[genome_idx][seq_idx]
+                                        phynteny_confidence = f"{float(conf):.4f}"
+                                        logger.debug(f"Confidence: {phynteny_confidence}")
+                                    else:
+                                        logger.warning(f"Confidence index out of bounds: seq_idx {seq_idx} >= len(confidence_scores[genome_idx]) {len(confidence_scores[genome_idx])}")
+                                else:
+                                    conf = confidence_scores[genome_idx]
                                     phynteny_confidence = f"{float(conf):.4f}"
-                                    logger.debug(f"Confidence: {phynteny_confidence}")
-                                else:
-                                    logger.warning(f"Confidence index out of bounds: seq_idx {seq_idx} >= len(confidence_scores[genome_idx]) {len(confidence_scores[genome_idx])}")
-                            else:
-                                conf = confidence_scores[genome_idx]
-                                phynteny_confidence = f"{float(conf):.4f}"
-                                logger.debug(f"Genome-level confidence: {phynteny_confidence}")
-                        
+                                    logger.debug(f"Genome-level confidence: {phynteny_confidence}")
+                            
                         # Write row to table file
                         f.write(f"{seq_id}\t{start}\t{end}\t{strand}\t{phrog_id}\t{phrog_category}\t{phynteny_category}\t{phynteny_score}\t{phynteny_confidence}\t{k}\n")
                 

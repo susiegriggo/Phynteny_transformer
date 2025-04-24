@@ -50,6 +50,7 @@ setuptools.setup(
     url="https://github.com/susiegriggo/Phynteny_transformer",
     license="MIT",
     packages=packages,
+    py_modules=["phynteny_transformer"],
     package_data=package_data,
     data_files=data_files,
     include_package_data=True,
