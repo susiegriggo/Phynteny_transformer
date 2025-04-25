@@ -30,10 +30,13 @@ if not os.path.exists(models_dir):
 
 # Define package_data to include files in the phynteny_utils directory
 package_data = {
-    "phynteny_utils": ["*"],  # Include all files directly in phynteny_utils
+    "phynteny_utils": ["*.pkl", "*.tsv"],  # Include all .pkl and .tsv files in phynteny_utils
     "phynteny_utils.models": ["*"],  # Include all files in models subdirectory
-    "phynteny_utils.phrog_annotation_info": ["*"],
+    "phynteny_utils.phrog_annotation_info": ["*"],  # Include all files in phrog_annotation_info
 }
+
+# Remove data_files and rely on package_data for installation
+data_files = []
 
 install_requires = [
         "loguru",
@@ -46,11 +49,6 @@ install_requires = [
         "pandas",
         "tqdm",
     ]
-
-# Don't include model files in data_files
-data_files = [
-    (".", ["LICENSE", "README.md"])
-]
 
 setuptools.setup(
     name="phynteny",
@@ -66,8 +64,7 @@ setuptools.setup(
     packages=packages,
     py_modules=["phynteny_transformer"],
     package_data=package_data,
-    data_files=data_files,
-    include_package_data=True,
+    include_package_data=True,  # Ensure package data is included
     scripts=["phynteny_transformer"],
     entry_points={
         "console_scripts": [

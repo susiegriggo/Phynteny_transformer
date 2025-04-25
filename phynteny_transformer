@@ -286,6 +286,45 @@ def main():
     
     logger.info(f"Found {len(model_files)} model files in: {args.models}")
 
+    # Verify integer_category.pkl exists - simplified for Python 3.9+
+    integer_file_path = None
+    potential_int_paths = []
+    
+    # Use importlib.resources directly since we're on Python 3.9+
+    try:
+        # Python 3.9+ approach
+        phynteny_utils_dir = str(files('phynteny_utils').joinpath(''))
+        integer_file_path = os.path.join(phynteny_utils_dir, "integer_category.pkl")
+        potential_int_paths.append(integer_file_path)
+    except Exception as e:
+        logger.debug(f"Error finding phynteny_utils package via importlib.resources: {e}")
+    
+    # Add fallback paths just to be safe
+    # Check in the same directory as models
+    models_parent = os.path.dirname(args.models)
+    fallback_path = os.path.join(models_parent, "phynteny_utils", "integer_category.pkl")
+    potential_int_paths.append(fallback_path)
+    
+    # Check relative to script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    script_path = os.path.join(script_dir, "phynteny_utils", "integer_category.pkl")
+    potential_int_paths.append(script_path)
+    
+    # Try all potential paths
+    for path in potential_int_paths:
+        if os.path.exists(path):
+            integer_file_path = path
+            logger.info(f"Found integer_category.pkl at: {integer_file_path}")
+            break
+    
+    if integer_file_path is None or not os.path.exists(integer_file_path):
+        logger.error("integer_category.pkl not found in any expected location:")
+        for path in potential_int_paths:
+            logger.info(f"  - {path}")
+        sys.exit("Critical error: integer_category.pkl is missing. Please ensure it is correctly installed.")
+    
+    logger.info(f"Using integer_category.pkl from: {integer_file_path}")
+
     # read in needed info on PHROGS 
     category_dict, phrog_integer_category = format_data.read_annotations_information()
 

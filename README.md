@@ -9,7 +9,7 @@
 
 To run the Phynteny Transformer, you need the following dependencies:
 
-- Python 3.8+
+- Python 3.9+
 - torch
 - numpy
 - pandas
@@ -41,7 +41,7 @@ Before you can run phynteny you'll need to install some databases
 
 ### Quick Start 
 ```
-phynteny_transformer  test_data/test_phage.gbk -o test_output
+phynteny_transformer  test_data/test_phages.gbk -o test_output
 ```
 
 
@@ -54,8 +54,16 @@ phynteny_transformer  test_data/test_phage.gbk -o test_output
 ### Brief Overview 
 ![Brief Overview](Figure1.2.svg)
 
+### Advanced Usage
 
+Phynteny Transformer provides an advanced mode for specifying the parameters of a model that you trained yourself. To see all advanced options:
+```
+phynteny_transformer --help --advanced
+```
 
+### Training Custom Models
+
+Phynteny Transformer allows you to train your own custom models. To train a model, you need to provide a dataset in the required format and specify the training parameters. For more details, refer to the documentation in the train_transformer directory. 
 
 ## Bugs and Suggestions 
 If you break Phynteny or would like to make any suggestions please open an issue or email me at susie.grigson@gmail.com and I'll try to get back to you. 

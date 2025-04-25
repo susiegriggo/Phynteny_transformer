@@ -769,21 +769,22 @@ def read_annotations_information():
         if not os.path.exists(integer_file_path):
             alternate_paths = [
                 "phynteny_utils/integer_category.pkl",  # Original path
-                os.path.join(os.path.dirname(__file__), '../phynteny_utils/integer_category.pkl')
+                os.path.join(os.path.dirname(__file__), '../phynteny_utils/integer_category.pkl'),
+                os.path.join(os.path.dirname(__file__), 'phynteny_utils/integer_category.pkl')
             ]
             for path in alternate_paths:
                 if os.path.exists(path):
                     integer_file_path = path
                     break
-                    
+            else:
+                raise FileNotFoundError("integer_category.pkl not found in any known locations.")
+        
         logger.info(f"Using integer category file: {integer_file_path}")
         phrog_integer = pickle.load(open(integer_file_path, "rb"))
         
     except (pkg_resources.DistributionNotFound, FileNotFoundError) as e:
         logger.error(f"Error finding integer_category.pkl: {e}")
-        # Fallback to original path
-        logger.warning("Falling back to hardcoded path")
-        phrog_integer = pickle.load(open("phynteny_utils/integer_category.pkl", "rb"))
+        sys.exit("Critical error: integer_category.pkl file is missing. Please ensure it is correctly installed.")
     
     phrog_integer = dict(
         zip(
