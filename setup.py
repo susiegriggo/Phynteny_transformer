@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
-
-import glob
-import os
-import setuptools 
+import setuptools
+import os 
 
 def get_version():
     with open("VERSION", "r") as f:
@@ -14,10 +12,26 @@ with open("README.md", "r") as fh:
 packages = setuptools.find_packages(include=['phynteny_utils', 'phynteny_utils.*', 'train_transformer', 'train_transformer.*', 'src'])
 print("Packages found:", packages)
 
-# Define package_data to include directory structure but not necessarily the model files
+# Create the phynteny_utils directory and models subdirectory if they don't exist
+phynteny_utils_dir = "phynteny_utils"
+if not os.path.exists(phynteny_utils_dir):
+    os.makedirs(phynteny_utils_dir, exist_ok=True)
+    # Create an empty __init__.py file
+    with open(os.path.join(phynteny_utils_dir, "__init__.py"), "w") as f:
+        pass
+
+# Create the models subdirectory
+models_dir = os.path.join(phynteny_utils_dir, "models")
+if not os.path.exists(models_dir):
+    os.makedirs(models_dir, exist_ok=True)
+    # Create an empty __init__.py file
+    with open(os.path.join(models_dir, "__init__.py"), "w") as f:
+        pass
+
+# Define package_data to include files in the phynteny_utils directory
 package_data = {
-    "phynteny_utils": ["*"],
-    "phynteny_utils.models": ["__init__.py"],  # Just include the package marker
+    "phynteny_utils": ["*"],  # Include all files directly in phynteny_utils
+    "phynteny_utils.models": ["*"],  # Include all files in models subdirectory
     "phynteny_utils.phrog_annotation_info": ["*"],
 }
 
@@ -60,7 +74,7 @@ setuptools.setup(
             "generate_training_data=train_phynteny.generate_training_data:main",
             "train_model=train_phynteny.train_phyntenty:main",
             "compute_confidence=train_phynteny.compute_confidence:main",
-            "install_models=phynteny_utils.install_models:main",
+            "install_models=src.install_models:main",
         ],
     },
     classifiers=[

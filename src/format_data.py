@@ -48,27 +48,55 @@ def instantiate_dir(output_dir, force):
     :param output_dir: path to the output directory
     :param force: boolean indicating whether to force overwrite existing directory
     """
-
-    # remove the existing outdir on force
-    if force == True:
-        if os.path.isdir(output_dir) == True:
-            shutil.rmtree(output_dir)
-
-        else:
-            print(
-                "\n--force was specficied even though the output directory does not exist \n"
-            )
-
-    # make directory if force is not specified
-    else:
-        if os.path.isdir(output_dir) == True:
+    # Check if directory exists first, before any processing
+    if os.path.isdir(output_dir):
+        # If directory exists and force is not specified, exit immediately
+        if not force:
             sys.exit(
-                "\nOutput directory already exists and force was not specified. Please specify -f or --force to overwrite the output directory. \n"
+                "\nOutput directory already exists and force was not specified. "
+                "Please specify -f or --force to overwrite the output directory.\n"
             )
+        else:
+            # Only try to remove if force is true and dir exists
+            try:
+                # Try to remove the directory with its contents
+                shutil.rmtree(output_dir, ignore_errors=True)
+                
+                # If the directory still exists, try a more aggressive approach
+                if os.path.exists(output_dir):
+                    logger.warning(f"Could not completely remove {output_dir} with shutil.rmtree. Trying manual deletion.")
+                    for root, dirs, files in os.walk(output_dir, topdown=False):
+                        for name in files:
+                            try:
+                                os.remove(os.path.join(root, name))
+                            except OSError as e:
+                                logger.warning(f"Could not remove file {os.path.join(root, name)}: {e}")
+                        for name in dirs:
+                            try:
+                                os.rmdir(os.path.join(root, name))
+                            except OSError as e:
+                                logger.warning(f"Could not remove directory {os.path.join(root, name)}: {e}")
+                    try:
+                        os.rmdir(output_dir)
+                    except OSError as e:
+                        logger.warning(f"Could not remove root directory {output_dir}: {e}")
+            except Exception as e:
+                logger.error(f"Error removing directory {output_dir}: {e}")
+                sys.exit(1)
+    elif force:
+        # If directory doesn't exist but force was specified, just inform user
+        print("\n--force was specified even though the output directory does not exist\n")
 
-    # instantiate the output directory
-    os.mkdir(output_dir)
-
+    # Create the output directory
+    try:
+        if not os.path.exists(output_dir):
+            os.mkdir(output_dir)
+        elif force:
+            # If we get here, it means force=True but directory still exists
+            logger.warning(f"Directory {output_dir} still exists despite removal attempt. Continuing since --force was specified.")
+    except Exception as e:
+        logger.error(f"Error creating directory {output_dir}: {e}")
+        sys.exit(1)
 
 
 def is_gzip_file(f):
