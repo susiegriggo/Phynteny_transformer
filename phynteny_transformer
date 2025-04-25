@@ -7,20 +7,23 @@ import sys
 import time
 
 # Third-party library imports
-import click
-from importlib_resources import files
 from loguru import logger
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
+
+# Python 3.9+
+from importlib.resources import files
+
+
 # BioPython imports
-from Bio import Seq, SeqIO, SeqRecord
-from Bio.SeqFeature import FeatureLocation, SeqFeature
+from Bio import  SeqIO
 
 # Local application imports
 sys.path.append(os.path.join(os.path.dirname(__file__), 'src'))
-from src import format_data, model_onehot, predictor
+from src import format_data,  predictor
+from src import advanced_argparse
 
 __author__ = "Susanna Grigson"
 __maintainer__ = "Susanna Grigson"
@@ -29,117 +32,274 @@ __version__ = "0"
 __email__ = "susie.grigson@flinders.edu.au"
 __status__ = "development"
 
-@click.command()
-@click.argument("infile", type=click.Path(exists=True))
-@click.option(
-    "-o",
-    "--out",
-    type=click.STRING,
-    default="phynteny",
-    help="output directory",
-    required=True,
-)
-@click.option(
-    "--prefix",
-    type=click.STRING,
-    default="phynteny",
-    help="output prefix",
-    required=False,
-)
-@click.option(
-    "--esm_model",
-    default="facebook/esm2_t33_650M_UR50D",
-    type=click.Choice([
-        "facebook/esm2_t48_15B_UR50D",
-        "facebook/esm2_t6_8M_UR50D",
-        "facebook/esm2_t12_35M_UR50D",
-        "facebook/esm2_t30_150M_UR50D",
-        "facebook/esm2_t33_650M_UR50D"
-    ], case_sensitive=True),
-    help="Specify path to esm model if not the default",
-    required=False,
-)
+def parse_arguments():
+    parser = advanced_argparse.AdvancedArgumentParser(description="Phynteny Transformer")
+    
+    # Basic arguments (always visible)
+    parser.add_basic_argument("infile", help="Input GenBank file", metavar="INFILE")
+    parser.add_basic_argument(
+        "-o", "--out", 
+        type=str, 
+        default="phynteny", 
+        help="Output directory",
+        required=True
+    )
+    parser.add_basic_argument(
+        "--prefix", 
+        type=str, 
+        default="phynteny", 
+        help="Output prefix"
+    )
+    parser.add_basic_argument(
+        "--esm_model",
+        default="facebook/esm2_t33_650M_UR50D",
+        choices=[
+            "facebook/esm2_t48_15B_UR50D",
+            "facebook/esm2_t6_8M_UR50D",
+            "facebook/esm2_t12_35M_UR50D",
+            "facebook/esm2_t30_150M_UR50D",
+            "facebook/esm2_t33_650M_UR50D"
+        ],
+        help="Specify path to ESM model if not the default"
+    )
+    parser.add_basic_argument(
+        "-m", "--models",
+        type=str,
+        help="Path to the models to use for predictions",
+        default=None  # Changed to None so we can handle it more carefully later
+    )
+    parser.add_basic_argument(
+        "-f", "--force", 
+        action="store_true", 
+        help="Overwrite output directory"
+    )
+    parser.add_basic_argument(
+        "--batch-size", 
+        type=int, 
+        default=128, 
+        help="Batch size for processing data"
+    )
+    parser.add_basic_argument(
+        "--confidence-threshold", 
+        type=float, 
+        default=0.8, 
+        help="Confidence threshold for high-confidence predictions (0.0-1.0)"
+    )
+    parser.add_basic_argument(
+        "--debug", 
+        action="store_true", 
+        help="Enable verbose debug logging to console"
+    )
+    parser.add_basic_argument(
+        "--version", 
+        action="version", 
+        version=f"%(prog)s {__version__}"
+    )
+    
+    # Advanced arguments (hidden by default)
+    parser.add_advanced_argument(
+        "--input-dim", 
+        type=int, 
+        default=1280, 
+        help="Input dimension for the model"
+    )
+    parser.add_advanced_argument(
+        "--num-classes", 
+        type=int, 
+        default=9, 
+        help="Number of classes for the model"
+    )
+    parser.add_advanced_argument(
+        "--num-heads", 
+        type=int, 
+        default=8, 
+        help="Number of attention heads for the model"
+    )
+    parser.add_advanced_argument(
+        "--hidden-dim", 
+        type=int, 
+        default=512, 
+        help="Hidden dimension for the model"
+    )
+    parser.add_advanced_argument(
+        "--lstm-hidden-dim", 
+        type=int, 
+        default=512, 
+        help="LSTM hidden dimension for the model"
+    )
+    parser.add_advanced_argument(
+        "--no-lstm", 
+        action="store_true", 
+        help="Specify if LSTM should not be used in the model"
+    )
+    parser.add_advanced_argument(
+        "--max-len", 
+        type=int, 
+        default=1500, 
+        help="Maximum length for the model"
+    )
+    parser.add_advanced_argument(
+        "--protein-dropout-rate", 
+        type=float, 
+        default=0.6, 
+        help="Dropout rate for protein features"
+    )
+    parser.add_advanced_argument(
+        "--attention", 
+        choices=["absolute", "relative", "circular"], 
+        default="circular", 
+        help="Type of attention mechanism to use"
+    )
+    parser.add_advanced_argument(
+        "--positional-encoding-type", 
+        choices=["fourier", "sinusoidal"], 
+        default="sinusoidal", 
+        help="Type of positional encoding to use"
+    )
+    parser.add_advanced_argument(
+        "--pre-norm", 
+        action="store_true", 
+        default=False, 
+        help="Use pre-normalization in transformer layers instead of post-normalization"
+    )
+    parser.add_advanced_argument(
+        "--progressive-dropout", 
+        action="store_true", 
+        default=True, 
+        help="Enable progressive dropout for protein features"
+    )
+    parser.add_advanced_argument(
+        "--initial-dropout-rate", 
+        type=float, 
+        default=1.0, 
+        help="Initial dropout rate when using progressive dropout"
+    )
+    parser.add_advanced_argument(
+        "--final-dropout-rate", 
+        type=float, 
+        default=0.4, 
+        help="Final dropout rate when using progressive dropout"
+    )
+    parser.add_advanced_argument(
+        "--output-dim", 
+        type=int, 
+        default=None, 
+        help="Output dimension for the model. Defaults to num_classes if not specified"
+    )
+    parser.add_advanced_argument(
+        "--num-layers", 
+        type=int, 
+        default=2, 
+        help="Number of transformer layers"
+    )
+    parser.add_advanced_argument(
+        "--dropout", 
+        type=float, 
+        default=0.1, 
+        help="Dropout rate for the model"
+    )
+    
+    return parser.parse_args()
 
-@click.option(
-    "-m", 
-    "--models",
-    type=click.Path(exists=True),
-    help="Path to the models to use for predictions",
-    default=os.path.join(os.path.dirname(__file__), 'phynteny_utils', 'models')
-)
-
-@click.option("-f", "--force", is_flag=True, help="Overwrite output directory")
-
-# Model configuration options
-@click.option('--input-dim', default=1280, help='Input dimension for the model.')
-@click.option('--num-classes', default=9, help='Number of classes for the model.')
-@click.option('--num-heads', default=8, help='Number of attention heads for the model.')
-@click.option('--hidden-dim', default=512, help='Hidden dimension for the model.')
-@click.option('--lstm-hidden-dim', default=512, help='LSTM hidden dimension for the model.')
-@click.option('--no-lstm', is_flag=True, help='Specify if LSTM should not be used in the model.')
-@click.option('--max-len', default=1500, help='Maximum length for the model.')
-@click.option('--protein-dropout-rate', default=0.6, help='Dropout rate for protein features.')
-@click.option('--attention', type=click.Choice(['absolute', 'relative', 'circular']), default='circular', help='Type of attention mechanism to use.')
-@click.option('--positional-encoding-type', type=click.Choice(['fourier', 'sinusoidal']), default='sinusoidal', help='Type of positional encoding to use.')
-@click.option('--pre-norm', is_flag=True, default=False, help='Use pre-normalization in transformer layers instead of post-normalization.')
-@click.option('--progressive-dropout', is_flag=True, default=True, help='Enable progressive dropout for protein features.')
-@click.option('--initial-dropout-rate', default=1.0, help='Initial dropout rate when using progressive dropout.')
-@click.option('--final-dropout-rate', default=0.4, help='Final dropout rate when using progressive dropout.')
-@click.option('--output-dim', default=None, type=int, help='Output dimension for the model. Defaults to num_classes if not specified.')
-@click.option('--num-layers', default=2, help='Number of transformer layers.')
-@click.option('--dropout', default=0.1, help='Dropout rate for the model.')
-@click.option('--batch-size', default=128, help='Batch size for processing data.')
-@click.option('--confidence-threshold', default=0.8, type=float, help='Confidence threshold for high-confidence predictions (0.0-1.0).')
-@click.option('--debug', is_flag=True, help='Enable verbose debug logging to console.')
-
-@click.version_option(version=__version__)
-
-def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, num_heads, 
-         hidden_dim, lstm_hidden_dim, no_lstm, max_len, protein_dropout_rate, attention, 
-         positional_encoding_type, pre_norm, progressive_dropout, initial_dropout_rate, 
-         final_dropout_rate, output_dim, num_layers, dropout, batch_size, confidence_threshold,
-         debug):
-
+def main():
+    args = parse_arguments()
+    
     start_time = time.time()
     # instantiate output directory 
-    format_data.instantiate_output_directory(out, force)
+    format_data.instantiate_output_directory(args.out, args.force)
     
     # Configure logging based on debug flag
-    if debug:
+    if args.debug:
         # When debug mode is enabled:
         # 1. Always log DEBUG level to the log file
         # 2. Also show DEBUG level logs on the console
         logger.remove()  # Remove default handlers
         logger.add(sys.stderr, level="DEBUG")  # Add console handler with DEBUG level
-        logger.add(out + "/phynteny.log", level="DEBUG")  # Add file handler
+        logger.add(args.out + "/phynteny.log", level="DEBUG")  # Add file handler
         logger.info("Debug mode enabled - showing verbose logs")
     else:
         # Normal mode: DEBUG to file, INFO to console
         logger.remove()  # Remove default handlers
         logger.add(sys.stderr, level="INFO")  # Add console handler with INFO level
-        logger.add(out + "/phynteny.log", level="DEBUG")  # Add file handler
+        logger.add(args.out + "/phynteny.log", level="DEBUG")  # Add file handler
     
-    # Check if the models directory exists
-    if not os.path.exists(models):
-        logger.error(f"Models directory does not exist: {models}")
+    # Determine the models directory path
+    if args.models is None:
+        # Try multiple possible locations for models
+        potential_paths = []
+        
+        # Try site-packages location first (where install_models puts them)
+        try:
+            # Use importlib.resources instead of pkg_resources
+            try:
+                # For Python 3.9+
+                phynteny_utils_dir = str(files('phynteny_utils').joinpath(''))
+            except (ImportError, AttributeError):
+                # Fallback for older Python or if module not found
+                try:
+                    import phynteny_utils
+                    phynteny_utils_dir = os.path.dirname(phynteny_utils.__file__)
+                except (ImportError, AttributeError):
+                    phynteny_utils_dir = None
+                    
+            if phynteny_utils_dir:
+                site_packages_path = os.path.join(phynteny_utils_dir, "models")
+                potential_paths.append(site_packages_path)
+        except Exception as e:
+            logger.debug(f"Error finding phynteny_utils package: {e}")
+            
+        # Try bin directory location (where script might be looking)
+        bin_dir = os.path.dirname(sys.executable)
+        bin_path = os.path.join(bin_dir, "phynteny_utils", "models")
+        potential_paths.append(bin_path)
+        
+        # Try path relative to the script
+        script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'phynteny_utils', 'models')
+        potential_paths.append(script_path)
+        
+        # Use the first path that exists and contains model files
+        for path in potential_paths:
+            if os.path.exists(path) and any(f.endswith('.model') for f in os.listdir(path) if os.path.isfile(os.path.join(path, f))):
+                args.models = path
+                logger.info(f"Found models at: {path}")
+                break
+    
+    # If no models directory was found or specified, show error
+    if args.models is None or not os.path.exists(args.models):
+        logger.error("Could not find models directory")
+        logger.info("Checked the following locations:")
+        for path in potential_paths:
+            logger.info(f"  - {path}")
+        logger.info("You may need to run 'install_models' to download the models.")
+        logger.info("Example: install_models -o /path/to/store/models")
+        logger.info("Then run this command with: -m /path/to/store/models")
         sys.exit(1)
-    else:
-        logger.info(f"Models directory exists: {models}")
+    
+    # Check for model files directly in the directory
+    model_files = [f for f in os.listdir(args.models) if f.endswith('.model')]
+    if not model_files:
+        logger.error(f"No model files found in: {args.models}")
+        logger.info("You need to run 'install_models' to download the models.")
+        logger.info("Example: install_models -o /path/to/store/models")
+        logger.info("Then run this command with: -m /path/to/store/models")
+        sys.exit(1)
+    
+    logger.info(f"Found {len(model_files)} model files in: {args.models}")
 
     # read in needed info on PHROGS 
-    category_dict, phrog_integer_category = format_data.read_annotations_information() # what this this method even doing? 
+    category_dict, phrog_integer_category = format_data.read_annotations_information()
 
     # Determine whether to use LSTM based on the --no-lstm flag
-    use_lstm = not no_lstm
+    use_lstm = not args.no_lstm
 
     # preamble 
     logger.info(f'Starting Phynteny transformer v{__version__}') 
-    logger.info(f'Command executed: in={infile}, out={out}, esm_model={esm_model}, models={models}, force={force}')
+    logger.info(f'Command executed: in={args.infile}, out={args.out}, esm_model={args.esm_model}, models={args.models}, force={args.force}')
     logger.info(f'Repository homepage is https://github.com/susiegriggo/Phynteny_transformer/tree/main')
     logger.info(f"Written by {__author__}: {__email__}")
 
     # read in genbank file
-    gb_dict = format_data.read_genbank_file(infile, phrog_integer_category) # what categories the genes belong to is missing 
+    gb_dict = format_data.read_genbank_file(args.infile, phrog_integer_category)
     logger.info("Genbank file read")
     
     # Log initial data dimensions
@@ -154,10 +314,10 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
         else:
             logger.warning(f"Genome {genome_id} does not have expected structure")
 
-    # Extract fasta from thqe genbank files
+    # Extract fasta from the genbank files
     logger.info("Extracting fasta from genbank")
     data_keys = list(gb_dict.keys())
-    fasta_out = os.path.join(out, f"{prefix}.fasta")
+    fasta_out = os.path.join(args.out, f"{args.prefix}.fasta")
     records = [gb_dict.get(k).get("sequence") for k in data_keys]
     with open(fasta_out, "w") as output_handle:
         for r in records:
@@ -168,7 +328,7 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     logger.info("Computing ESM embeddings")
     logger.info("... if step is being slow consider using GPU!")
     embeddings = format_data.extract_embeddings(
-        fasta_out, out, model_name=esm_model
+        fasta_out, args.out, model_name=args.esm_model
     )
 
     # Prepare data
@@ -202,38 +362,38 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     p = predictor.Predictor(device=device)
     
-    logger.info(f"Reading models from directory: {models}")
-    logger.info(f"Model parameters: input_dim={input_dim}, num_classes={num_classes}, num_heads={num_heads}, "
-                f"hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={dropout}, "
-                f"use_lstm={use_lstm}, max_len={max_len}, protein_dropout_rate={protein_dropout_rate}, "
-                f"attention={attention}, positional_encoding_type={positional_encoding_type}, "
-                f"pre_norm={pre_norm}, progressive_dropout={progressive_dropout}, "
-                f"initial_dropout_rate={initial_dropout_rate}, final_dropout_rate={final_dropout_rate}, "
-                f"output_dim={output_dim}, num_layers={num_layers}")
+    logger.info(f"Reading models from directory: {args.models}")
+    logger.info(f"Model parameters: input_dim={args.input_dim}, num_classes={args.num_classes}, num_heads={args.num_heads}, "
+                f"hidden_dim={args.hidden_dim}, lstm_hidden_dim={args.lstm_hidden_dim}, dropout={args.dropout}, "
+                f"use_lstm={use_lstm}, max_len={args.max_len}, protein_dropout_rate={args.protein_dropout_rate}, "
+                f"attention={args.attention}, positional_encoding_type={args.positional_encoding_type}, "
+                f"pre_norm={args.pre_norm}, progressive_dropout={args.progressive_dropout}, "
+                f"initial_dropout_rate={args.initial_dropout_rate}, final_dropout_rate={args.final_dropout_rate}, "
+                f"output_dim={args.output_dim}, num_layers={args.num_layers}")
                 
     p.read_models_from_directory(
-        models, 
-        input_dim=input_dim, 
-        num_classes=num_classes, 
-        num_heads=num_heads, 
-        hidden_dim=hidden_dim, 
-        lstm_hidden_dim=lstm_hidden_dim, 
-        dropout=dropout, 
+        args.models, 
+        input_dim=args.input_dim, 
+        num_classes=args.num_classes, 
+        num_heads=args.num_heads, 
+        hidden_dim=args.hidden_dim, 
+        lstm_hidden_dim=args.lstm_hidden_dim, 
+        dropout=args.dropout, 
         use_lstm=use_lstm, 
-        max_len=max_len, 
-        protein_dropout_rate=protein_dropout_rate, 
-        attention=attention, 
-        positional_encoding_type=positional_encoding_type, 
-        pre_norm=pre_norm, 
-        progressive_dropout=progressive_dropout, 
-        initial_dropout_rate=initial_dropout_rate, 
-        final_dropout_rate=final_dropout_rate, 
-        output_dim=output_dim,
-        num_layers=num_layers
+        max_len=args.max_len, 
+        protein_dropout_rate=args.protein_dropout_rate, 
+        attention=args.attention, 
+        positional_encoding_type=args.positional_encoding_type, 
+        pre_norm=args.pre_norm, 
+        progressive_dropout=args.progressive_dropout, 
+        initial_dropout_rate=args.initial_dropout_rate, 
+        final_dropout_rate=args.final_dropout_rate, 
+        output_dim=args.output_dim,
+        num_layers=args.num_layers
     )
 
     # Read the confidence_dict from a pickled file
-    confidence_dict_path = os.path.join(models, "confidence_dict.pkl")
+    confidence_dict_path = os.path.join(args.models, "confidence_dict.pkl")
     if os.path.exists(confidence_dict_path):
         with open(confidence_dict_path, 'rb') as f:
             confidence_dict = pickle.load(f)
@@ -245,8 +405,7 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     logger.info("Making predictions using batch inference")
     
     # Use the batch inference method
-    all_scores = p.predict_inference(X, y, batch_size=batch_size)
-    #logger.info(f'all_scores: {all_scores}')
+    all_scores = p.predict_inference(X, y, batch_size=args.batch_size)
     
     # Convert all_scores format to match what's expected by compute_confidence
     scores = [all_scores[key] for key in all_scores.keys()]
@@ -310,7 +469,7 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     logger.info("Creating SeqRecord objects for GenBank output")
         
     logger.info(f"Writing predictions to genbank file")
-    genbank_file = out + "/phynteny.gbk"
+    genbank_file = args.out + "/phynteny.gbk"
 
     # Create the categories map from confidence_dict
     categories_map = dict(zip(range(len(confidence_dict.keys())), confidence_dict.keys()))
@@ -328,7 +487,7 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
         predictions, 
         scores, 
         confidence_scores,
-        threshold=confidence_threshold,
+        threshold=args.confidence_threshold,
         categories_map=categories_map
     )
     
@@ -340,7 +499,7 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
     logger.info(f"Number of confidence score arrays: {len(confidence_scores)}")
     
     # Generate the table
-    table_file = out + "/phynteny.tsv"
+    table_file = args.out + "/phynteny.tsv"
     format_data.generate_table(
         table_file, 
         gb_dict, 
@@ -359,4 +518,4 @@ def main(infile, out, esm_model, models, force, prefix, input_dim, num_classes, 
 
 if __name__ == "__main__":
     main()
-
+    main()
