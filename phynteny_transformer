@@ -16,7 +16,6 @@ from torch.utils.data import DataLoader
 # Python 3.9+
 from importlib.resources import files
 
-
 # BioPython imports
 from Bio import  SeqIO
 
@@ -475,7 +474,7 @@ def main():
         logger.error(f"Prediction count mismatch: {len(predictions)} prediction arrays vs {len(scores)} score arrays")
     
     # Debug logging for batching and padding issues
-    logger.info("Checking gene predictions against GenBank data - padding may affect results")
+    logger.debug("Checking gene predictions against GenBank data - padding may affect results")
     
     # Check gene count for each genome in predictions
     for i, (genome_id, genome_scores) in enumerate(zip(X.keys(), scores)):
@@ -491,19 +490,30 @@ def main():
                              f"predictions: {num_predictions}")
                 
                 if num_genes_gb != num_predictions:
-                    logger.warning(f"Gene prediction mismatch for genome {genome_id}: gb_dict={num_genes_gb}, "
-                                  f"X tensor={num_genes_X}, predictions={num_predictions}")
+                    logger.debug(f"Batch padding detected for genome {genome_id}: actual genes={num_genes_gb}, padded predictions={num_predictions}")
                     
                     # Check if the predictions array contains padding
                     if num_predictions > num_genes_gb:
-                        logger.info(f"Predictions may contain padding - will truncate to match gene count")
+                        logger.debug(f"Adjusting predictions by removing batch padding to match actual gene count")
                         # Truncate predictions to match actual gene count if needed
                         if i < len(predictions):
                             predictions[i] = predictions[i][:num_genes_gb]
-                            for score_idx in range(len(scores[i])):
-                                if isinstance(scores[i][score_idx], np.ndarray) and len(scores[i][score_idx]) > num_genes_gb:
-                                    scores[i][score_idx] = scores[i][score_idx][:num_genes_gb]
-                            logger.info(f"Truncated predictions for {genome_id}: now {len(predictions[i])} (was {num_predictions})")
+                            # Carefully handle the scores array based on its structure
+                            if isinstance(scores[i], list):
+                                # If scores[i] is a list that needs truncation (list of gene scores)
+                                if len(scores[i]) > num_genes_gb:
+                                    scores[i] = scores[i][:num_genes_gb]
+                            else:
+                                # For array-type scores, only truncate if first dimension matches genes
+                                for score_idx in range(len(scores[i])):
+                                    if isinstance(scores[i][score_idx], np.ndarray):
+                                        # Only truncate if the shape makes sense to truncate
+                                        # This avoids the broadcasting error
+                                        if (len(scores[i][score_idx].shape) > 0 and 
+                                            scores[i][score_idx].shape[0] > num_genes_gb and 
+                                            scores[i][score_idx].shape[0] != args.num_classes):
+                                            scores[i][score_idx] = scores[i][score_idx][:num_genes_gb]
+                            logger.debug(f"Successfully adjusted predictions for {genome_id}: now {len(predictions[i])} genes (removed padding)")
     
     logger.info("Creating SeqRecord objects for GenBank output")
         
