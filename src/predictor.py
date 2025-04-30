@@ -762,26 +762,35 @@ def build_confidence_dict(label, prediction, scores, bandwidth, categories):
         print(f"Category {cat}: TP_scores shape: {TP_scores.shape}, FP_scores shape: {FP_scores.shape}")
 
         if TP_scores.shape[0] == 0 or FP_scores.shape[0] == 0:
-            print(f"Skipping category {cat} due to insufficient data.")
+            logger.warning(f"Skipping category {cat} due to insufficient data (TP: {TP_scores.shape[0]}, FP: {FP_scores.shape[0]}).")
             continue
 
         # loop through potential bandwidths
         for b in bandwidth:
-            # compute the kernel density
-            kde_TP = KernelDensity(kernel="gaussian", bandwidth=b)
-            kde_TP.fit(TP_scores[:, cat].reshape(-1, 1))
-            e_TP = np.exp(kde_TP.score_samples(vals.reshape(-1, 1)))
+            try:
+                # compute the kernel density
+                kde_TP = KernelDensity(kernel="gaussian", bandwidth=b)
+                kde_TP.fit(TP_scores[:, cat].reshape(-1, 1))
+                e_TP = np.exp(kde_TP.score_samples(vals.reshape(-1, 1)))
 
-            kde_FP = KernelDensity(kernel="gaussian", bandwidth=b)
-            kde_FP.fit(FP_scores[:, cat].reshape(-1, 1))
-            e_FP = np.exp(kde_FP.score_samples(vals.reshape(-1, 1)))
+                kde_FP = KernelDensity(kernel="gaussian", bandwidth=b)
+                kde_FP.fit(FP_scores[:, cat].reshape(-1, 1))
+                e_FP = np.exp(kde_FP.score_samples(vals.reshape(-1, 1)))
 
-            conf_kde = (e_TP * len(TP_scores)) / (
-                e_TP * len(TP_scores) + e_FP * len(FP_scores)
-            )
+                conf_kde = (e_TP * len(TP_scores)) / (
+                    e_TP * len(TP_scores) + e_FP * len(FP_scores) + 1e-8  # Add epsilon to avoid division by zero
+                )
 
-            if count_critical_points(conf_kde) <= 1:
-                break
+                if np.isnan(conf_kde).any():
+                    logger.warning(f"NaN values encountered in confidence KDE for category {cat} with bandwidth {b}. Skipping.")
+                    continue
+
+                if count_critical_points(conf_kde) <= 1:
+                    break
+            except Exception as e:
+                logger.error(f"Error during KDE computation for category {cat} with bandwidth {b}: {e}")
+                logger.debug(traceback.format_exc())
+                continue
 
         # save the best estimators
         confidence_dict[categories.get(cat)] = {
@@ -805,10 +814,32 @@ def calculate_confidence(max_prob, prediction, confidence_dict):
     """
     confidence_scores = []
     for prob, pred in zip(max_prob, prediction):
-        if pred in confidence_dict:
-            conf_kde = confidence_dict[pred].get("kde", 0)
-            conf_score = prob * conf_kde
-            confidence_scores.append(conf_score)
-        else:
-            confidence_scores.append(0)  # Default confidence if category is missing
+        try:
+            if pred in confidence_dict:
+                kde_TP = confidence_dict[pred].get("kde_TP")
+                kde_FP = confidence_dict[pred].get("kde_FP")
+                num_TP = confidence_dict[pred].get("num_TP", 0)
+                num_FP = confidence_dict[pred].get("num_FP", 0)
+
+                if kde_TP is None or kde_FP is None or num_TP == 0 or num_FP == 0:
+                    logger.warning(f"Missing or invalid KDE data for category {pred}. Assigning default confidence of 0.")
+                    confidence_scores.append(0)
+                    continue
+
+                e_TP = np.exp(kde_TP.score_samples([[prob]]))
+                e_FP = np.exp(kde_FP.score_samples([[prob]]))
+                conf_score = (e_TP * num_TP) / (e_TP * num_TP + e_FP * num_FP + 1e-8)  # Add epsilon to avoid division by zero
+
+                if np.isnan(conf_score).any():
+                    logger.warning(f"NaN confidence score encountered for category {pred}. Assigning default confidence of 0.")
+                    conf_score = 0
+
+                confidence_scores.append(conf_score)
+            else:
+                logger.warning(f"Category {pred} not found in confidence dictionary. Assigning default confidence of 0.")
+                confidence_scores.append(0)
+        except Exception as e:
+            logger.error(f"Error calculating confidence for category {pred}: {e}")
+            logger.debug(traceback.format_exc())
+            confidence_scores.append(0)  # Default confidence if an error occurs
     return confidence_scores
