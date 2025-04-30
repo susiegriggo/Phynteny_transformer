@@ -700,7 +700,7 @@ class Predictor:
                     num_FP = category_model["num_FP"]
                     
                     # Calculate confidence scores
-                    conf = (e_TP * num_TP) / (e_TP * num_TP + e_FP * num_FP)
+                    conf = (e_TP * num_TP) / (e_TP * num_TP + e_FP * num_FP + 1e-8)  # Add small epsilon to avoid division by zero
                     
                     # Store results
                     all_predictions[g][category_mask] = category
@@ -793,3 +793,22 @@ def build_confidence_dict(label, prediction, scores, bandwidth, categories):
         }
 
     return confidence_dict
+
+def calculate_confidence(max_prob, prediction, confidence_dict):
+    """
+    Calculate confidence scores for predictions.
+
+    :param max_prob: Maximum probability for each prediction
+    :param prediction: Predicted category for each sample
+    :param confidence_dict: Dictionary containing confidence information
+    :return: List of confidence scores
+    """
+    confidence_scores = []
+    for prob, pred in zip(max_prob, prediction):
+        if pred in confidence_dict:
+            conf_kde = confidence_dict[pred].get("kde", 0)
+            conf_score = prob * conf_kde
+            confidence_scores.append(conf_score)
+        else:
+            confidence_scores.append(0)  # Default confidence if category is missing
+    return confidence_scores
