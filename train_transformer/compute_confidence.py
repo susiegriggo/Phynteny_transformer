@@ -362,7 +362,7 @@ def process_batches(p, conf_dataset_loader, device):
 
 def compute_confidence_dict(all_categories, all_labels, all_probs, phrog_integer):
     """
-    Compute the confidence dictionary.
+    Compute the confidence dictionary and calculate confidence scores.
 
     :param all_categories: List of all categories
     :param all_labels: List of all labels
@@ -374,26 +374,91 @@ def compute_confidence_dict(all_categories, all_labels, all_probs, phrog_integer
     logger.info(f"all_categories shape: {all_categories.shape}")
     logger.info(f"all_labels shape: {all_labels.shape}")
     logger.info(f"all_probs shape: {all_probs.shape}")
-    bandwidth = np.arange(0, 5, 0.01)[1:] # have updated to 0.01 to include a greater range of values 
-    c_dict = predictor.build_confidence_dict(all_categories, all_labels, all_probs, bandwidth, phrog_integer)
+    
+    # Step 1: Build the confidence dictionary
+    c_dict = build_confidence_dict(all_categories, all_labels, all_probs, phrog_integer)
+    
+    # Step 2: Calculate confidence scores using the vectorized approach
+    predictions, confidence_values = calculate_prediction_confidences(all_probs, c_dict, phrog_integer)
     
     # Create a detailed prediction dictionary for plotting
     detailed_dict = {
         'scores': all_probs,
         'true_labels': all_categories,
         'predictions': all_labels,
+        'confidence': np.array(confidence_values)
     }
     
-    # Calculate confidence for each prediction
-    confidence_values = []
-    for i, (prediction, prob) in enumerate(zip(all_labels, all_probs)):
-        max_prob = np.max(prob)
-        confidence = predictor.calculate_confidence(max_prob, prediction, c_dict)
-        confidence_values.append(confidence)
-    
-    detailed_dict['confidence'] = np.array(confidence_values)
-    
     return c_dict, detailed_dict
+
+
+def build_confidence_dict(all_categories, all_labels, all_probs, phrog_integer):
+    """
+    Build the confidence dictionary based on training data.
+
+    :param all_categories: List of all categories
+    :param all_labels: List of all labels
+    :param all_probs: List of all probabilities
+    :param phrog_integer: Dictionary mapping phrog annotations to integers
+    :return: Dictionary containing confidence information
+    """
+    bandwidth = np.arange(0, 5, 0.01)[1:]  # Updated to 0.01 for a greater range of values
+    logger.info(f"Building confidence dictionary with bandwidth range: {bandwidth[0]}-{bandwidth[-1]}")
+    
+    # Use the predictor's build_confidence_dict function
+    c_dict = predictor.build_confidence_dict(all_categories, all_labels, all_probs, bandwidth, phrog_integer)
+    
+    # Log the number of categories in the confidence dictionary
+    logger.info(f"Built confidence dictionary with {len(c_dict)} categories")
+    for cat, info in c_dict.items():
+        logger.debug(f"Category {cat}: TP samples={info['num_TP']}, FP samples={info['num_FP']}, bandwidth={info['bandwidth']}")
+    
+    return c_dict
+
+
+def calculate_prediction_confidences(all_probs, c_dict, phrog_integer):
+    """
+    Calculate confidence scores for predictions using a vectorized approach.
+
+    :param all_probs: List of all probabilities
+    :param c_dict: The confidence dictionary
+    :param phrog_integer: Dictionary mapping phrog annotations to integers
+    :return: Tuple of (predictions, confidence_scores)
+    """
+    logger.info("Calculating confidence scores for all predictions")
+    
+    # Prepare the data format for the confidence calculation
+    scores = [all_probs]  # Wrap in list to match predictor.compute_confidence format
+    
+    # Use the predictor's vectorized compute_confidence method
+    try:
+        # Create a predictor instance just for confidence calculation
+        p = predictor.Predictor(device='cpu')  # CPU is fine for this task
+        
+        # Use the vectorized method to calculate confidences for all predictions at once
+        predictions, confidence_scores = p.compute_confidence(scores, c_dict, phrog_integer)
+        
+        # Convert from list of arrays (for multiple genomes) to a flat array (for single set of predictions)
+        if len(predictions) == 1:
+            predictions = predictions[0]
+        if len(confidence_scores) == 1:
+            confidence_scores = confidence_scores[0]
+            
+        logger.info(f"Successfully calculated confidence scores for {len(confidence_scores)} predictions")
+        logger.debug(f"Confidence score range: {min(confidence_scores):.4f} to {max(confidence_scores):.4f}")
+        
+        return predictions, confidence_scores
+        
+    except Exception as e:
+        logger.error(f"Error calculating confidence scores: {e}")
+        logger.debug(traceback.format_exc())
+        
+        # Create fallback predictions and confidences
+        predictions = np.argmax(all_probs, axis=1)
+        confidence_scores = np.zeros(len(predictions))
+        
+        logger.warning(f"Using fallback prediction method due to error. Generated {len(predictions)} predictions with zero confidence.")
+        return predictions, confidence_scores
 
 
 def save_confidence_dict(c_dict, detailed_dict, output_path):
