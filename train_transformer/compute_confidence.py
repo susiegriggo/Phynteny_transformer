@@ -106,9 +106,13 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     logger.info("Creating the dataset and dataloader.")
     conf_dataset_loader = create_dataloader(embeddings, categories, validation_categories, batch_size)
     logger.info("Processing batches.")
-    all_probs, all_categories, all_labels = process_batches(p, conf_dataset_loader, device)
-    c_dict = compute_confidence_dict(all_categories, all_labels, all_probs, phrog_integer)
-    save_confidence_dict(c_dict, output_path)
+    all_probs, all_categories, all_labels, all_protein_ids = process_batches(p, conf_dataset_loader, device)
+    c_dict, detailed_dict = compute_confidence_dict(all_categories, all_labels, all_probs, phrog_integer)
+    
+    # Add protein IDs to the detailed dictionary
+    detailed_dict['protein_ids'] = all_protein_ids
+    
+    save_confidence_dict(c_dict, detailed_dict, output_path)
     logger.info("Finished the computation of confidence scores.")
 
 
@@ -284,11 +288,12 @@ def process_batches(p, conf_dataset_loader, device):
     :param p: Predictor object
     :param conf_dataset_loader: DataLoader object for the dataset
     :param device: Device to use for computation (cpu or cuda)
-    :return: Tuple of all probabilities, all categories, and all labels
+    :return: Tuple of all probabilities, all categories, all labels and protein IDs
     """
     logger.info("Processing batches.")
     all_probs = []
     all_categories = []
+    all_protein_ids = []  # Track protein IDs
     batches = 0
 
     total_batches = len(conf_dataset_loader)
@@ -315,6 +320,7 @@ def process_batches(p, conf_dataset_loader, device):
                     scores_at_idx = scores_at_idx.reshape(1, -1)
                 all_probs.append(scores_at_idx.cpu().numpy())
                 all_categories.append(categories[m][idx[m]].cpu())
+                all_protein_ids.append(conf_dataset_loader.dataset.ids[m])  # Save protein IDs
 
                 # Update masked category counts
                 for cat in categories[m][idx[m]].tolist():
@@ -351,7 +357,7 @@ def process_batches(p, conf_dataset_loader, device):
     logger.info(f"Masked category counts: {masked_category_counts}")
     logger.info(f"Predicted category counts: {predicted_category_counts}")
 
-    return all_probs, all_categories, all_labels
+    return all_probs, all_categories, all_labels, all_protein_ids
 
 
 def compute_confidence_dict(all_categories, all_labels, all_probs, phrog_integer):
@@ -362,27 +368,54 @@ def compute_confidence_dict(all_categories, all_labels, all_probs, phrog_integer
     :param all_labels: List of all labels
     :param all_probs: List of all probabilities
     :param phrog_integer: Dictionary mapping phrog annotations to integers
-    :return: Confidence dictionary
+    :return: Tuple of confidence dictionary and detailed prediction dictionary
     """
     logger.info("Computing the confidence dictionary.")
     logger.info(f"all_categories shape: {all_categories.shape}")
     logger.info(f"all_labels shape: {all_labels.shape}")
     logger.info(f"all_probs shape: {all_probs.shape}")
-    bandwidth = np.arange(0, 5, 0.05)[1:]
+    bandwidth = np.arange(0, 5, 0.01)[1:] # have updated to 0.01 to include a greater range of values 
     c_dict = predictor.build_confidence_dict(all_categories, all_labels, all_probs, bandwidth, phrog_integer)
-    return c_dict
+    
+    # Create a detailed prediction dictionary for plotting
+    detailed_dict = {
+        'scores': all_probs,
+        'true_labels': all_categories,
+        'predictions': all_labels,
+    }
+    
+    # Calculate confidence for each prediction
+    confidence_values = []
+    for i, (prediction, prob) in enumerate(zip(all_labels, all_probs)):
+        max_prob = np.max(prob)
+        confidence = predictor.calculate_confidence(max_prob, prediction, c_dict)
+        confidence_values.append(confidence)
+    
+    detailed_dict['confidence'] = np.array(confidence_values)
+    
+    return c_dict, detailed_dict
 
 
-def save_confidence_dict(c_dict, output_path):
+def save_confidence_dict(c_dict, detailed_dict, output_path):
     """
-    Save the confidence dictionary.
+    Save the confidence dictionary and detailed prediction dictionary.
 
     :param c_dict: Confidence dictionary
+    :param detailed_dict: Detailed prediction dictionary for plotting
     :param output_path: Path to save the confidence dictionary
     """
     logger.info("Saving the confidence dictionary.")
     with open(output_path, 'wb') as f:
         pickle.dump(c_dict, f)
+    
+    # Save detailed prediction dictionary for plotting
+    detailed_output_path = output_path.replace('.pkl', '_detailed.pkl')
+    if output_path == detailed_output_path:
+        detailed_output_path = output_path + '_detailed.pkl'
+    
+    logger.info(f"Saving detailed prediction data to {detailed_output_path}")
+    with open(detailed_output_path, 'wb') as f:
+        pickle.dump(detailed_dict, f)
 
 
 if __name__ == '__main__':
