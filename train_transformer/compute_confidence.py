@@ -320,7 +320,7 @@ def process_batches(p, conf_dataset_loader, device):
                     scores_at_idx = scores_at_idx.reshape(1, -1)
                 all_probs.append(scores_at_idx.cpu().numpy())
                 all_categories.append(categories[m][idx[m]].cpu())
-                all_protein_ids.append(conf_dataset_loader.dataset.ids[m])  # Save protein IDs
+                all_protein_ids.append(conf_dataset_loader.dataset.labels[m])  # Save protein IDs
 
                 # Update masked category counts
                 for cat in categories[m][idx[m]].tolist():
