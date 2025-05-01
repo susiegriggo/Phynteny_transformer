@@ -1,4 +1,3 @@
-
 import click
 import torch
 from torch.utils.data import DataLoader
@@ -328,4 +327,38 @@ def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
                 'max_calibrated': np.max(calibrated_probs),
             }
             
-            logger.info(f"Class {class_idx}
+            logger.info(f"Class {class_idx} ({class_name}): Brier score improved from {uncalibrated_brier:.4f} to {calibrated_brier:.4f}")
+            logger.info(f"Class {class_idx} ({class_name}): Calibrated probs range: {np.min(calibrated_probs):.4f} to {np.max(calibrated_probs):.4f}")
+            
+        except Exception as e:
+            logger.error(f"Error calibrating class {class_idx}: {e}")
+    
+    logger.info(f"Calibrated {len(calibration_models)} classes")
+    return calibration_models, calibration_stats
+
+def save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer):
+    """
+    Save calibration models and statistics to the output path
+    """
+    logger.info(f"Saving calibration models to {output_path}")
+    
+    # Save calibration models
+    models_path = os.path.join(output_path, "calibration_models.pkl")
+    with open(models_path, 'wb') as f:
+        pickle.dump(calibration_models, f)
+    logger.info(f"Saved calibration models to {models_path}")
+    
+    # Save calibration statistics
+    stats_path = os.path.join(output_path, "calibration_stats.pkl")
+    with open(stats_path, 'wb') as f:
+        pickle.dump(calibration_stats, f)
+    logger.info(f"Saved calibration statistics to {stats_path}")
+    
+    # Save integer to category mapping
+    mapping_path = os.path.join(output_path, "integer_to_category.pkl")
+    with open(mapping_path, 'wb') as f:
+        pickle.dump(phrog_integer, f)
+    logger.info(f"Saved integer to category mapping to {mapping_path}")
+
+if __name__ == "__main__":
+    main()
