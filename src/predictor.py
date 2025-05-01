@@ -714,6 +714,64 @@ class Predictor:
         logger.info(f"Completed confidence calculation for {num_genomes} genomes")
         return all_predictions, all_confidence
 
+    def compute_confidence_isotonic(self, scores, calibration_models, categories):
+        """
+        Compute confidence of predictions using isotonic regression calibration models.
+        
+        :param scores: List of score arrays for the genomes
+        :param calibration_models: Dictionary containing isotonic regression models for each class
+        :param categories: Dictionary of categories mapping to class indices
+        :return: Tuple of predictions and confidence scores lists
+        """
+        # Convert to list if a single score array was provided
+        if isinstance(scores, np.ndarray) and scores.ndim > 1:
+            scores = [scores]
+        
+        num_genomes = len(scores)
+        logger.info(f'Processing isotonic calibration for {num_genomes} genomes')
+        
+        # Create the category mapping
+        categories_map = dict(zip(range(len(calibration_models.keys())), calibration_models.keys()))
+        
+        # Pre-allocate results
+        all_predictions = []
+        all_confidence = []
+        
+        for i, genome_scores in enumerate(scores):
+            # Get predictions for this genome
+            predictions = np.argmax(genome_scores, axis=1)
+            all_predictions.append(predictions)
+            
+            # Initialize confidence scores for this genome
+            confidence_scores = np.zeros(len(predictions), dtype=float)
+            
+            # Apply calibration for each prediction
+            for j, (pred, raw_scores) in enumerate(zip(predictions, genome_scores)):
+                # Get the category name for this prediction
+                category_key = categories_map.get(pred)
+                
+                if category_key in calibration_models:
+                    # Get the isotonic regression model for this category
+                    calibration_model = calibration_models[category_key]
+                    
+                    # Apply the calibration model to the raw score
+                    raw_score = raw_scores[pred]  # Uncalibrated score
+                    try:
+                        calibrated_score = calibration_model.predict([raw_score])[0]
+                        confidence_scores[j] = calibrated_score
+                    except Exception as e:
+                        logger.error(f"Error applying calibration for category {category_key}: {e}")
+                        confidence_scores[j] = raw_score  # Fall back to raw score
+                else:
+                    # If no calibration model exists for this class, use the raw score
+                    logger.warning(f"No calibration model found for category {category_key}, using raw score")
+                    confidence_scores[j] = raw_scores[pred]
+            
+            all_confidence.append(confidence_scores)
+        
+        logger.info(f"Completed isotonic calibration for {num_genomes} genomes")
+        return all_predictions, all_confidence
+
 
 ########
 # Confidence scoring functions
@@ -812,9 +870,21 @@ def calculate_confidence(max_prob, prediction, confidence_dict):
     :param confidence_dict: Dictionary containing confidence information
     :return: List of confidence scores
     """
+    logger.debug(f"Starting calculate_confidence with max_prob={max_prob}, prediction={prediction}")
+    logger.debug(f"Type of max_prob: {type(max_prob)}, Type of prediction: {type(prediction)}")
+
+    # Ensure max_prob and prediction are iterable
+    if not isinstance(max_prob, (list, np.ndarray)):
+        logger.warning(f"max_prob is not iterable. Wrapping it in a list: {max_prob}")
+        max_prob = [max_prob]
+    if not isinstance(prediction, (list, np.ndarray)):
+        logger.warning(f"prediction is not iterable. Wrapping it in a list: {prediction}")
+        prediction = [prediction]
+
     confidence_scores = []
     for prob, pred in zip(max_prob, prediction):
         try:
+            logger.debug(f"Processing prob={prob}, pred={pred}")
             if pred in confidence_dict:
                 kde_TP = confidence_dict[pred].get("kde_TP")
                 kde_FP = confidence_dict[pred].get("kde_FP")
@@ -839,7 +909,9 @@ def calculate_confidence(max_prob, prediction, confidence_dict):
                 logger.warning(f"Category {pred} not found in confidence dictionary. Assigning default confidence of 0.")
                 confidence_scores.append(0)
         except Exception as e:
-            logger.error(f"Error calculating confidence for category {pred}: {e}")
+            logger.error(f"Error calculating confidence for prob={prob}, pred={pred}: {e}")
             logger.debug(traceback.format_exc())
             confidence_scores.append(0)  # Default confidence if an error occurs
+
+    logger.debug(f"Finished calculate_confidence. Confidence scores: {confidence_scores}")
     return confidence_scores
