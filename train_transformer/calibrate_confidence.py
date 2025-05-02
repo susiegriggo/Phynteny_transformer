@@ -107,6 +107,9 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
         calibration_models, calibration_stats, output_path, phrog_integer
     )
     
+    # Save detailed prediction data in the same format as compute_confidence.py
+    save_detailed_prediction_data(raw_scores, output_path)
+    
     logger.info("Calibration completed successfully")
 
 def load_data(embeddings_path, categories_path, validation_categories_path, integer_category_path):
@@ -241,8 +244,17 @@ def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
     calibration_models = {}
     calibration_stats = {}
     
+    # Store original probabilities and true labels
+    raw_scores = {
+        "probabilities": all_probs,
+        "true_labels": all_labels
+    }
+    
     # Create the reverse mapping from integer to category name
     categories_map = dict(zip(range(num_classes), phrog_integer.keys()))
+    
+    # Create arrays to store calibrated probabilities for each sample
+    calibrated_probs = np.zeros_like(all_probs)
     
     # Create isotonic regression model for each class
     for class_idx in range(num_classes):
@@ -266,12 +278,135 @@ def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
             brier = brier_score_loss(y_true_binary, y_pred_proba)
             brier_cal = brier_score_loss(y_true_binary, y_calibrated)
             logloss = log_loss(y_true_binary, y_pred_proba, eps=1e-15)
-            logloss_cal = log_loss(y_true_binary, y_calibrated, eps=1e-15)                        # Store calibration model and statistics            calibration_models[class_name] = {                'calibrator': ir,                'num_samples': len(y_true_binary),                'positive_samples': sum(y_true_binary)            }                        calibration_stats[class_name] = {                'brier_score_raw': brier,                'brier_score_calibrated': brier_cal,                'log_loss_raw': logloss,                'log_loss_calibrated': logloss_cal,                'brier_improvement': (brier - brier_cal) / brier if brier > 0 else 0,                'logloss_improvement': (logloss - logloss_cal) / logloss if logloss > 0 else 0            }                        logger.info(f"  - Samples: {len(y_true_binary)}, Positive: {sum(y_true_binary)}")            logger.info(f"  - Brier score: {brier:.4f} -> {brier_cal:.4f} ({calibration_stats[class_name]['brier_improvement']:.2%} improvement)")            logger.info(f"  - Log loss: {logloss:.4f} -> {logloss_cal:.4f} ({calibration_stats[class_name]['logloss_improvement']:.2%} improvement)")        else:            logger.warning(f"No positive samples for class {class_idx}: {class_name}. Skipping calibration.")        return calibration_models, calibration_statsdef save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer):    """    Save calibration models and statistics to disk    """    logger.info(f"Saving calibration models to {output_path}")        # Save the models    with open(os.path.join(output_path, 'calibration_models.pkl'), 'wb') as f:        pickle.dump(calibration_models, f)        # Save calibration statistics    with open(os.path.join(output_path, 'calibration_stats.pkl'), 'wb') as f:        pickle.dump(calibration_stats, f)    
+            logloss_cal = log_loss(y_true_binary, y_calibrated, eps=1e-15)
+            
+            # Store the calibration model and metrics
+            calibration_models[class_name] = ir
+            calibration_stats[class_name] = {
+                "brier_score_raw": brier,
+                "brier_score_calibrated": brier_cal,
+                "log_loss_raw": logloss,
+                "log_loss_calibrated": logloss_cal,
+                "improvement_brier": brier - brier_cal,
+                "improvement_log_loss": logloss - logloss_cal,
+                "samples_count": sum(y_true_binary)
+            }
+            
+            # Store calibrated probabilities for this class
+            calibrated_probs[:, class_idx] = y_calibrated
+            
+            logger.info(f"Class {class_name} calibration completed")
+    
+    # Add calibrated probabilities and predictions to raw_scores
+    raw_scores["calibrated_probabilities"] = calibrated_probs
+    raw_scores["calibrated_predictions"] = np.argmax(calibrated_probs, axis=1)
+    raw_scores["predictions"] = np.argmax(all_probs, axis=1)
+    raw_scores["confidence"] = np.max(calibrated_probs, axis=1)
+    
+    return calibration_models, calibration_stats, raw_scores
+
+def save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer):
+    """
+    Save calibration models and statistics to files
+    """
+    logger.info("Saving calibration models and statistics")
+    
+    # Create output directories if needed
+    os.makedirs(output_path, exist_ok=True)
+    models_dir = os.path.join(output_path, 'models')
+    os.makedirs(models_dir, exist_ok=True)
+    
+    # Save individual calibration models
+    for class_name, model in calibration_models.items():
+        if model is not None:
+            model_path = os.path.join(models_dir, f"calibration_model_{class_name}.pkl")
+            with open(model_path, 'wb') as f:
+                dump(model, f)
+    
+    # Save all calibration models as a single file
+    all_models_path = os.path.join(output_path, 'calibration_models.pkl')
+    with open(all_models_path, 'wb') as f:
+        dump(calibration_models, f)
+    logger.info(f"Saved calibration models to {all_models_path}")
+    
+    # Save calibration statistics
+    stats_path = os.path.join(output_path, 'calibration_statistics.pkl')
+    with open(stats_path, 'wb') as f:
+        dump(calibration_stats, f)
+    logger.info(f"Saved calibration statistics to {stats_path}")
+    
+    # Save calibration stats as CSV for easy reading
+    stats_csv = []
+    for class_name, stats in calibration_stats.items():
+        if class_name == "overall":
+            continue
+        
+        if "error" in stats:
+            row = {
+                "class": class_name,
+                "error": stats["error"],
+                "samples": stats["samples_count"]
+            }
+        else:
+            row = {
+                "class": class_name,
+                "brier_raw": stats["brier_score_raw"],
+                "brier_cal": stats["brier_score_calibrated"],
+                "logloss_raw": stats["log_loss_raw"],
+                "logloss_cal": stats["log_loss_calibrated"],
+                "brier_improv": stats["improvement_brier"],
+                "logloss_improv": stats["improvement_log_loss"],
+                "samples": stats["samples_count"]
+            }
+        stats_csv.append(row)
+    
+    # Write CSV manually since we're not importing pandas
+    csv_path = os.path.join(output_path, 'calibration_statistics.csv')
+    with open(csv_path, 'w') as f:
+        # Write header
+        if stats_csv:
+            f.write(','.join(stats_csv[0].keys()) + '\n')
+            # Write rows
+            for row in stats_csv:
+                f.write(','.join(str(v) for v in row.values()) + '\n')
+    logger.info(f"Saved calibration statistics as CSV to {csv_path}")
+    
     # Also save a mapping from integer to category name for reference
     with open(os.path.join(output_path, 'category_mapping.pkl'), 'wb') as f:
         pickle.dump(phrog_integer, f)
     
     logger.info("Calibration models and statistics saved successfully")
+
+def save_detailed_prediction_data(raw_scores, output_path):
+    """
+    Save detailed prediction data in a format compatible with compute_confidence.py
+    """
+    detailed_dict = {
+        'scores': raw_scores["probabilities"],
+        'true_labels': raw_scores["true_labels"],
+        'predictions': raw_scores["predictions"],
+        'calibrated_scores': raw_scores["calibrated_probabilities"],
+        'calibrated_predictions': raw_scores["calibrated_predictions"],
+        'confidence': raw_scores["confidence"]
+    }
+    
+    detailed_output_path = os.path.join(output_path, "calibration_detailed.pkl")
+    logger.info(f"Saving detailed prediction data to {detailed_output_path}")
+    
+    with open(detailed_output_path, 'wb') as f:
+        dump(detailed_dict, f)
+    
+    # Also save in a format exactly matching compute_confidence output
+    compute_confidence_format = os.path.join(output_path, "confidence_detailed.pkl")
+    logger.info(f"Saving in compute_confidence compatible format to {compute_confidence_format}")
+    
+    with open(compute_confidence_format, 'wb') as f:
+        dump({
+            'scores': raw_scores["calibrated_probabilities"],
+            'true_labels': raw_scores["true_labels"],
+            'predictions': raw_scores["calibrated_predictions"],
+            'confidence': raw_scores["confidence"]
+        }, f)
 
 if __name__ == "__main__":
     main()
