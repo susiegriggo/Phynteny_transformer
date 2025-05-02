@@ -41,7 +41,7 @@ Before you can run phynteny you'll need to install some databases
 
 ### Quick Start 
 ```
-phynteny_transformer  test_data/test_phages.gbk -o test_output
+phynteny_transformer  test_data/test_phage.gbk -o test_output
 ```
 
 
