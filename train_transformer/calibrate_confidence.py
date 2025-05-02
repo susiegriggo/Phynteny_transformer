@@ -172,24 +172,25 @@ def create_dataloader(embeddings, categories, validation_categories, batch_size=
     """
     Create a DataLoader for the validation data
     """
-    dataset = model_onehot.EmbeddingDataset(
-        list(embeddings.values()),
-        list(categories.values()),
-        list(embeddings.keys()),
-        mask_portion=0  # No masking for calibration
-    )
+    logger.info("Creating the dataset and dataloader.")
     
-    # Set validation mode
-    dataset.set_validation(list(validation_categories.values()), validation=True)
+    # only include data that occurs in both sets 
+    logger.info("Removing categories not in validation set.")
+    include_keys = list(set(categories.keys()).intersection(set(validation_categories.keys())))
+    validation_categories = dict(zip(include_keys, [validation_categories.get(k) for k in include_keys]))
+    categories = dict(zip(include_keys, [categories.get(k) for k in include_keys]))
+    embeddings = dict(zip(include_keys, [embeddings.get(k) for k in include_keys]))
     
-    # Create DataLoader
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        collate_fn=model_onehot.collate_fn
-    )
+    # create the dataset
+    conf_dataset = model_onehot.EmbeddingDataset(
+        list(embeddings.values()), list(categories.values()), list(categories.keys()), mask_portion=0)
     
-    return dataloader
+    # set the validation set
+    logger.info("Setting the validation set.")
+    conf_dataset.set_validation(list(validation_categories.values()))
+    conf_dataset_loader = DataLoader(conf_dataset, batch_size=batch_size, collate_fn=model_onehot.collate_fn)
+    
+    return conf_dataset_loader
 
 def process_batches(p, conf_dataset_loader, device):
     """
