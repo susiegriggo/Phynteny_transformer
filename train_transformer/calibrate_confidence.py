@@ -222,7 +222,7 @@ def process_batches(p, conf_dataset_loader, device):
                 if len(indices) > 0:  # If there are masked tokens
                     for idx in indices:
                         # Get the probability and true label for this token
-                        prob = batch_scores[i][idx].cpu().numpy()
+                        prob = batch_scores[i][idx]#.cpu().numpy()
                         label = categories_batch[i][idx].item()
                         if label != -1:  # Ignore padding tokens
                             all_probs.append(prob)
