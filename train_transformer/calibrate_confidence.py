@@ -92,12 +92,20 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     all_probs, all_labels = process_batches(p, conf_dataset_loader, device)
     
     # Calibrate predictions with isotonic regression
-    calibration_models, calibration_stats = calibrate_probabilities(
+    calibration_models, calibration_stats, raw_scores = calibrate_probabilities(
         all_probs, all_labels, phrog_integer, num_classes
     )
     
+    # Save raw scores for analysis
+    raw_scores_path = os.path.join(output_path, "raw_calibration_scores.pkl")
+    with open(raw_scores_path, 'wb') as f:
+        dump(raw_scores, f)
+    logger.info(f"Saved raw calibration scores to {raw_scores_path}")
+    
     # Save calibration models and statistics
-    save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer)
+    save_calibration_models(
+        calibration_models, calibration_stats, output_path, phrog_integer
+    )
     
     logger.info("Calibration completed successfully")
 
@@ -258,46 +266,7 @@ def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
             brier = brier_score_loss(y_true_binary, y_pred_proba)
             brier_cal = brier_score_loss(y_true_binary, y_calibrated)
             logloss = log_loss(y_true_binary, y_pred_proba, eps=1e-15)
-            logloss_cal = log_loss(y_true_binary, y_calibrated, eps=1e-15)
-            
-            # Store calibration model and statistics
-            calibration_models[class_name] = {
-                'calibrator': ir,
-                'num_samples': len(y_true_binary),
-                'positive_samples': sum(y_true_binary)
-            }
-            
-            calibration_stats[class_name] = {
-                'brier_score_raw': brier,
-                'brier_score_calibrated': brier_cal,
-                'log_loss_raw': logloss,
-                'log_loss_calibrated': logloss_cal,
-                'brier_improvement': (brier - brier_cal) / brier if brier > 0 else 0,
-                'logloss_improvement': (logloss - logloss_cal) / logloss if logloss > 0 else 0
-            }
-            
-            logger.info(f"  - Samples: {len(y_true_binary)}, Positive: {sum(y_true_binary)}")
-            logger.info(f"  - Brier score: {brier:.4f} -> {brier_cal:.4f} ({calibration_stats[class_name]['brier_improvement']:.2%} improvement)")
-            logger.info(f"  - Log loss: {logloss:.4f} -> {logloss_cal:.4f} ({calibration_stats[class_name]['logloss_improvement']:.2%} improvement)")
-        else:
-            logger.warning(f"No positive samples for class {class_idx}: {class_name}. Skipping calibration.")
-    
-    return calibration_models, calibration_stats
-
-def save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer):
-    """
-    Save calibration models and statistics to disk
-    """
-    logger.info(f"Saving calibration models to {output_path}")
-    
-    # Save the models
-    with open(os.path.join(output_path, 'calibration_models.pkl'), 'wb') as f:
-        pickle.dump(calibration_models, f)
-    
-    # Save calibration statistics
-    with open(os.path.join(output_path, 'calibration_stats.pkl'), 'wb') as f:
-        pickle.dump(calibration_stats, f)
-    
+            logloss_cal = log_loss(y_true_binary, y_calibrated, eps=1e-15)                        # Store calibration model and statistics            calibration_models[class_name] = {                'calibrator': ir,                'num_samples': len(y_true_binary),                'positive_samples': sum(y_true_binary)            }                        calibration_stats[class_name] = {                'brier_score_raw': brier,                'brier_score_calibrated': brier_cal,                'log_loss_raw': logloss,                'log_loss_calibrated': logloss_cal,                'brier_improvement': (brier - brier_cal) / brier if brier > 0 else 0,                'logloss_improvement': (logloss - logloss_cal) / logloss if logloss > 0 else 0            }                        logger.info(f"  - Samples: {len(y_true_binary)}, Positive: {sum(y_true_binary)}")            logger.info(f"  - Brier score: {brier:.4f} -> {brier_cal:.4f} ({calibration_stats[class_name]['brier_improvement']:.2%} improvement)")            logger.info(f"  - Log loss: {logloss:.4f} -> {logloss_cal:.4f} ({calibration_stats[class_name]['logloss_improvement']:.2%} improvement)")        else:            logger.warning(f"No positive samples for class {class_idx}: {class_name}. Skipping calibration.")        return calibration_models, calibration_statsdef save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer):    """    Save calibration models and statistics to disk    """    logger.info(f"Saving calibration models to {output_path}")        # Save the models    with open(os.path.join(output_path, 'calibration_models.pkl'), 'wb') as f:        pickle.dump(calibration_models, f)        # Save calibration statistics    with open(os.path.join(output_path, 'calibration_stats.pkl'), 'wb') as f:        pickle.dump(calibration_stats, f)    
     # Also save a mapping from integer to category name for reference
     with open(os.path.join(output_path, 'category_mapping.pkl'), 'wb') as f:
         pickle.dump(phrog_integer, f)

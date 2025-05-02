@@ -721,7 +721,7 @@ class Predictor:
         :param scores: List of score arrays for the genomes
         :param calibration_models: Dictionary containing isotonic regression models for each class
         :param categories: Dictionary of categories mapping to class indices
-        :return: Tuple of predictions and confidence scores lists
+        :return: Tuple of predictions, confidence scores lists, and dictionaries of raw and calibrated scores
         """
         # Convert to list if a single score array was provided
         if isinstance(scores, np.ndarray) and scores.ndim > 1:
@@ -736,44 +736,76 @@ class Predictor:
         # Pre-allocate results
         all_predictions = []
         all_confidence = []
+        raw_scores_dict = {}
+        calibrated_scores_dict = {}
         
         for i, genome_scores in enumerate(scores):
             # Get predictions for this genome
             predictions = np.argmax(genome_scores, axis=1)
             all_predictions.append(predictions)
             
+            # Store raw scores
+            raw_scores_dict[f"genome_{i}"] = genome_scores.copy()
+            
             # Initialize confidence scores for this genome
             confidence_scores = np.zeros(len(predictions), dtype=float)
+            calibrated_scores = np.zeros_like(genome_scores)
             
             # Apply calibration for each prediction
             for j, (pred, raw_scores) in enumerate(zip(predictions, genome_scores)):
-                # Get the category name for this prediction
+                # Get the raw score for the predicted class
+                raw_score = raw_scores[pred]
+                
+                # Get the category key for this prediction
                 category_key = categories_map.get(pred)
                 
+                # Apply calibration if we have a model for this category
                 if category_key in calibration_models:
-                    # Extract the calibration model for this category
                     calibrator = calibration_models[category_key]
                     
-                    # Apply calibration to the raw score
-                    raw_prob = raw_scores[pred]
-                    
-                    # Check if model is a dictionary containing the 'calibrator' key
-                    if isinstance(calibrator, dict) and 'calibrator' in calibrator:
-                        # The model is stored with metadata in a dictionary
-                        calibrated_prob = calibrator['calibrator'].transform([[raw_prob]])[0]
+                    # Transform the raw score using the calibrator
+                    if calibrator is not None:
+                        try:
+                            confidence = calibrator.transform([raw_score])[0]
+                            logger.debug(f"Gene {j}, pred {pred}, cat {category_key}: raw={raw_score}, calibrated={confidence}")
+                        except Exception as e:
+                            logger.warning(f"Error applying calibration for category {category_key}: {e}")
+                            confidence = raw_score  # Use raw score if calibration fails
                     else:
-                        # The model is directly the isotonic regression calibrator
-                        calibrated_prob = calibrator.transform([[raw_prob]])[0]
-                        
-                    confidence_scores[j] = calibrated_prob
+                        confidence = raw_score
                 else:
-                    # If no calibration model exists for this category, use raw probability
-                    confidence_scores[j] = raw_scores[pred]
+                    # No calibrator for this category
+                    logger.warning(f"No calibration model for category {category_key}")
+                    confidence = raw_score
+                
+                # Store the calibrated confidence score
+                confidence_scores[j] = confidence
+                
+                # Apply calibration to all scores for this sample
+                for k, score in enumerate(raw_scores):
+                    cat_key = categories_map.get(k)
+                    if cat_key in calibration_models and calibration_models[cat_key] is not None:
+                        try:
+                            calibrated_scores[j, k] = calibration_models[cat_key].transform([score])[0]
+                        except Exception as e:
+                            calibrated_scores[j, k] = score  # Use raw score if calibration fails
+                    else:
+                        calibrated_scores[j, k] = score
             
+            # Store calibrated scores
+            calibrated_scores_dict[f"genome_{i}"] = calibrated_scores
+            
+            # Add confidence scores for this genome
             all_confidence.append(confidence_scores)
         
         logger.info(f"Completed isotonic calibration for {num_genomes} genomes")
-        return all_predictions, all_confidence
+        
+        # For backward compatibility, return only predictions and confidence
+        # But also make raw and calibrated scores available for debugging
+        self.raw_scores_dict = raw_scores_dict
+        self.calibrated_scores_dict = calibrated_scores_dict
+        
+        return all_predictions, all_confidence, raw_scores_dict, calibrated_scores_dict
 
 
 ########
