@@ -751,20 +751,23 @@ class Predictor:
                 category_key = categories_map.get(pred)
                 
                 if category_key in calibration_models:
-                    # Get the isotonic regression model for this category
-                    calibration_model = calibration_models[category_key]
+                    # Extract the calibration model for this category
+                    calibrator = calibration_models[category_key]
                     
-                    # Apply the calibration model to the raw score
-                    raw_score = raw_scores[pred]  # Uncalibrated score
-                    try:
-                        calibrated_score = calibration_model.predict([raw_score])[0]
-                        confidence_scores[j] = calibrated_score
-                    except Exception as e:
-                        logger.error(f"Error applying calibration for category {category_key}: {e}")
-                        confidence_scores[j] = raw_score  # Fall back to raw score
+                    # Apply calibration to the raw score
+                    raw_prob = raw_scores[pred]
+                    
+                    # Check if model is a dictionary containing the 'calibrator' key
+                    if isinstance(calibrator, dict) and 'calibrator' in calibrator:
+                        # The model is stored with metadata in a dictionary
+                        calibrated_prob = calibrator['calibrator'].transform([[raw_prob]])[0]
+                    else:
+                        # The model is directly the isotonic regression calibrator
+                        calibrated_prob = calibrator.transform([[raw_prob]])[0]
+                        
+                    confidence_scores[j] = calibrated_prob
                 else:
-                    # If no calibration model exists for this class, use the raw score
-                    logger.warning(f"No calibration model found for category {category_key}, using raw score")
+                    # If no calibration model exists for this category, use raw probability
                     confidence_scores[j] = raw_scores[pred]
             
             all_confidence.append(confidence_scores)

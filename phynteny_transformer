@@ -430,14 +430,19 @@ def main():
         num_layers=args.num_layers
     )
 
-    # Read the confidence_dict from a pickled file
-    confidence_dict_path = os.path.join(args.models, "confidence_dict.pkl")
-    if os.path.exists(confidence_dict_path):
-        with open(confidence_dict_path, 'rb') as f:
-            confidence_dict = pickle.load(f)
-        logger.info("Loaded confidence dictionary")
+    # Read the calibration models - only support isotonic regression now
+    calibration_models_path = os.path.join(args.models, "calibration_models.pkl")
+    
+    # Check if calibration models exist
+    if os.path.exists(calibration_models_path):
+        with open(calibration_models_path, 'rb') as f:
+            calibration_models = pickle.load(f)
+        logger.info("Loaded isotonic regression calibration models")
+        logger.info("USING ISOTONIC REGRESSION for confidence calibration")
     else:
-        logger.error(f"Confidence dictionary file does not exist: {confidence_dict_path}")
+        logger.error(f"Calibration models file not found at {calibration_models_path}")
+        logger.error("The isotonic regression calibration models are required.")
+        logger.error("Please ensure you have the latest models installed.")
         sys.exit(1)
 
     logger.info("Making predictions using batch inference")
@@ -445,7 +450,7 @@ def main():
     # Use the batch inference method
     all_scores = p.predict_inference(X, y, batch_size=args.batch_size)
     
-    # Convert all_scores format to match what's expected by compute_confidence
+    # Convert all_scores format to match what's expected by confidence calculation
     scores = [all_scores[key] for key in all_scores.keys()]
     
     logger.debug(f"Number of valid scores collected: {len(scores)}")
@@ -460,8 +465,10 @@ def main():
         if len(genome_ids) > len(scores):
             logger.warning(f"Missing scores for some genomes")
 
-    logger.info("Calculating confidence scores")
-    predictions, confidence_scores = p.compute_confidence(scores, confidence_dict, phrog_integer_category)
+    logger.info("Calculating confidence scores using isotonic regression calibration")
+    
+    # Always use isotonic regression for confidence calculation
+    predictions, confidence_scores = p.compute_confidence_isotonic(scores, calibration_models, phrog_integer_category)
     
     # Check predictions and confidence scores dimensions
     logger.debug(f"Data dimensions after prediction:")
@@ -520,14 +527,14 @@ def main():
     logger.info(f"Writing predictions to genbank file")
     genbank_file = args.out + "/phynteny.gbk"
 
-    # Create the categories map from confidence_dict
-    categories_map = dict(zip(range(len(confidence_dict.keys())), confidence_dict.keys()))
-    
     logger.info("Creating GenBank and table outputs")
     
     # Create ordered list of genome IDs for consistent indexing
     genome_ids = list(gb_dict.keys())
     logger.info(f"Writing GenBank and table data for {len(genome_ids)} genomes")
+    
+    # Create the categories map from calibration_models
+    categories_map = {i: cat_name for i, cat_name in enumerate(calibration_models.keys())}
     
     # Write predictions to GenBank file
     p.write_genbank(
