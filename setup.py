@@ -9,34 +9,33 @@ def get_version():
 with open("README.md", "r") as fh:
     long_description = fh.read()
 
-packages = setuptools.find_packages(include=['phynteny_utils', 'phynteny_utils.*', 'train_transformer', 'train_transformer.*', 'src'])
+packages = setuptools.find_packages()
 print("Packages found:", packages)
 
 # Create the phynteny_utils directory and models subdirectory if they don't exist
-phynteny_utils_dir = "phynteny_utils"
-if not os.path.exists(phynteny_utils_dir):
-    os.makedirs(phynteny_utils_dir, exist_ok=True)
-    # Create an empty __init__.py file
-    with open(os.path.join(phynteny_utils_dir, "__init__.py"), "w") as f:
-        pass
+#phynteny_utils_dir = "phynteny_utils"
+#if not os.path.exists(phynteny_utils_dir):
+#    os.makedirs(phynteny_utils_dir, exist_ok=True)
+#    # Create an empty __init__.py file
+#    with open(os.path.join(phynteny_utils_dir, "__init__.py"), "w") as f:
+#        pass
 
 # Create the models subdirectory
-models_dir = os.path.join(phynteny_utils_dir, "models")
-if not os.path.exists(models_dir):
-    os.makedirs(models_dir, exist_ok=True)
-    # Create an empty __init__.py file
-    with open(os.path.join(models_dir, "__init__.py"), "w") as f:
-        pass
+#models_dir = os.path.join(phynteny_utils_dir, "models")
+#if not os.path.exists(models_dir):
+#    os.makedirs(models_dir, exist_ok=True)
+#    # Create an empty __init__.py file
+#    with open(os.path.join(models_dir, "__init__.py"), "w") as f:
+#        pass
 
 # Define package_data to include files in the phynteny_utils directory
 package_data = {
-    "phynteny_utils": ["*.pkl", "*.tsv"],  # Include all .pkl and .tsv files in phynteny_utils
-    "phynteny_utils.models": ["*"],  # Include all files in models subdirectory
-    "phynteny_utils.phrog_annotation_info": ["*"],  # Include all files in phrog_annotation_info
+    "phynteny_utils": ["phynteny_utils/*"],
+    "train_phynteny": ["train_phynteny/*"], # Include all .pkl and .tsv files in phynteny_utils
 }
 
 # Remove data_files and rely on package_data for installation
-data_files = []
+data_files = [(".", ["LICENSE", "README.md"])]
 
 install_requires = [
         "loguru",
