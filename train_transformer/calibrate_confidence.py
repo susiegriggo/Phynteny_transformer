@@ -172,24 +172,25 @@ def create_dataloader(embeddings, categories, validation_categories, batch_size=
     """
     Create a DataLoader for the validation data
     """
-    dataset = model_onehot.EmbeddingDataset(
-        list(embeddings.values()),
-        list(categories.values()),
-        list(embeddings.keys()),
-        mask_portion=0  # No masking for calibration
-    )
+    logger.info("Creating the dataset and dataloader.")
     
-    # Set validation mode
-    dataset.set_validation(list(validation_categories.values()), validation=True)
+    # only include data that occurs in both sets 
+    logger.info("Removing categories not in validation set.")
+    include_keys = list(set(categories.keys()).intersection(set(validation_categories.keys())))
+    validation_categories = dict(zip(include_keys, [validation_categories.get(k) for k in include_keys]))
+    categories = dict(zip(include_keys, [categories.get(k) for k in include_keys]))
+    embeddings = dict(zip(include_keys, [embeddings.get(k) for k in include_keys]))
     
-    # Create DataLoader
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        collate_fn=model_onehot.collate_fn
-    )
+    # create the dataset
+    conf_dataset = model_onehot.EmbeddingDataset(
+        list(embeddings.values()), list(categories.values()), list(categories.keys()), mask_portion=0)
     
-    return dataloader
+    # set the validation set
+    logger.info("Setting the validation set.")
+    conf_dataset.set_validation(list(validation_categories.values()))
+    conf_dataset_loader = DataLoader(conf_dataset, batch_size=batch_size, collate_fn=model_onehot.collate_fn)
+    
+    return conf_dataset_loader
 
 def process_batches(p, conf_dataset_loader, device):
     """
@@ -222,7 +223,7 @@ def process_batches(p, conf_dataset_loader, device):
                 if len(indices) > 0:  # If there are masked tokens
                     for idx in indices:
                         # Get the probability and true label for this token
-                        prob = batch_scores[i][idx].cpu().numpy()
+                        prob = batch_scores[i][idx]#.cpu().numpy()
                         label = categories_batch[i][idx].item()
                         if label != -1:  # Ignore padding tokens
                             all_probs.append(prob)
@@ -275,10 +276,21 @@ def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
             
             # Compute calibration metrics
             y_calibrated = ir.transform(y_pred_proba)
+            logger.info(f'y_true_binary: {y_true_binary}')
+            logger.info(f'y_pred_proba: {y_pred_proba}')
+            logger.info(f'y_calibrated: {y_calibrated}')
+            y_pred_proba = y_pred_proba/10 # divide by ten to take from a score to a probability 
+            logger.info(f'y_pred_proba adjusted: {y_pred_proba}')
             brier = brier_score_loss(y_true_binary, y_pred_proba)
             brier_cal = brier_score_loss(y_true_binary, y_calibrated)
-            logloss = log_loss(y_true_binary, y_pred_proba, eps=1e-15)
-            logloss_cal = log_loss(y_true_binary, y_calibrated, eps=1e-15)
+
+            # Manually clip probabilities to avoid log(0) issues 
+            y_pred_proba_clipped = np.clip(y_pred_proba, 1e-15, 1-1e-15)
+            y_calibrated_clipped = np.clip(y_calibrated, 1e-15, 1-1e-15)
+
+            # Compute log_loss
+            logloss = log_loss(y_true_binary, y_pred_proba_clipped)#, eps=1e-15)
+            logloss_cal = log_loss(y_true_binary, y_calibrated_clipped)#, eps=1e-15)
             
             # Store the calibration model and metrics
             calibration_models[class_name] = ir
