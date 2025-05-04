@@ -276,10 +276,21 @@ def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
             
             # Compute calibration metrics
             y_calibrated = ir.transform(y_pred_proba)
+            logger.info(f'y_true_binary: {y_true_binary}')
+            logger.info(f'y_pred_proba: {y_pred_proba}')
+            logger.info(f'y_calibrated: {y_calibrated}')
+            y_pred_proba = y_pred_proba/10 # divide by ten to take from a score to a probability 
+            logger.info(f'y_pred_proba adjusted: {y_pred_proba}')
             brier = brier_score_loss(y_true_binary, y_pred_proba)
             brier_cal = brier_score_loss(y_true_binary, y_calibrated)
-            logloss = log_loss(y_true_binary, y_pred_proba, eps=1e-15)
-            logloss_cal = log_loss(y_true_binary, y_calibrated, eps=1e-15)
+
+            # Manually clip probabilities to avoid log(0) issues 
+            y_pred_proba_clipped = np.clip(y_pred_proba, 1e-15, 1-1e-15)
+            y_calibrated_clipped = np.clip(y_calibrated, 1e-15, 1-1e-15)
+
+            # Compute log_loss
+            logloss = log_loss(y_true_binary, y_pred_proba_clipped)#, eps=1e-15)
+            logloss_cal = log_loss(y_true_binary, y_calibrated_clipped)#, eps=1e-15)
             
             # Store the calibration model and metrics
             calibration_models[class_name] = ir
