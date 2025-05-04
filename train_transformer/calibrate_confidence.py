@@ -252,7 +252,9 @@ def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
     }
     
     # use phrog_integer to map the class names
-    categories = list(phrog_integer.keys())
+    categories = list(phrog_integer.values())
+    logger.info(f'phrog_integer: {phrog_integer}')
+    logger.info(f'Calibrated confidence for {categories}')
     
     # Create arrays to store calibrated probabilities for each sample
     calibrated_probs = np.zeros_like(all_probs)
@@ -308,6 +310,8 @@ def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
             calibrated_probs[:, class_idx] = y_calibrated
             
             logger.info(f"Class {class_name} calibration completed")
+        else:
+            logger.info(f"No samples for class {class_name}, skipping calibration")
     
     # Add calibrated probabilities and predictions to raw_scores
     raw_scores["calibrated_probabilities"] = calibrated_probs
