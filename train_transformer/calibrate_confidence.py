@@ -251,15 +251,15 @@ def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
         "true_labels": all_labels
     }
     
-    # Create the reverse mapping from integer to category name
-    categories_map = dict(zip(range(num_classes), phrog_integer.keys()))
+    # use phrog_integer to map the class names
+    categories = list(phrog_integer.keys())
     
     # Create arrays to store calibrated probabilities for each sample
     calibrated_probs = np.zeros_like(all_probs)
     
     # Create isotonic regression model for each class
-    for class_idx in range(num_classes):
-        class_name = categories_map.get(class_idx, f"Class_{class_idx}")
+    for class_idx, class_name in enumerate(categories):
+
         logger.info(f"Calibrating class {class_idx}: {class_name}")
         
         # Get binary indicator for this class

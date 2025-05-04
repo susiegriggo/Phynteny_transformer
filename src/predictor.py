@@ -429,17 +429,31 @@ class Predictor:
                                 logger.debug(f'prediction: {prediction}')
                                 if prediction is not None:
                                     # Add the category label if categories_map is provided
-                                    if categories_map is not None and prediction in categories_map:
-                                        qualifiers["phynteny_category"] = [categories_map[prediction]]
+                                    if categories_map is not None:
+                                        # First try direct lookup
+                                        if prediction in categories_map:
+                                            qualifiers["phynteny_category"] = [categories_map[prediction]]
+                                            predictions_added_count += 1
+                                            logger.debug(f"Added prediction for {record.id}: {categories_map[prediction]}")
+                                        # If direct lookup fails, try string versions of keys
+                                        elif str(prediction) in categories_map:
+                                            qualifiers["phynteny_category"] = [categories_map[str(prediction)]]
+                                            predictions_added_count += 1
+                                            logger.debug(f"Added prediction for {record.id} via string key: {categories_map[str(prediction)]}")
+                                        else:
+                                            # Fallback to just showing the prediction number
+                                            qualifiers["phynteny_category"] = [f"Category_{prediction}"]
+                                            predictions_added_count += 1
+                                            logger.debug(f"Added generic category for {record.id}: Category_{prediction}")
+                                    else:
+                                        # No categories_map provided
+                                        qualifiers["phynteny_category"] = [f"Category_{prediction}"]
                                         predictions_added_count += 1
-                                        logger.debug(f"Added prediction for {record.id}: {categories_map[prediction]}")
                                         
                                 if max_score is not None:
                                     qualifiers["phynteny_score"] = [f"{max_score:.4f}"]
                                 if conf is not None:
                                     qualifiers["phynteny_confidence"] = [f"{conf:.4f}"]
-                            elif has_unknown_function:
-                                logger.debug(f"Unknown function gene {record.id} not predicted. Prediction: {prediction}, Confidence: {conf}")
                             
                             # Create the feature with ALL original qualifiers plus our additions
                             feature = SeqFeature(
@@ -714,7 +728,7 @@ class Predictor:
         logger.info(f"Completed confidence calculation for {num_genomes} genomes")
         return all_predictions, all_confidence
 
-    def compute_confidence_isotonic(self, scores, calibration_models, categories):
+    def compute_confidence_isotonic(self, scores, calibration_models, phrog_integer):
         """
         Compute confidence of predictions using isotonic regression calibration models.
         
@@ -731,7 +745,7 @@ class Predictor:
         logger.info(f'Processing isotonic calibration for {num_genomes} genomes')
         
         # Create the category mapping
-        categories_map = dict(zip(range(len(calibration_models.keys())), calibration_models.keys()))
+        categories = list(phrog_integer.keys())
         
         # Pre-allocate results
         all_predictions = []
@@ -757,7 +771,7 @@ class Predictor:
                 raw_score = raw_scores[pred]
                 
                 # Get the category key for this prediction
-                category_key = categories_map.get(pred)
+                category_key = categories[pred]
                 
                 # Apply calibration if we have a model for this category
                 if category_key in calibration_models:
@@ -783,7 +797,7 @@ class Predictor:
                 
                 # Apply calibration to all scores for this sample
                 for k, score in enumerate(raw_scores):
-                    cat_key = categories_map.get(k)
+                    cat_key = categories.get(k)
                     if cat_key in calibration_models and calibration_models[cat_key] is not None:
                         try:
                             calibrated_scores[j, k] = calibration_models[cat_key].transform([score])[0]

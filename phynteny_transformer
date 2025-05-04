@@ -5,6 +5,7 @@ import os
 import pickle
 import sys
 import time
+import joblib
 
 # Third-party library imports
 from loguru import logger
@@ -326,6 +327,7 @@ def main():
 
     # read in needed info on PHROGS 
     category_dict, phrog_integer_category = format_data.read_annotations_information()
+    logger.info(f'phrog_integer_category: {phrog_integer_category}')
 
     # Determine whether to use LSTM based on the --no-lstm flag
     use_lstm = not args.no_lstm
@@ -436,7 +438,7 @@ def main():
     # Check if calibration models exist
     if os.path.exists(calibration_models_path):
         with open(calibration_models_path, 'rb') as f:
-            calibration_models = pickle.load(f)
+            calibration_models = joblib.load(f)
         logger.info("Loaded isotonic regression calibration models")
         logger.info("USING ISOTONIC REGRESSION for confidence calibration")
     else:
@@ -468,8 +470,8 @@ def main():
     logger.info("Calculating confidence scores using isotonic regression calibration")
     
     # Always use isotonic regression for confidence calculation
-    predictions, confidence_scores = p.compute_confidence_isotonic(scores, calibration_models, phrog_integer_category)
-    
+    predictions, confidence_scores, raw_scores, calibrated_scores = p.compute_confidence_isotonic(scores, calibration_models, phrog_integer_category)
+
     # Check predictions and confidence scores dimensions
     logger.debug(f"Data dimensions after prediction:")
     logger.debug(f"Number of prediction arrays: {len(predictions)}")
@@ -535,6 +537,10 @@ def main():
     
     # Create the categories map from calibration_models
     categories_map = {i: cat_name for i, cat_name in enumerate(calibration_models.keys())}
+    logger.info(f"Categories map: {categories_map}")
+    
+    # Log the mapping to help with debugging
+    logger.info(f"Category mapping created: {categories_map}")
     
     # Write predictions to GenBank file
     p.write_genbank(

@@ -967,7 +967,7 @@ def save_genbank(gb_dict, genbank_file, predictions, scores, confidence_scores):
     
     return annotated
 
-def generate_table(outfile, gb_dict, categories, phrog_integer, predictions=None, scores=None, confidence_scores=None, threshold=0.9, categories_map=None):
+def generate_table(outfile, gb_dict, categories, phrog_integer, predictions=None, scores=None, confidence_scores=None):
     """
     Generate table summary of the annotations made.
 
@@ -979,7 +979,6 @@ def generate_table(outfile, gb_dict, categories, phrog_integer, predictions=None
     :param scores: List of scores for each prediction (optional)
     :param confidence_scores: List of confidence scores for each prediction (optional) 
     :param threshold: Confidence threshold (default: 0.9)
-    :param categories_map: Dictionary mapping prediction numbers to human-readable labels
     :return: None
     """
     # Get the list of phages to loop through
@@ -1047,14 +1046,9 @@ def generate_table(outfile, gb_dict, categories, phrog_integer, predictions=None
                                 pred_int = int(pred)
                                 logger.debug(f"Prediction for {k}, seq {seq_idx}: {pred_int}")
                                 
-                                # Convert prediction number to label if categories_map is provided
-                                if categories_map is not None and pred_int in categories_map:
-                                    phynteny_category = categories_map[pred_int]
-                                    logger.debug(f"Category mapped to: {phynteny_category}")
-                                else:
-                                    phynteny_category = str(pred_int)
-                                    if categories_map is not None:
-                                        logger.warning(f"Category {pred_int} not found in categories_map ({list(categories_map.keys())[:5]}...)")
+                                # Use simple category format without mapping
+                                phynteny_category = f"Category_{pred_int}"
+                                logger.debug(f"Using generic category name: {phynteny_category}")
                             else:
                                 logger.debug(f"No predictions array for genome {k}")
                                 
