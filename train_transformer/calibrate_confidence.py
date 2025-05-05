@@ -252,16 +252,16 @@ def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
     }
     
     # use phrog_integer to map the class names
-    categories = list(phrog_integer.values())
+    #categories = list(phrog_integer.values())
     logger.info(f'phrog_integer: {phrog_integer}')
-    logger.info(f'Calibrated confidence for {categories}')
     
     # Create arrays to store calibrated probabilities for each sample
     calibrated_probs = np.zeros_like(all_probs)
     
     # Create isotonic regression model for each class
-    for class_idx, class_name in enumerate(categories):
+    for class_idx in range(1,9):
 
+        class_name = phrog_integer.get(class_idx) 
         logger.info(f"Calibrating class {class_idx}: {class_name}")
         
         # Get binary indicator for this class
