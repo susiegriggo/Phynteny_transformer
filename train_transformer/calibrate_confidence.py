@@ -76,6 +76,9 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     embeddings, categories, validation_categories, phrog_integer = load_data(
         embeddings_path, categories_path, validation_categories_path, integer_category_path
     )
+
+    # adjust phrog integer to exlucde unknown
+    phrog_integer = dict(zip(range(9), [phrog_integer.get(i) for i in range(1,10)]))
     
     # Create predictor
     p = create_predictor(
@@ -259,7 +262,7 @@ def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
     calibrated_probs = np.zeros_like(all_probs)
     
     # Create isotonic regression model for each class
-    for class_idx in range(1,9):
+    for class_idx in phrog_integer.keys():
 
         class_name = phrog_integer.get(class_idx) 
         logger.info(f"Calibrating class {class_idx}: {class_name}")
