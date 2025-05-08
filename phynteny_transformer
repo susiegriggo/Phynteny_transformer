@@ -368,7 +368,7 @@ def main():
     logger.info("Computing ESM embeddings")
     logger.info("... if step is being slow consider using GPU!")
     embeddings = format_data.extract_embeddings(
-        fasta_out, args.out, model_name=args.esm_model
+        fasta_out, args.out, model_name=args.esm_model, tokens_per_batch=128,
     )
 
     # Prepare data
