@@ -91,26 +91,18 @@ def main(model_directory, embeddings_path, categories_path, validation_categorie
     # Create dataset for calibration
     conf_dataset_loader = create_dataloader(embeddings, categories, validation_categories, batch_size)
     
-    # Process data in batches to get predictions
-    all_probs, all_labels = process_batches(p, conf_dataset_loader, device)
+    # Process data in batches to get predictions from each model separately
+    all_model_probs, all_labels = process_batches_per_model(p, conf_dataset_loader, device)
     
-    # Calibrate predictions with isotonic regression
-    calibration_models, calibration_stats, raw_scores = calibrate_probabilities(
-        all_probs, all_labels, phrog_integer, num_classes
+    # Calibrate predictions with isotonic regression, for each model separately
+    calibration_models, calibration_stats, raw_scores = calibrate_probabilities_per_model(
+        all_model_probs, all_labels, phrog_integer, num_classes
     )
-    
-    # Save raw scores for analysis
-    raw_scores_path = os.path.join(output_path, "raw_calibration_scores.pkl")
-    with open(raw_scores_path, 'wb') as f:
-        dump(raw_scores, f)
-    logger.info(f"Saved raw calibration scores to {raw_scores_path}")
     
     # Save calibration models and statistics
-    save_calibration_models(
-        calibration_models, calibration_stats, output_path, phrog_integer
-    )
+    save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer)
     
-    # Save detailed prediction data in the same format as compute_confidence.py
+    # Save raw scores and detailed data for analysis
     save_detailed_prediction_data(raw_scores, output_path)
     
     logger.info("Calibration completed successfully")
@@ -195,13 +187,17 @@ def create_dataloader(embeddings, categories, validation_categories, batch_size=
     
     return conf_dataset_loader
 
-def process_batches(p, conf_dataset_loader, device):
+def process_batches_per_model(p, conf_dataset_loader, device):
     """
-    Process batches and collect predictions and true labels
+    Process batches and collect predictions from each model separately
     """
-    logger.info("Processing batches to collect calibration data...")
+    logger.info("Processing batches to collect calibration data per model...")
     
-    all_probs = []
+    num_models = len(p.models)
+    logger.info(f"Found {num_models} models to process")
+    
+    # Create separate lists for each model's predictions
+    all_models_probs = [[] for _ in range(num_models)]
     all_labels = []
     
     # Put models in evaluation mode
@@ -209,120 +205,149 @@ def process_batches(p, conf_dataset_loader, device):
         model.eval()
     
     with torch.no_grad():
-        for embeddings_batch, categories_batch, masks_batch, idx_batch in conf_dataset_loader:
+        for batch_idx, (embeddings, categories, masks, _) in enumerate(conf_dataset_loader):
+            if batch_idx % 10 == 0:
+                logger.info(f"Processing batch {batch_idx}/{len(conf_dataset_loader)}")
+            
             # Move data to device
-            embeddings_batch = embeddings_batch.to(device)
-            categories_batch = categories_batch.to(device)
-            masks_batch = masks_batch.to(device)
+            embeddings = embeddings.to(device)
+            categories = categories.to(device)
+            masks = masks.to(device)
+            src_key_padding_mask = (masks != -2).to(device)
             
-            # Get padding mask
-            src_key_padding_mask = (masks_batch != -2).to(device)
+            # Process each model separately
+            for i, model in enumerate(p.models):
+                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                probs = torch.softmax(outputs, dim=-1).cpu().numpy()
+                
+                # Make sure we gather all valid predictions
+                valid_mask = masks.cpu().numpy() == 1
+                for j in range(probs.shape[0]):  # For each sample in the batch
+                    for k in range(probs.shape[1]):  # For each position in the sequence
+                        if valid_mask[j, k]:
+                            all_models_probs[i].append(probs[j, k])
             
-            # Get predictions
-            batch_scores = p.predict_batch(embeddings_batch, src_key_padding_mask)
-            
-            # Process results for each item in batch
-            for i, indices in enumerate(idx_batch):
-                if len(indices) > 0:  # If there are masked tokens
-                    for idx in indices:
-                        # Get the probability and true label for this token
-                        prob = batch_scores[i][idx]#.cpu().numpy()
-                        label = categories_batch[i][idx].item()
-                        if label != -1:  # Ignore padding tokens
-                            all_probs.append(prob)
-                            all_labels.append(label)
+            # Only collect labels once from the first model iteration
+            valid_mask = masks.cpu().numpy() == 1
+            for j in range(categories.shape[0]):  # For each sample in the batch
+                for k in range(categories.shape[1]):  # For each position in the sequence
+                    if valid_mask[j, k]:
+                        all_labels.append(categories[j, k].cpu().numpy())
     
     # Convert to numpy arrays
-    all_probs = np.array(all_probs)
+    for i in range(num_models):
+        all_models_probs[i] = np.array(all_models_probs[i])
     all_labels = np.array(all_labels)
     
-    logger.info(f"Collected {len(all_labels)} samples for calibration")
-    return all_probs, all_labels
+    logger.info(f"Collected {len(all_labels)} samples for calibration across {num_models} models")
+    return all_models_probs, all_labels
 
-def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
+def calibrate_probabilities_per_model(all_models_probs, all_labels, phrog_integer, num_classes):
     """
-    Calibrate probabilities using isotonic regression for each class
+    Calibrate probabilities using isotonic regression for each class and each model separately
     """
-    logger.info("Calibrating probabilities with isotonic regression...")
+    logger.info("Calibrating probabilities with isotonic regression for each model...")
     
-    calibration_models = {}
-    calibration_stats = {}
+    num_models = len(all_models_probs)
+    logger.info(f"Processing calibration for {num_models} models")
+    
+    all_calibration_models = []
+    all_calibration_stats = []
     
     # Store original probabilities and true labels
     raw_scores = {
-        "probabilities": all_probs,
-        "true_labels": all_labels
+        "model_probabilities": all_models_probs,
+        "true_labels": all_labels,
+        "calibrated_model_probabilities": [],
+        "model_predictions": [],
+        "calibrated_model_predictions": [],
+        "model_confidences": []
     }
     
-    # use phrog_integer to map the class names
-    #categories = list(phrog_integer.values())
-    logger.info(f'phrog_integer: {phrog_integer}')
+    # For averaging results across all models
+    avg_probs = np.zeros_like(all_models_probs[0])
+    avg_calibrated_probs = np.zeros_like(all_models_probs[0])
     
-    # Create arrays to store calibrated probabilities for each sample
-    calibrated_probs = np.zeros_like(all_probs)
-    
-    # Create isotonic regression model for each class
-    for class_idx in phrog_integer.keys():
-
-        class_name = phrog_integer.get(class_idx) 
-        logger.info(f"Calibrating class {class_idx}: {class_name}")
+    # Process each model separately
+    for model_idx in range(num_models):
+        logger.info(f"Calibrating model {model_idx+1}/{num_models}")
         
-        # Get binary indicator for this class
-        y_true_binary = (all_labels == class_idx).astype(int)
+        model_probs = all_models_probs[model_idx]
+        avg_probs += model_probs / num_models  # For ensemble average
         
-        # Get predicted probabilities for this class
-        y_pred_proba = all_probs[:, class_idx]
+        calibration_models = {}
+        calibration_stats = {}
         
-        # Make sure we have samples of this class
-        if sum(y_true_binary) > 0:
-            # Fit isotonic regression
-            ir = IsotonicRegression(out_of_bounds='clip')
-            ir.fit(y_pred_proba, y_true_binary)
+        # Create arrays to store calibrated probabilities for this model
+        calibrated_probs = np.zeros_like(model_probs)
+        
+        # Create isotonic regression model for each class
+        for class_idx in phrog_integer.keys():
+            class_name = phrog_integer[class_idx]
+            logger.info(f"Calibrating class {class_idx} ({class_name})")
             
-            # Compute calibration metrics
-            y_calibrated = ir.transform(y_pred_proba)
-            logger.info(f'y_true_binary: {y_true_binary}')
-            logger.info(f'y_pred_proba: {y_pred_proba}')
-            logger.info(f'y_calibrated: {y_calibrated}')
-            y_pred_proba = y_pred_proba/10 # divide by ten to take from a score to a probability 
-            logger.info(f'y_pred_proba adjusted: {y_pred_proba}')
-            brier = brier_score_loss(y_true_binary, y_pred_proba)
-            brier_cal = brier_score_loss(y_true_binary, y_calibrated)
-
-            # Manually clip probabilities to avoid log(0) issues 
-            y_pred_proba_clipped = np.clip(y_pred_proba, 1e-15, 1-1e-15)
-            y_calibrated_clipped = np.clip(y_calibrated, 1e-15, 1-1e-15)
-
-            # Compute log_loss
-            logloss = log_loss(y_true_binary, y_pred_proba_clipped)#, eps=1e-15)
-            logloss_cal = log_loss(y_true_binary, y_calibrated_clipped)#, eps=1e-15)
+            # Extract probabilities for this class
+            class_probs = model_probs[:, class_idx]
             
-            # Store the calibration model and metrics
-            calibration_models[class_name] = ir
+            # One-vs-rest approach: binary labels for this class
+            binary_labels = (all_labels == class_idx).astype(int)
+            
+            # Fit isotonic regression for this class
+            iso_reg = IsotonicRegression(out_of_bounds='clip')
+            iso_reg.fit(class_probs, binary_labels)
+            
+            # Predict calibrated probabilities
+            calibrated_class_probs = iso_reg.predict(class_probs)
+            calibrated_probs[:, class_idx] = calibrated_class_probs
+            
+            # Calculate calibration metrics
+            brier = brier_score_loss(binary_labels, class_probs)
+            calibrated_brier = brier_score_loss(binary_labels, calibrated_class_probs)
+            
+            # If any class_probs are 0 or 1, they cause warnings in log_loss, so clip them
+            clipped_probs = np.clip(class_probs, 1e-15, 1 - 1e-15)
+            clipped_calibrated = np.clip(calibrated_class_probs, 1e-15, 1 - 1e-15)
+            
+            logloss = log_loss(binary_labels, clipped_probs)
+            calibrated_logloss = log_loss(binary_labels, clipped_calibrated)
+            
+            # Store the calibration model and stats for this class
+            calibration_models[class_name] = iso_reg
             calibration_stats[class_name] = {
                 "brier_score_raw": brier,
-                "brier_score_calibrated": brier_cal,
+                "brier_score_calibrated": calibrated_brier,
                 "log_loss_raw": logloss,
-                "log_loss_calibrated": logloss_cal,
-                "improvement_brier": brier - brier_cal,
-                "improvement_log_loss": logloss - logloss_cal,
-                "samples_count": sum(y_true_binary)
+                "log_loss_calibrated": calibrated_logloss,
+                "brier_improvement": brier - calibrated_brier,
+                "logloss_improvement": logloss - calibrated_logloss
             }
             
-            # Store calibrated probabilities for this class
-            calibrated_probs[:, class_idx] = y_calibrated
-            
-            logger.info(f"Class {class_name} calibration completed")
-        else:
-            logger.info(f"No samples for class {class_name}, skipping calibration")
+        # Normalize calibrated probabilities to sum to 1
+        row_sums = calibrated_probs.sum(axis=1, keepdims=True)
+        calibrated_probs = np.divide(calibrated_probs, row_sums, out=np.zeros_like(calibrated_probs), where=row_sums!=0)
+        
+        # Add to ensemble average
+        avg_calibrated_probs += calibrated_probs / num_models
+        
+        # Store the calibration results for this model
+        all_calibration_models.append(calibration_models)
+        all_calibration_stats.append(calibration_stats)
+        
+        # Store predictions and calibrated probabilities for this model
+        raw_scores["calibrated_model_probabilities"].append(calibrated_probs)
+        raw_scores["model_predictions"].append(np.argmax(model_probs, axis=1))
+        raw_scores["calibrated_model_predictions"].append(np.argmax(calibrated_probs, axis=1))
+        raw_scores["model_confidences"].append(np.max(calibrated_probs, axis=1))
     
-    # Add calibrated probabilities and predictions to raw_scores
-    raw_scores["calibrated_probabilities"] = calibrated_probs
-    raw_scores["calibrated_predictions"] = np.argmax(calibrated_probs, axis=1)
-    raw_scores["predictions"] = np.argmax(all_probs, axis=1)
-    raw_scores["confidence"] = np.max(calibrated_probs, axis=1)
+    # Store the ensemble average results
+    raw_scores["ensemble_probabilities"] = avg_probs
+    raw_scores["ensemble_calibrated_probabilities"] = avg_calibrated_probs
+    raw_scores["ensemble_predictions"] = np.argmax(avg_probs, axis=1)
+    raw_scores["ensemble_calibrated_predictions"] = np.argmax(avg_calibrated_probs, axis=1)
+    raw_scores["ensemble_confidence"] = np.max(avg_calibrated_probs, axis=1)
     
-    return calibration_models, calibration_stats, raw_scores
+    logger.info("Calibration completed for all models")
+    return all_calibration_models, all_calibration_stats, raw_scores
 
 def save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer):
     """
@@ -335,18 +360,31 @@ def save_calibration_models(calibration_models, calibration_stats, output_path, 
     models_dir = os.path.join(output_path, 'models')
     os.makedirs(models_dir, exist_ok=True)
     
-    # Save individual calibration models
-    for class_name, model in calibration_models.items():
-        if model is not None:
-            model_path = os.path.join(models_dir, f"calibration_model_{class_name}.pkl")
-            with open(model_path, 'wb') as f:
+    # Save individual calibration models for each model
+    num_models = len(calibration_models)
+    
+    for model_idx, model_calibrations in enumerate(calibration_models):
+        model_dir = os.path.join(models_dir, f'model_{model_idx}')
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # Save each class calibration separately
+        for class_name, model in model_calibrations.items():
+            class_path = os.path.join(model_dir, f'calibration_{class_name}.pkl')
+            with open(class_path, 'wb') as f:
                 dump(model, f)
     
-    # Save all calibration models as a single file
+    # Save all calibration models as a single file - use the first model as default
+    # This maintains compatibility with existing code
     all_models_path = os.path.join(output_path, 'calibration_models.pkl')
     with open(all_models_path, 'wb') as f:
+        dump(calibration_models[0], f)  # Use first model as default
+    logger.info(f"Saved default calibration models to {all_models_path}")
+    
+    # Also save the full collection of all model calibrations
+    all_models_collection_path = os.path.join(output_path, 'all_calibration_models.pkl')
+    with open(all_models_collection_path, 'wb') as f:
         dump(calibration_models, f)
-    logger.info(f"Saved calibration models to {all_models_path}")
+    logger.info(f"Saved full collection of calibration models to {all_models_collection_path}")
     
     # Save calibration statistics
     stats_path = os.path.join(output_path, 'calibration_statistics.pkl')
@@ -354,45 +392,23 @@ def save_calibration_models(calibration_models, calibration_stats, output_path, 
         dump(calibration_stats, f)
     logger.info(f"Saved calibration statistics to {stats_path}")
     
-    # Save calibration stats as CSV for easy reading
-    stats_csv = []
-    for class_name, stats in calibration_stats.items():
-        if class_name == "overall":
-            continue
+    # Save calibration stats as CSV for easy reading - one file per model
+    for model_idx, model_stats in enumerate(calibration_stats):
+        stats_csv = []
+        stats_csv.append("class_name,brier_score_raw,brier_score_calibrated,log_loss_raw,log_loss_calibrated,brier_improvement,logloss_improvement")
         
-        if "error" in stats:
-            row = {
-                "class": class_name,
-                "error": stats["error"],
-                "samples": stats["samples_count"]
-            }
-        else:
-            row = {
-                "class": class_name,
-                "brier_raw": stats["brier_score_raw"],
-                "brier_cal": stats["brier_score_calibrated"],
-                "logloss_raw": stats["log_loss_raw"],
-                "logloss_cal": stats["log_loss_calibrated"],
-                "brier_improv": stats["improvement_brier"],
-                "logloss_improv": stats["improvement_log_loss"],
-                "samples": stats["samples_count"]
-            }
-        stats_csv.append(row)
-    
-    # Write CSV manually since we're not importing pandas
-    csv_path = os.path.join(output_path, 'calibration_statistics.csv')
-    with open(csv_path, 'w') as f:
-        # Write header
-        if stats_csv:
-            f.write(','.join(stats_csv[0].keys()) + '\n')
-            # Write rows
-            for row in stats_csv:
-                f.write(','.join(str(v) for v in row.values()) + '\n')
-    logger.info(f"Saved calibration statistics as CSV to {csv_path}")
+        for class_name, stats in model_stats.items():
+            stats_csv.append(f"{class_name},{stats['brier_score_raw']},{stats['brier_score_calibrated']},{stats['log_loss_raw']},{stats['log_loss_calibrated']},{stats['brier_improvement']},{stats['logloss_improvement']}")
+        
+        # Write CSV manually since we're not importing pandas
+        csv_path = os.path.join(output_path, f'calibration_statistics_model_{model_idx}.csv')
+        with open(csv_path, 'w') as f:
+            f.write('\n'.join(stats_csv))
+        logger.info(f"Saved calibration statistics as CSV for model {model_idx} to {csv_path}")
     
     # Also save a mapping from integer to category name for reference
     with open(os.path.join(output_path, 'category_mapping.pkl'), 'wb') as f:
-        pickle.dump(phrog_integer, f)
+        dump(phrog_integer, f)
     
     logger.info("Calibration models and statistics saved successfully")
 
@@ -401,12 +417,17 @@ def save_detailed_prediction_data(raw_scores, output_path):
     Save detailed prediction data in a format compatible with compute_confidence.py
     """
     detailed_dict = {
-        'scores': raw_scores["probabilities"],
+        'scores': raw_scores["ensemble_probabilities"],
         'true_labels': raw_scores["true_labels"],
-        'predictions': raw_scores["predictions"],
-        'calibrated_scores': raw_scores["calibrated_probabilities"],
-        'calibrated_predictions': raw_scores["calibrated_predictions"],
-        'confidence': raw_scores["confidence"]
+        'predictions': raw_scores["ensemble_predictions"],
+        'calibrated_scores': raw_scores["ensemble_calibrated_probabilities"],
+        'calibrated_predictions': raw_scores["ensemble_calibrated_predictions"],
+        'confidence': raw_scores["ensemble_confidence"],
+        'per_model_scores': raw_scores["model_probabilities"],
+        'per_model_calibrated_scores': raw_scores["calibrated_model_probabilities"],
+        'per_model_predictions': raw_scores["model_predictions"],
+        'per_model_calibrated_predictions': raw_scores["calibrated_model_predictions"],
+        'per_model_confidences': raw_scores["model_confidences"]
     }
     
     detailed_output_path = os.path.join(output_path, "calibration_detailed.pkl")
@@ -420,12 +441,9 @@ def save_detailed_prediction_data(raw_scores, output_path):
     logger.info(f"Saving in compute_confidence compatible format to {compute_confidence_format}")
     
     with open(compute_confidence_format, 'wb') as f:
-        dump({
-            'scores': raw_scores["calibrated_probabilities"],
-            'true_labels': raw_scores["true_labels"],
-            'predictions': raw_scores["calibrated_predictions"],
-            'confidence': raw_scores["confidence"]
-        }, f)
+        dump(detailed_dict, f)
+    
+    logger.info("Detailed prediction data saved successfully")
 
 if __name__ == "__main__":
     main()

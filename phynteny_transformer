@@ -432,17 +432,24 @@ def main():
         num_layers=args.num_layers
     )
 
-    # Read the calibration models - only support isotonic regression now
+    # Read the calibration models - support both individual and ensemble calibration
     calibration_models_path = os.path.join(args.models, "calibration_models.pkl")
-    
-    # Check if calibration models exist
-    if os.path.exists(calibration_models_path):
+    ensemble_path = os.path.join(args.models, "all_calibration_models.pkl")
+
+    # Check if ensemble calibration models exist
+    if os.path.exists(ensemble_path):
+        with open(ensemble_path, 'rb') as f:
+            calibration_models = joblib.load(f)
+        logger.info(f"Loaded ensemble of {len(calibration_models)} isotonic regression calibration models")
+        logger.info("USING ENSEMBLE ISOTONIC REGRESSION for confidence calibration")
+    # Fall back to single model calibration
+    elif os.path.exists(calibration_models_path):
         with open(calibration_models_path, 'rb') as f:
             calibration_models = joblib.load(f)
-        logger.info("Loaded isotonic regression calibration models")
+        logger.info("Loaded single isotonic regression calibration model")
         logger.info("USING ISOTONIC REGRESSION for confidence calibration")
     else:
-        logger.error(f"Calibration models file not found at {calibration_models_path}")
+        logger.error(f"Calibration models file not found at {calibration_models_path} or {ensemble_path}")
         logger.error("The isotonic regression calibration models are required.")
         logger.error("Please ensure you have the latest models installed.")
         sys.exit(1)
