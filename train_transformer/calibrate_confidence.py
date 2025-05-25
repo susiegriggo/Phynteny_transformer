@@ -19,7 +19,8 @@ PARAMETERS = {
     'integer_category_path': 'Path to the integer category file.',
     'output_path': 'Path to save the output calibration models.',
     'force': 'Overwrite output directory if it exists.',
-    'batch_size': 'Batch size for processing the data.'
+    'batch_size': 'Batch size for processing the data.',
+    'test': 'Use test mode with only 1000 sequences for quick testing.'
 }
 
 logger.info("Parameters used in the script:")
@@ -35,6 +36,7 @@ for param, desc in PARAMETERS.items():
 @click.option('-o', '--output', 'output_path', type=click.Path(), help=PARAMETERS['output_path'])
 @click.option('-f', '--force', is_flag=True, help=PARAMETERS['force'])
 @click.option('--batch-size', default=128, help=PARAMETERS['batch_size'])
+@click.option('--test', is_flag=True, help=PARAMETERS['test'])
 @click.option('--input-dim', default=1280, help='Input dimension for the model.')
 @click.option('--num-classes', default=9, help='Number of classes for the model.')
 @click.option('--num-heads', default=4, help='Number of attention heads for the model.')
@@ -50,64 +52,59 @@ for param, desc in PARAMETERS.items():
 @click.option('--dropout', default=0.0, help='Dropout rate for the model. Should be 0 for inference.', type=float)
 @click.option('--protein-dropout-rate', default=0.0, help='Dropout rate for protein features. Should be 0 for inference.', type=float)
 @click.option('--progressive-dropout', is_flag=True, default=False, help='Enable progressive dropout for protein features.')
-@click.option('--initial-dropout-rate', default=1.0, help='Initial dropout rate when using progressive dropout.', type=float)
-@click.option('--final-dropout-rate', default=0.4, help='Final dropout rate when using progressive dropout.', type=float)
 
-def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, no_lstm, max_len, attention, positional_encoding_type, pre_norm, output_dim, num_layers, dropout, protein_dropout_rate, progressive_dropout, initial_dropout_rate, final_dropout_rate):
+def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, test, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, no_lstm, max_len, attention, positional_encoding_type, pre_norm, output_dim, num_layers, dropout, protein_dropout_rate, progressive_dropout, initial_dropout_rate=1.0, final_dropout_rate=0.4):
     """
-    Calibrate confidence scores for model predictions using Isotonic Regression
+    Main function to run calibration of confidence scores
     """
-    logger.info("Starting confidence calibration with isotonic regression")
+    # Log if test mode is enabled
+    if test:
+        logger.info("TEST MODE ENABLED - Using limited dataset of 1000 sequences")
     
-    # Check if output directory exists
-    if os.path.exists(output_path) and not force:
-        logger.error(f"Output directory {output_path} already exists. Use --force to overwrite.")
-        return
-    elif os.path.exists(output_path) and force:
-        logger.info(f"Output directory {output_path} exists, overwriting...")
-    else:
-        os.makedirs(output_path, exist_ok=True)
+    # Create output directory if it doesn't exist
+    if output_path is not None:
+        os.makedirs(output_path, exist_ok=force)
     
-    # Set device
+    # Select appropriate device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
-    # Load data
+    # Load data with test mode parameter
     embeddings, categories, validation_categories, phrog_integer = load_data(
-        embeddings_path, categories_path, validation_categories_path, integer_category_path
+        embeddings_path, categories_path, validation_categories_path, integer_category_path, test_mode=test
     )
-
-    # adjust phrog integer to exlucde unknown
+    
+    # Format phrog_integer for the model
     phrog_integer = dict(zip(range(9), [phrog_integer.get(i) for i in range(1,10)]))
     
-    # Create predictor
-    p = create_predictor(
-        model_directory, device, input_dim, num_classes, num_heads, 
-        hidden_dim, lstm_hidden_dim, dropout, not no_lstm, max_len, 
-        protein_dropout_rate, attention, positional_encoding_type, pre_norm,
-        progressive_dropout, initial_dropout_rate, final_dropout_rate, output_dim, num_layers
-    )
-    
-    # Create dataset for calibration
+    # Create dataloader
     conf_dataset_loader = create_dataloader(embeddings, categories, validation_categories, batch_size)
     
-    # Process data in batches to get predictions from each model separately
-    all_model_probs, all_labels = process_batches_per_model(p, conf_dataset_loader, device)
-    
-    # Calibrate predictions with isotonic regression, for each model separately
-    calibration_models, calibration_stats, raw_scores = calibrate_probabilities_per_model(
-        all_model_probs, all_labels, phrog_integer, num_classes
+    # Create predictor with specified model parameters
+    use_lstm = not no_lstm
+    p = create_predictor(
+        model_directory, device, input_dim, num_classes, num_heads, 
+        hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, 
+        protein_dropout_rate, attention, positional_encoding_type, pre_norm,
+        progressive_dropout, initial_dropout_rate, final_dropout_rate, 
+        output_dim, num_layers
     )
     
-    # Save calibration models and statistics
-    save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer)
+    # Process batches
+    all_models_probs, all_labels = process_batches_per_model(p, conf_dataset_loader, device)
     
-    # Save raw scores and detailed data for analysis
+    # Calibrate probabilities
+    calibration_models, calibration_stats, raw_scores = calibrate_probabilities_per_model(
+        all_models_probs, all_labels, phrog_integer, num_classes
+    )
+    
+    # Save calibration models and detailed prediction data
+    save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer)
     save_detailed_prediction_data(raw_scores, output_path)
     
-    logger.info("Calibration completed successfully")
+    logger.info("Calibration process completed successfully")
 
-def load_data(embeddings_path, categories_path, validation_categories_path, integer_category_path):
+def load_data(embeddings_path, categories_path, validation_categories_path, integer_category_path, test_mode=False):
     """
     Load data from specified paths
     """
@@ -132,6 +129,12 @@ def load_data(embeddings_path, categories_path, validation_categories_path, inte
     with open(integer_category_path, 'rb') as f:
         phrog_integer = pickle.load(f)
     logger.info(f"Loaded integer categories mapping: {len(phrog_integer)} items")
+    
+    if test_mode:
+        logger.info("TEST MODE: Reducing dataset size to 1000 sequences")
+        embeddings = dict(list(embeddings.items())[:1000])
+        categories = dict(list(categories.items())[:1000])
+        validation_categories = dict(list(validation_categories.items())[:1000])
     
     return embeddings, categories, validation_categories, phrog_integer
 

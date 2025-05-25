@@ -226,8 +226,7 @@ class Predictor:
         
         # Log the first few genome IDs to verify alignment
         genome_ids = list(gb_dict.keys())
-        logger.info(f"First 5 genome IDs: {genome_ids[:5] if len(genome_ids) >= 5 else genome_ids}")
-        
+
         try:
             with open(output_file, "w") as handle:
                 # For each genome in the gb_dict
@@ -730,247 +729,214 @@ class Predictor:
 
     def compute_confidence_isotonic(self, scores, calibration_models, phrog_integer):
         """
-        Compute confidence of predictions using isotonic regression calibration models.
+        Compute confidence using isotonic regression calibration models.
         
-        :param scores: List of score arrays for the genomes
-        :param calibration_models: Dictionary or list of dictionaries containing isotonic regression models for each class
-        :param phrog_integer: Dictionary mapping phrog annotations to integer categories
-        :return: Tuple of predictions, confidence scores lists, and dictionaries of raw and calibrated scores
+        :param scores: List of score arrays
+        :param calibration_models: Dictionary or list of dictionaries with isotonic regression models
+        :param phrog_integer: Dictionary mapping phrog categories to integers
+        :return: Tuple of (predictions, confidence_scores, raw_scores, calibrated_scores)
         """
+        logger.info("Computing confidence scores using isotonic regression calibration")
+        
+        # Add validation and logging of calibration models
+        is_ensemble = isinstance(calibration_models, list)
+        num_models = len(calibration_models) if is_ensemble else 1
+        logger.info(f"Calibration model type: {'Ensemble' if is_ensemble else 'Single'} with {num_models} model(s)")
+        
+        # Log calibration model keys to verify they exist
+        if is_ensemble:
+            for i, model_dict in enumerate(calibration_models):
+                logger.info(f"Model {i} calibration keys: {list(model_dict.keys())}")
+                # Verify isotonic models exist and can predict
+                for key, iso_model in model_dict.items():
+                    try:
+                        # Test predict with dummy value
+                        test_val = iso_model.predict([[0.5]])[0]
+                        logger.debug(f"Model {i}, class {key}: test prediction for 0.5 = {test_val}")
+                    except Exception as e:
+                        logger.error(f"Error testing isotonic model {i} for class {key}: {e}")
+        else:
+            logger.info(f"Single model calibration keys: {list(calibration_models.keys())}")
+            # Verify isotonic models exist and can predict
+            for key, iso_model in calibration_models.items():
+                try:
+                    # Test predict with dummy value
+                    test_val = iso_model.predict([[0.5]])[0]
+                    logger.debug(f"Class {key}: test prediction for 0.5 = {test_val}")
+                except Exception as e:
+                    logger.error(f"Error testing isotonic model for class {key}: {e}")
+        
+        # Initialize results lists
+        predictions = []
+        confidence_scores = []
+        raw_scores = {}
+        calibrated_scores = {}
+        
+        # Track confidence score distribution
+        all_confidences = []
+        
         # Convert to list if a single score array was provided
         if isinstance(scores, np.ndarray) and scores.ndim > 1:
             scores = [scores]
         
-        num_genomes = len(scores)
-        logger.info(f'Processing isotonic calibration for {num_genomes} genomes')
-        
-        # Check if we have per-model calibrations (list of model calibration dictionaries)
-        use_ensemble = isinstance(calibration_models, list)
-        num_models = len(calibration_models) if use_ensemble else 1
-        
-        if use_ensemble:
-            logger.info(f"Using ensemble of {num_models} calibration models")
-        else:
-            logger.info("Using single calibration model")
-            # Wrap in a list for consistent processing
-            calibration_models = [calibration_models]
-        
-        # Create the category mapping from calibration_models keys
-        # Use the first model's keys if we have an ensemble
-        categories_map = {i: cat for i, cat in enumerate(calibration_models[0].keys())}
-        
-        # Pre-allocate arrays for results
-        predictions = []
-        confidence_scores = []
-        raw_scores_dict = {}
-        calibrated_scores_dict = {}
-        
         # Process each genome
-        for i, genome_scores in enumerate(scores):
-            # Get the raw predicted class (highest score index)
-            pred_indices = np.argmax(genome_scores, axis=1)
+        for genome_idx, genome_scores in enumerate(scores):
+            logger.debug(f"Processing genome {genome_idx}: score array shape {genome_scores.shape if hasattr(genome_scores, 'shape') else 'unknown'}")
+            
+            # Log some raw score samples to check distribution
+            if genome_idx == 0:  # Just log the first genome as an example
+                logger.debug(f"First genome raw scores (first 3 genes):")
+                for i in range(min(3, len(genome_scores))):
+                    logger.debug(f"Gene {i}: {genome_scores[i]}")
+                    logger.debug(f"Gene {i} max score: {np.max(genome_scores[i])}, argmax: {np.argmax(genome_scores[i])}")
+            
             genome_preds = []
             genome_confidences = []
+            genome_calibrated_scores = []
             
-            # For each gene in this genome
-            for j, pred_idx in enumerate(pred_indices):
-                # Get the raw score for the predicted class
-                if pred_idx < len(genome_scores[j]):
-                    raw_score = genome_scores[j][pred_idx]
+            # Process each gene
+            for gene_idx, gene_scores in enumerate(genome_scores):
+                # Get raw prediction (class with highest score)
+                pred_class = np.argmax(gene_scores)
+                raw_max_score = gene_scores[pred_class]
+                
+                # Log for some genes as examples
+                if genome_idx == 0 and gene_idx < 5:
+                    logger.debug(f"Gene {gene_idx}: predicted class={pred_class}, raw score={raw_max_score:.4f}")
                     
-                    # Get the category name from the map
-                    if pred_idx in categories_map:
-                        cat_name = categories_map[pred_idx]
-                        
-                        # Apply calibration across all models and average results
-                        calibrated_scores = []
+                # Initialize calibrated scores for this gene
+                calibrated_gene_scores = np.zeros_like(gene_scores)
+                
+                # Apply calibration for each class
+                for class_idx in range(len(gene_scores)):
+                    raw_class_score = gene_scores[class_idx]
+                    
+                    # Skip if raw score is too low to matter (optimization)
+                    if raw_class_score < 0.01 and class_idx != pred_class:
+                        continue
+                    
+                    calibrated_class_score = raw_class_score  # Default to raw score
+                    
+                    # Apply calibration (different process for ensemble vs single model)
+                    if is_ensemble:
+                        # Apply all models and average results
+                        calibrated_scores_sum = 0.0
+                        valid_calibrations = 0
                         
                         for model_idx in range(num_models):
-                            if cat_name in calibration_models[model_idx]:
-                                calibration_model = calibration_models[model_idx][cat_name]
-                                # Reshape for sklearn models which expect 2D input
-                                score_2d = np.array([[raw_score]])
-                                try:
-                                    cal_score = calibration_model.predict(score_2d)[0]
-                                    calibrated_scores.append(cal_score)
-                                except Exception as e:
-                                    logger.error(f"Error in calibration model {model_idx} for category {cat_name}: {e}")
-                            else:
-                                logger.warning(f"No calibration model for category {cat_name} in model {model_idx}")
-                        
-                        # Average calibrated scores if we got any valid ones
-                        if calibrated_scores:
-                            calibrated_score = sum(calibrated_scores) / len(calibrated_scores)
-                        else:
-                            # Use raw score as fallback
-                            calibrated_score = raw_score
+                            model_dict = calibration_models[model_idx]
+                            # Find the isotonic model for this class
+                            class_key = None
+                            for k in model_dict.keys():
+                                # String matching needed since keys might be strings or ints
+                                if str(class_idx) in str(k):
+                                    class_key = k
+                                    break
                             
-                        # Store predictions and confidence
-                        genome_preds.append(pred_idx)
-                        genome_confidences.append(calibrated_score)
+                            if class_key is not None:
+                                try:
+                                    iso_reg = model_dict[class_key]
+                                    score_2d = np.array([[raw_class_score]])
+                                    cal_score = iso_reg.predict(score_2d)[0]
+                                    calibrated_scores_sum += cal_score
+                                    valid_calibrations += 1
+                                    # Log detailed calibration process for debugging
+                                    if genome_idx == 0 and gene_idx < 3:
+                                        logger.debug(f"Gene {gene_idx}, Class {class_idx}: Model {model_idx} calibration: {raw_class_score:.4f} → {cal_score:.4f}")
+                                except Exception as e:
+                                    logger.error(f"Error in calibration model {model_idx} for class {class_idx}: {e}")
                         
-                        # Store raw and calibrated scores for return
-                        if i not in raw_scores_dict:
-                            raw_scores_dict[i] = {}
-                            calibrated_scores_dict[i] = {}
-                        raw_scores_dict[i][j] = raw_score
-                        calibrated_scores_dict[i][j] = calibrated_score
+                        # Average the calibrated scores if we have any valid ones
+                        if valid_calibrations > 0:
+                            calibrated_class_score = calibrated_scores_sum / valid_calibrations
+                    
                     else:
-                        logger.warning(f"Category index {pred_idx} not in categories_map")
-                        genome_preds.append(pred_idx)
-                        genome_confidences.append(raw_score)
-                else:
-                    logger.warning(f"Prediction index {pred_idx} out of bounds for genome {i}, gene {j}")
-                    # Use a safe fallback
-                    genome_preds.append(0)
-                    genome_confidences.append(0.0)
+                        # Single model calibration
+                        # Find the isotonic model for this class
+                        class_key = None
+                        for k in calibration_models.keys():
+                            # String matching needed since keys might be strings or ints
+                            if str(class_idx) in str(k):
+                                class_key = k
+                                break
+                        
+                        if class_key is not None:
+                            try:
+                                iso_reg = calibration_models[class_key]
+                                score_2d = np.array([[raw_class_score]])
+                                cal_score = iso_reg.predict(score_2d)[0]
+                                calibrated_class_score = cal_score
+                                # Log detailed calibration process for debugging
+                                if genome_idx == 0 and gene_idx < 3:
+                                    logger.debug(f"Gene {gene_idx}, Class {class_idx}: Single model calibration: {raw_class_score:.4f} → {cal_score:.4f}")
+                            except Exception as e:
+                                logger.error(f"Error in calibration model for class {class_idx}: {e}")
+                    
+                    # Store the calibrated score
+                    calibrated_gene_scores[class_idx] = calibrated_class_score
+                
+                # Ensure scores are in valid range
+                calibrated_gene_scores = np.clip(calibrated_gene_scores, 0, 1)
+                
+                # Log pre-normalization scores
+                if genome_idx == 0 and gene_idx < 3:
+                    logger.debug(f"Gene {gene_idx}: pre-normalization calibrated scores: {calibrated_gene_scores}")
+                    logger.debug(f"Sum before normalization: {np.sum(calibrated_gene_scores):.4f}")
+                
+                # Normalize calibrated scores to sum to 1
+                score_sum = np.sum(calibrated_gene_scores)
+                if score_sum > 0:
+                    calibrated_gene_scores = calibrated_gene_scores / score_sum
+                
+                # Log post-normalization scores
+                if genome_idx == 0 and gene_idx < 3:
+                    logger.debug(f"Gene {gene_idx}: post-normalization calibrated scores: {calibrated_gene_scores}")
+                    logger.debug(f"Sum after normalization: {np.sum(calibrated_gene_scores):.4f}")
+                
+                # Get calibrated prediction and confidence
+                calibrated_pred = np.argmax(calibrated_gene_scores)
+                confidence = calibrated_gene_scores[calibrated_pred]
+                
+                # Log confidence calculation
+                if genome_idx == 0 and gene_idx < 3:
+                    logger.debug(f"Gene {gene_idx}: calibrated prediction={calibrated_pred}, confidence={confidence:.4f}")
+                
+                # Store results for this gene
+                genome_preds.append(calibrated_pred)
+                genome_confidences.append(confidence)
+                genome_calibrated_scores.append(calibrated_gene_scores)
+                
+                # Track for overall statistics
+                all_confidences.append(confidence)
             
+            # Store results for this genome
             predictions.append(np.array(genome_preds))
             confidence_scores.append(np.array(genome_confidences))
+            raw_scores[genome_idx] = genome_scores
+            calibrated_scores[genome_idx] = genome_calibrated_scores
+            
+            # Log summary for this genome
+            if len(genome_confidences) > 0:
+                min_conf = np.min(genome_confidences)
+                max_conf = np.max(genome_confidences)
+                mean_conf = np.mean(genome_confidences)
+                logger.debug(f"Genome {genome_idx}: min_conf={min_conf:.4f}, max_conf={max_conf:.4f}, mean_conf={mean_conf:.4f}")
         
-        logger.info(f"Completed confidence calculation for {num_genomes} genomes")
-        return predictions, confidence_scores, raw_scores_dict, calibrated_scores_dict
-
-
-########
-# Confidence scoring functions
-########
-def count_critical_points(arr):
-    """
-    Count the number of critical points in an array.
-
-    :param arr: Input array
-    :return: Number of critical points
-    """
-    return np.sum(np.diff(np.sign(np.diff(arr))) != 0)
- 
-def build_confidence_dict(label, prediction, scores, bandwidth, categories):
-    """
-    Build a dictionary containing confidence information for each category.
-
-    :param label: Array of true labels
-    :param prediction: Array of predicted labels
-    :param scores: Array of scores
-    :param bandwidth: List of bandwidth values for kernel density estimation
-    :param categories: Dictionary of categories
-    :return: Dictionary containing confidence information
-    """
-    # range over values to compute kernel density over
-    vals = np.arange(1.5, 10, 0.001)
-
-    # save a dictionary which contains all the information required to compute confidence scores
-    confidence_dict = dict()
-
-    # loop through the categories
-    print("Computing kernel density for each category...")
-    for cat in range(0, 9):
-        print(f"Processing category {cat}")
-
-        # fetch the true labels of the predictions of this category
-        this_labels = label[prediction == cat]
-
-        # fetch the scores associated with these predictions
-        this_scores = scores[prediction == cat]
-
-        # separate false positives and true positives
-        TP_scores = this_scores[this_labels == cat]
-        FP_scores = this_scores[this_labels != cat]
-
-        print(f"Category {cat}: TP_scores shape: {TP_scores.shape}, FP_scores shape: {FP_scores.shape}")
-
-        if TP_scores.shape[0] == 0 or FP_scores.shape[0] == 0:
-            logger.warning(f"Skipping category {cat} due to insufficient data (TP: {TP_scores.shape[0]}, FP: {FP_scores.shape[0]}).")
-            continue
-
-        # loop through potential bandwidths
-        for b in bandwidth:
-            try:
-                # compute the kernel density
-                kde_TP = KernelDensity(kernel="gaussian", bandwidth=b)
-                kde_TP.fit(TP_scores[:, cat].reshape(-1, 1))
-                e_TP = np.exp(kde_TP.score_samples(vals.reshape(-1, 1)))
-
-                kde_FP = KernelDensity(kernel="gaussian", bandwidth=b)
-                kde_FP.fit(FP_scores[:, cat].reshape(-1, 1))
-                e_FP = np.exp(kde_FP.score_samples(vals.reshape(-1, 1)))
-
-                conf_kde = (e_TP * len(TP_scores)) / (
-                    e_TP * len(TP_scores) + e_FP * len(FP_scores) + 1e-8  # Add epsilon to avoid division by zero
-                )
-
-                if np.isnan(conf_kde).any():
-                    logger.warning(f"NaN values encountered in confidence KDE for category {cat} with bandwidth {b}. Skipping.")
-                    continue
-
-                if count_critical_points(conf_kde) <= 1:
-                    break
-            except Exception as e:
-                logger.error(f"Error during KDE computation for category {cat} with bandwidth {b}: {e}")
-                logger.debug(traceback.format_exc())
-                continue
-
-        # save the best estimators
-        confidence_dict[categories.get(cat)] = {
-            "kde_TP": kde_TP,
-            "kde_FP": kde_FP,
-            "num_TP": len(TP_scores),
-            "num_FP": len(FP_scores),
-            "bandwidth": b,
-        }
-
-    return confidence_dict
-
-def calculate_confidence(max_prob, prediction, confidence_dict):
-    """
-    Calculate confidence scores for predictions.
-
-    :param max_prob: Maximum probability for each prediction
-    :param prediction: Predicted category for each sample
-    :param confidence_dict: Dictionary containing confidence information
-    :return: List of confidence scores
-    """
-    logger.debug(f"Starting calculate_confidence with max_prob={max_prob}, prediction={prediction}")
-    logger.debug(f"Type of max_prob: {type(max_prob)}, Type of prediction: {type(prediction)}")
-
-    # Ensure max_prob and prediction are iterable
-    if not isinstance(max_prob, (list, np.ndarray)):
-        logger.warning(f"max_prob is not iterable. Wrapping it in a list: {max_prob}")
-        max_prob = [max_prob]
-    if not isinstance(prediction, (list, np.ndarray)):
-        logger.warning(f"prediction is not iterable. Wrapping it in a list: {prediction}")
-        prediction = [prediction]
-
-    confidence_scores = []
-    for prob, pred in zip(max_prob, prediction):
-        try:
-            logger.debug(f"Processing prob={prob}, pred={pred}")
-            if pred in confidence_dict:
-                kde_TP = confidence_dict[pred].get("kde_TP")
-                kde_FP = confidence_dict[pred].get("kde_FP")
-                num_TP = confidence_dict[pred].get("num_TP", 0)
-                num_FP = confidence_dict[pred].get("num_FP", 0)
-
-                if kde_TP is None or kde_FP is None or num_TP == 0 or num_FP == 0:
-                    logger.warning(f"Missing or invalid KDE data for category {pred}. Assigning default confidence of 0.")
-                    confidence_scores.append(0)
-                    continue
-
-                e_TP = np.exp(kde_TP.score_samples([[prob]]))
-                e_FP = np.exp(kde_FP.score_samples([[prob]]))
-                conf_score = (e_TP * num_TP) / (e_TP * num_TP + e_FP * num_FP + 1e-8)  # Add epsilon to avoid division by zero
-
-                if np.isnan(conf_score).any():
-                    logger.warning(f"NaN confidence score encountered for category {pred}. Assigning default confidence of 0.")
-                    conf_score = 0
-
-                confidence_scores.append(conf_score)
-            else:
-                logger.warning(f"Category {pred} not found in confidence dictionary. Assigning default confidence of 0.")
-                confidence_scores.append(0)
-        except Exception as e:
-            logger.error(f"Error calculating confidence for prob={prob}, pred={pred}: {e}")
-            logger.debug(traceback.format_exc())
-            confidence_scores.append(0)  # Default confidence if an error occurs
-
-    logger.debug(f"Finished calculate_confidence. Confidence scores: {confidence_scores}")
-    return confidence_scores
+        # Log overall confidence statistics
+        if all_confidences:
+            conf_array = np.array(all_confidences)
+            logger.info(f"Overall confidence statistics:")
+            logger.info(f"Min: {np.min(conf_array):.4f}, Max: {np.max(conf_array):.4f}, Mean: {np.mean(conf_array):.4f}")
+            logger.info(f"Confidence distribution:")
+            for threshold in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 0.999, 1.0]:
+                count = np.sum(conf_array >= threshold)
+                pct = 100 * count / len(conf_array)
+                logger.info(f"  >= {threshold:.3f}: {count} ({pct:.1f}%)")
+            
+            # Check if many scores are exactly 1.0 (suspicious)
+            exact_ones = np.sum(conf_array == 1.0)
+            if exact_ones / len(conf_array) > 0.5:  # If more than half are exactly 1.0
+                logger.warning(f"WARNING: {exact_ones} out of {len(conf_array)} confidence scores ({exact_ones/len(conf_array)*100:.1f}%) are exactly 1.0!")
+                logger.warning("This suggests a problem with the calibration process.")
+        
+        return predictions, confidence_scores, raw_scores, calibrated_scores

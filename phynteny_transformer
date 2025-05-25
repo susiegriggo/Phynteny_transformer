@@ -327,7 +327,6 @@ def main():
 
     # read in needed info on PHROGS 
     category_dict, phrog_integer_category = format_data.read_annotations_information()
-    logger.info(f'phrog_integer_category: {phrog_integer_category}')
 
     # Determine whether to use LSTM based on the --no-lstm flag
     use_lstm = not args.no_lstm
@@ -543,7 +542,15 @@ def main():
     logger.info(f"Writing GenBank and table data for {len(genome_ids)} genomes")
     
     # Create the categories map from calibration_models
-    categories_map = {i: cat_name for i, cat_name in enumerate(calibration_models.keys())}
+    if isinstance(calibration_models, list):
+        # If calibration_models is a list (ensemble model), use the first model's keys
+        logger.info("Creating category map from the first model in the ensemble")
+        categories_map = {i: cat_name for i, cat_name in enumerate(calibration_models[0].keys())}
+    else:
+        # If calibration_models is a dictionary (single model)
+        logger.info("Creating category map from the single model")
+        categories_map = {i: cat_name for i, cat_name in enumerate(calibration_models.keys())}
+
     logger.info(f"Categories map: {categories_map}")
     
     # Log the mapping to help with debugging
@@ -586,5 +593,4 @@ def main():
     logger.info(f"Total execution time: {elapsed_time:.2f} seconds")
 
 if __name__ == "__main__":
-    main()
     main()
