@@ -551,10 +551,10 @@ def main():
         logger.info("Creating category map from the single model")
         categories_map = {i: cat_name for i, cat_name in enumerate(calibration_models.keys())}
 
-    logger.info(f"Categories map: {categories_map}")
+    logger.debug(f"Categories map: {categories_map}")
     
     # Log the mapping to help with debugging
-    logger.info(f"Category mapping created: {categories_map}")
+    logger.debug(f"Category mapping created: {categories_map}")
     
     # Write predictions to GenBank file
     p.write_genbank(
@@ -568,11 +568,11 @@ def main():
     )
     
     # Log final data structure info before generating the table
-    logger.info("Final data structure check before table generation:")
-    logger.info(f"Number of genomes in gb_dict: {len(gb_dict)}")
-    logger.info(f"Number of prediction arrays: {len(predictions)}")
-    logger.info(f"Number of score arrays: {len(scores)}")
-    logger.info(f"Number of confidence score arrays: {len(confidence_scores)}")
+    logger.debug("Final data structure check before table generation:")
+    logger.debug(f"Number of genomes in gb_dict: {len(gb_dict)}")
+    logger.debug(f"Number of prediction arrays: {len(predictions)}")
+    logger.debug(f"Number of score arrays: {len(scores)}")
+    logger.debug(f"Number of confidence score arrays: {len(confidence_scores)}")
     
     # Generate the table
     table_file = args.out + "/phynteny.tsv"

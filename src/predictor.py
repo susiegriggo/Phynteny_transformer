@@ -741,7 +741,7 @@ class Predictor:
         # Add validation and logging of calibration models
         is_ensemble = isinstance(calibration_models, list)
         num_models = len(calibration_models) if is_ensemble else 1
-        logger.info(f"Calibration model type: {'Ensemble' if is_ensemble else 'Single'} with {num_models} model(s)")
+        logger.debug(f"Calibration model type: {'Ensemble' if is_ensemble else 'Single'} with {num_models} model(s)")
         
         # Log calibration model keys to verify they exist
         if is_ensemble:

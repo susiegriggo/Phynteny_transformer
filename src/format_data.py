@@ -432,15 +432,26 @@ def read_fasta(file_path):
         for line in file:
             if line.startswith(">"):
                 if sequence:
-                    sequences.append(sequence)
-                    headers.append(header)
-                    sequence = ""
+                    # Only add non-empty sequences
+                    if len(sequence.strip()) > 0:
+                        sequences.append(sequence)
+                        headers.append(header)
+                    else:
+                        logger.warning(f"Skipping empty sequence for header: {header}")
+                sequence = ""
                 header = line[1:].strip()
             else:
                 sequence += line.strip()
         if sequence:
-            sequences.append(sequence)
-            headers.append(header)
+            # Check final sequence too
+            if len(sequence.strip()) > 0:
+                sequences.append(sequence)
+                headers.append(header)
+            else:
+                logger.warning(f"Skipping empty sequence for header: {header}")
+    
+    # Log summary
+    logger.info(f"Read {len(sequences)} valid sequences from {file_path}")
     return headers, sequences
 
 def batch_sequences(sequences, tokens_per_batch, tokenizer):
@@ -455,20 +466,52 @@ def batch_sequences(sequences, tokens_per_batch, tokenizer):
     batches = []
     current_batch = []
     current_tokens = 0
-
+    
+    # First, filter out any empty sequences
+    valid_sequences = []
     for seq in sequences:
-        tokenized_seq = tokenizer(seq, return_tensors="pt", truncation=True, padding=True)
-        num_tokens = tokenized_seq.input_ids.size(1)
-        if current_tokens + num_tokens > tokens_per_batch:
-            batches.append(current_batch)
-            current_batch = []
-            current_tokens = 0
-        current_batch.append(seq)
-        current_tokens += num_tokens
+        if seq and len(seq.strip()) > 0:
+            valid_sequences.append(seq)
+        else:
+            logger.warning("Filtered out empty sequence during batching")
+    
+    # Early return if no valid sequences
+    if not valid_sequences:
+        logger.error("No valid sequences to batch!")
+        return []
+        
+    logger.info(f"Batching {len(valid_sequences)} valid sequences")
 
+    for seq in valid_sequences:
+        try:
+            # Check if we can tokenize the sequence
+            tokenized_seq = tokenizer(seq, return_tensors="pt", truncation=True, padding=True)
+            num_tokens = tokenized_seq.input_ids.size(1)
+            
+            # If this would overflow the batch, save current batch and start a new one
+            if current_tokens + num_tokens > tokens_per_batch and current_batch:
+                batches.append(current_batch)
+                current_batch = []
+                current_tokens = 0
+            
+            current_batch.append(seq)
+            current_tokens += num_tokens
+            
+        except Exception as e:
+            logger.error(f"Error tokenizing sequence: {str(e)}")
+            logger.error(f"Problematic sequence: {seq[:50]}...")
+            # Skip this sequence
+
+    # Don't forget the last batch if it's not empty
     if current_batch:
         batches.append(current_batch)
-
+    
+    # Validate batches
+    for i, batch in enumerate(batches):
+        if not batch:
+            logger.error(f"Empty batch at index {i} detected!")
+    
+    logger.info(f"Created {len(batches)} batches from {len(valid_sequences)} sequences")
     return batches
 
 def load_model_from_checkpoint(checkpoint_path, base_model_name, cache_dir="/path/to/your/cache/directory"):
@@ -480,12 +523,9 @@ def load_model_from_checkpoint(checkpoint_path, base_model_name, cache_dir="/pat
     :param cache_dir: Directory to use for caching models and other files
     :return: Loaded model and tokenizer
     """
-    ## Set the cache directory
-    #os.environ['TRANSFORMERS_CACHE'] = cache_dir
 
     checkpoint = torch.load(checkpoint_path, map_location="cpu", weights_only=False)
     model = EsmModel.from_pretrained(base_model_name, cache_dir=cache_dir)
-    #model = EsmForMaskedLM.from_pretrained(base_model_name, cache_dir=cache_dir)
     tokenizer = EsmTokenizer.from_pretrained(base_model_name, cache_dir=cache_dir)
     new_state_dict = {k.replace("module.", ""): v for k, v in checkpoint["model_state_dict"].items()}
     model.load_state_dict(new_state_dict, strict=False)
@@ -521,7 +561,6 @@ def extract_embeddings(
         logger.info(f"Loaded model: {model_name}")
         logger.info(f"Loaded model from checkpoint: {checkpoint_path}") 
     else:
-        #tokenizer = EsmTokenizer.from_pretrained(model_name, cache_dir=cache_dir)
         tokenizer = EsmTokenizer.from_pretrained(model_name)
         model = EsmModel.from_pretrained(model_name, cache_dir=cache_dir)
         logger.info(f"Loaded model: {model_name}")
@@ -537,8 +576,36 @@ def extract_embeddings(
 
     # Read and batch the fasta file
     headers, sequences = read_fasta(fasta_file)
+    
+    # Validate and filter sequences
+    if not sequences:
+        logger.error(f"No sequences found in {fasta_file}")
+        return {}
+        
+    logger.info(f"Number of sequences: {len(sequences)}")
+    
+    # Set model_max_length on the tokenizer to prevent warnings
+    if not hasattr(tokenizer, "model_max_length") or tokenizer.model_max_length > 1e9:
+        tokenizer.model_max_length = max_length
+        logger.info(f"Set tokenizer max_length to {max_length}")
+    
+    # Create batches
     batches = batch_sequences(sequences, tokens_per_batch, tokenizer)
     logger.info(f"Number of batches: {len(batches)}")
+    
+    if not batches:
+        logger.error("No valid batches created. Please check your input file.")
+        return {}
+        
+    # Log the size of first few batches
+    for i, batch in enumerate(batches[:3]):
+        if batch:
+  
+            if i == 0:
+                # Print a sample from first batch for debugging
+                logger.debug(f"Sample from first batch: {batch[0][:50]}...")
+        else:
+            logger.error(f"Batch {i} is empty!")
 
     # Make output directory
     output_path = pathlib.Path(output_dir + "/esm")
@@ -550,40 +617,51 @@ def extract_embeddings(
     # Start processing batches
     with torch.no_grad():
         for batch_idx, batch in enumerate(batches):
-            logger.debug(f"Processing batch {batch_idx + 1} of {len(batches)}")
+            # Skip empty batches just in case
+            if not batch:
+                logger.warning(f"Skipping empty batch at index {batch_idx}")
+                continue
+                
+            logger.debug(f"Processing batch {batch_idx + 1} of {len(batches)} with {len(batch)} sequences")
 
-            # Tokenize the batch
-            inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=max_length)
-            if torch.cuda.is_available():
-                inputs = {key: val.cuda() for key, val in inputs.items()}
-
-            # Extract embeddings
+            # Tokenize the batch with explicit max_length
             try:
+                inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=max_length)
                 
-                if checkpoint_path is None:
-                    outputs = model(**inputs)
-                    token_representations = outputs.last_hidden_state
-                
-                else: 
-                    outputs = model(**inputs, output_hidden_states=True)
-                    token_representations = outputs.hidden_states[-1]
+                # Check that we got valid inputs
+                if not inputs or 'input_ids' not in inputs or inputs.input_ids.numel() == 0:
+                    logger.warning(f"Tokenization produced empty inputs for batch {batch_idx}. Skipping.")
+                    continue
                     
-                #pooled_representations = outputs.pooler_output
+                if torch.cuda.is_available():
+                    inputs = {key: val.cuda() for key, val in inputs.items()}
 
-                # Update this to save dictionary for an entire fasta file
-                for i, seq in enumerate(batch):
-                    representation = token_representations[i, 1 : len(seq) - 1].mean(0)
-                    #representation = pooled_representations[i]
-                    header = headers.pop(0)  # Use the header as the key
-                    if torch.cuda.is_available():
-                        results[header] = representation.detach().cpu()
-                    else:
-                        results[header] = representation
+                # Extract embeddings
+                try:
+                    if checkpoint_path is None:
+                        outputs = model(**inputs)
+                        token_representations = outputs.last_hidden_state
+                    else: 
+                        outputs = model(**inputs, output_hidden_states=True)
+                        token_representations = outputs.hidden_states[-1]
+                        
+                    # Update this to save dictionary for an entire fasta file
+                    for i, seq in enumerate(batch):
+                        representation = token_representations[i, 1 : len(seq) - 1].mean(0)
+                        header = headers.pop(0)  # Use the header as the key
+                        if torch.cuda.is_available():
+                            results[header] = representation.detach().cpu()
+                        else:
+                            results[header] = representation
 
-            except torch.cuda.OutOfMemoryError as e:
-                logger.error(f"CUDA out of memory: {e}")
-                torch.cuda.empty_cache()
-                raise
+                except torch.cuda.OutOfMemoryError as e:
+                    logger.error(f"CUDA out of memory: {e}")
+                    torch.cuda.empty_cache()
+                    raise
+                    
+            except Exception as e:
+                logger.error(f"Error processing batch {batch_idx}: {str(e)}")
+                continue
 
     torch.save(results, output_dir + "/esm/embeddings.pt")
     logger.info("Embeddings saved successfully")
