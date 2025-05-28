@@ -698,6 +698,15 @@ def prepare_data(
         # this_categories = [plm_integer.get(i) if plm_integer.get(i) is not None else -1 for i in this_genes]
         this_categories = genome_details.get(g).get("categories")
 
+        # Skip this genome if categories are None
+        if this_categories is None:
+            logger.warning(f"Genome {g} has no categories data. Skipping.")
+            removed.append(g)
+            continue
+
+        # Check if any individual category is None and replace with -1
+        this_categories = [cat if cat is not None else -1 for cat in this_categories]
+        
         # handle if extra features are specified separateley
         if extra_features:
             # print(genome_details.get(genome_label))
