@@ -5,6 +5,7 @@ import os
 import pickle
 import sys
 import time
+import joblib
 
 # Third-party library imports
 from loguru import logger
@@ -366,7 +367,7 @@ def main():
     logger.info("Computing ESM embeddings")
     logger.info("... if step is being slow consider using GPU!")
     embeddings = format_data.extract_embeddings(
-        fasta_out, args.out, model_name=args.esm_model
+        fasta_out, args.out, model_name=args.esm_model, tokens_per_batch=128,
     )
 
     # Prepare data
@@ -430,17 +431,24 @@ def main():
         num_layers=args.num_layers
     )
 
-    # Read the calibration models - only support isotonic regression now
+    # Read the calibration models - support both individual and ensemble calibration
     calibration_models_path = os.path.join(args.models, "calibration_models.pkl")
-    
-    # Check if calibration models exist
-    if os.path.exists(calibration_models_path):
+    ensemble_path = os.path.join(args.models, "all_calibration_models.pkl")
+
+    # Check if ensemble calibration models exist
+    if os.path.exists(ensemble_path):
+        with open(ensemble_path, 'rb') as f:
+            calibration_models = joblib.load(f)
+        logger.info(f"Loaded ensemble of {len(calibration_models)} isotonic regression calibration models")
+        logger.info("USING ENSEMBLE ISOTONIC REGRESSION for confidence calibration")
+    # Fall back to single model calibration
+    elif os.path.exists(calibration_models_path):
         with open(calibration_models_path, 'rb') as f:
-            calibration_models = pickle.load(f)
-        logger.info("Loaded isotonic regression calibration models")
+            calibration_models = joblib.load(f)
+        logger.info("Loaded single isotonic regression calibration model")
         logger.info("USING ISOTONIC REGRESSION for confidence calibration")
     else:
-        logger.error(f"Calibration models file not found at {calibration_models_path}")
+        logger.error(f"Calibration models file not found at {calibration_models_path} or {ensemble_path}")
         logger.error("The isotonic regression calibration models are required.")
         logger.error("Please ensure you have the latest models installed.")
         sys.exit(1)
@@ -468,8 +476,8 @@ def main():
     logger.info("Calculating confidence scores using isotonic regression calibration")
     
     # Always use isotonic regression for confidence calculation
-    predictions, confidence_scores = p.compute_confidence_isotonic(scores, calibration_models, phrog_integer_category)
-    
+    predictions, confidence_scores, raw_scores, calibrated_scores = p.compute_confidence_isotonic(scores, calibration_models, phrog_integer_category)
+
     # Check predictions and confidence scores dimensions
     logger.debug(f"Data dimensions after prediction:")
     logger.debug(f"Number of prediction arrays: {len(predictions)}")
@@ -534,7 +542,19 @@ def main():
     logger.info(f"Writing GenBank and table data for {len(genome_ids)} genomes")
     
     # Create the categories map from calibration_models
-    categories_map = {i: cat_name for i, cat_name in enumerate(calibration_models.keys())}
+    if isinstance(calibration_models, list):
+        # If calibration_models is a list (ensemble model), use the first model's keys
+        logger.info("Creating category map from the first model in the ensemble")
+        categories_map = {i: cat_name for i, cat_name in enumerate(calibration_models[0].keys())}
+    else:
+        # If calibration_models is a dictionary (single model)
+        logger.info("Creating category map from the single model")
+        categories_map = {i: cat_name for i, cat_name in enumerate(calibration_models.keys())}
+
+    logger.debug(f"Categories map: {categories_map}")
+    
+    # Log the mapping to help with debugging
+    logger.debug(f"Category mapping created: {categories_map}")
     
     # Write predictions to GenBank file
     p.write_genbank(
@@ -548,11 +568,11 @@ def main():
     )
     
     # Log final data structure info before generating the table
-    logger.info("Final data structure check before table generation:")
-    logger.info(f"Number of genomes in gb_dict: {len(gb_dict)}")
-    logger.info(f"Number of prediction arrays: {len(predictions)}")
-    logger.info(f"Number of score arrays: {len(scores)}")
-    logger.info(f"Number of confidence score arrays: {len(confidence_scores)}")
+    logger.debug("Final data structure check before table generation:")
+    logger.debug(f"Number of genomes in gb_dict: {len(gb_dict)}")
+    logger.debug(f"Number of prediction arrays: {len(predictions)}")
+    logger.debug(f"Number of score arrays: {len(scores)}")
+    logger.debug(f"Number of confidence score arrays: {len(confidence_scores)}")
     
     # Generate the table
     table_file = args.out + "/phynteny.tsv"
@@ -573,5 +593,4 @@ def main():
     logger.info(f"Total execution time: {elapsed_time:.2f} seconds")
 
 if __name__ == "__main__":
-    main()
     main()

@@ -19,7 +19,8 @@ PARAMETERS = {
     'integer_category_path': 'Path to the integer category file.',
     'output_path': 'Path to save the output calibration models.',
     'force': 'Overwrite output directory if it exists.',
-    'batch_size': 'Batch size for processing the data.'
+    'batch_size': 'Batch size for processing the data.',
+    'test': 'Use test mode with only 1000 sequences for quick testing.'
 }
 
 logger.info("Parameters used in the script:")
@@ -35,6 +36,7 @@ for param, desc in PARAMETERS.items():
 @click.option('-o', '--output', 'output_path', type=click.Path(), help=PARAMETERS['output_path'])
 @click.option('-f', '--force', is_flag=True, help=PARAMETERS['force'])
 @click.option('--batch-size', default=128, help=PARAMETERS['batch_size'])
+@click.option('--test', is_flag=True, help=PARAMETERS['test'])
 @click.option('--input-dim', default=1280, help='Input dimension for the model.')
 @click.option('--num-classes', default=9, help='Number of classes for the model.')
 @click.option('--num-heads', default=4, help='Number of attention heads for the model.')
@@ -50,58 +52,59 @@ for param, desc in PARAMETERS.items():
 @click.option('--dropout', default=0.0, help='Dropout rate for the model. Should be 0 for inference.', type=float)
 @click.option('--protein-dropout-rate', default=0.0, help='Dropout rate for protein features. Should be 0 for inference.', type=float)
 @click.option('--progressive-dropout', is_flag=True, default=False, help='Enable progressive dropout for protein features.')
-@click.option('--initial-dropout-rate', default=1.0, help='Initial dropout rate when using progressive dropout.', type=float)
-@click.option('--final-dropout-rate', default=0.4, help='Final dropout rate when using progressive dropout.', type=float)
 
-def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, no_lstm, max_len, attention, positional_encoding_type, pre_norm, output_dim, num_layers, dropout, protein_dropout_rate, progressive_dropout, initial_dropout_rate, final_dropout_rate):
+def main(model_directory, embeddings_path, categories_path, validation_categories_path, integer_category_path, output_path, force, batch_size, test, input_dim, num_classes, num_heads, hidden_dim, lstm_hidden_dim, no_lstm, max_len, attention, positional_encoding_type, pre_norm, output_dim, num_layers, dropout, protein_dropout_rate, progressive_dropout, initial_dropout_rate=1.0, final_dropout_rate=0.4):
     """
-    Calibrate confidence scores for model predictions using Isotonic Regression
+    Main function to run calibration of confidence scores
     """
-    logger.info("Starting confidence calibration with isotonic regression")
+    # Log if test mode is enabled
+    if test:
+        logger.info("TEST MODE ENABLED - Using limited dataset of 1000 sequences")
     
-    # Check if output directory exists
-    if os.path.exists(output_path) and not force:
-        logger.error(f"Output directory {output_path} already exists. Use --force to overwrite.")
-        return
-    elif os.path.exists(output_path) and force:
-        logger.info(f"Output directory {output_path} exists, overwriting...")
-    else:
-        os.makedirs(output_path, exist_ok=True)
+    # Create output directory if it doesn't exist
+    if output_path is not None:
+        os.makedirs(output_path, exist_ok=force)
     
-    # Set device
+    # Select appropriate device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
-    # Load data
+    # Load data with test mode parameter
     embeddings, categories, validation_categories, phrog_integer = load_data(
-        embeddings_path, categories_path, validation_categories_path, integer_category_path
+        embeddings_path, categories_path, validation_categories_path, integer_category_path, test_mode=test
     )
     
-    # Create predictor
-    p = create_predictor(
-        model_directory, device, input_dim, num_classes, num_heads, 
-        hidden_dim, lstm_hidden_dim, dropout, not no_lstm, max_len, 
-        protein_dropout_rate, attention, positional_encoding_type, pre_norm,
-        progressive_dropout, initial_dropout_rate, final_dropout_rate, output_dim, num_layers
-    )
+    # Format phrog_integer for the model
+    phrog_integer = dict(zip(range(9), [phrog_integer.get(i) for i in range(1,10)]))
     
-    # Create dataset for calibration
+    # Create dataloader
     conf_dataset_loader = create_dataloader(embeddings, categories, validation_categories, batch_size)
     
-    # Process data in batches to get predictions
-    all_probs, all_labels = process_batches(p, conf_dataset_loader, device)
-    
-    # Calibrate predictions with isotonic regression
-    calibration_models, calibration_stats = calibrate_probabilities(
-        all_probs, all_labels, phrog_integer, num_classes
+    # Create predictor with specified model parameters
+    use_lstm = not no_lstm
+    p = create_predictor(
+        model_directory, device, input_dim, num_classes, num_heads, 
+        hidden_dim, lstm_hidden_dim, dropout, use_lstm, max_len, 
+        protein_dropout_rate, attention, positional_encoding_type, pre_norm,
+        progressive_dropout, initial_dropout_rate, final_dropout_rate, 
+        output_dim, num_layers
     )
     
-    # Save calibration models and statistics
-    save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer)
+    # Process batches
+    all_models_probs, all_labels = process_batches_per_model(p, conf_dataset_loader, device)
     
-    logger.info("Calibration completed successfully")
+    # Calibrate probabilities
+    calibration_models, calibration_stats, raw_scores = calibrate_probabilities_per_model(
+        all_models_probs, all_labels, phrog_integer, num_classes
+    )
+    
+    # Save calibration models and detailed prediction data
+    save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer)
+    save_detailed_prediction_data(raw_scores, output_path)
+    
+    logger.info("Calibration process completed successfully")
 
-def load_data(embeddings_path, categories_path, validation_categories_path, integer_category_path):
+def load_data(embeddings_path, categories_path, validation_categories_path, integer_category_path, test_mode=False):
     """
     Load data from specified paths
     """
@@ -126,6 +129,12 @@ def load_data(embeddings_path, categories_path, validation_categories_path, inte
     with open(integer_category_path, 'rb') as f:
         phrog_integer = pickle.load(f)
     logger.info(f"Loaded integer categories mapping: {len(phrog_integer)} items")
+    
+    if test_mode:
+        logger.info("TEST MODE: Reducing dataset size to 1000 sequences")
+        embeddings = dict(list(embeddings.items())[:1000])
+        categories = dict(list(categories.items())[:1000])
+        validation_categories = dict(list(validation_categories.items())[:1000])
     
     return embeddings, categories, validation_categories, phrog_integer
 
@@ -161,32 +170,37 @@ def create_dataloader(embeddings, categories, validation_categories, batch_size=
     """
     Create a DataLoader for the validation data
     """
-    dataset = model_onehot.EmbeddingDataset(
-        list(embeddings.values()),
-        list(categories.values()),
-        list(embeddings.keys()),
-        mask_portion=0  # No masking for calibration
-    )
+    logger.info("Creating the dataset and dataloader.")
     
-    # Set validation mode
-    dataset.set_validation(list(validation_categories.values()), validation=True)
+    # only include data that occurs in both sets 
+    logger.info("Removing categories not in validation set.")
+    include_keys = list(set(categories.keys()).intersection(set(validation_categories.keys())))
+    validation_categories = dict(zip(include_keys, [validation_categories.get(k) for k in include_keys]))
+    categories = dict(zip(include_keys, [categories.get(k) for k in include_keys]))
+    embeddings = dict(zip(include_keys, [embeddings.get(k) for k in include_keys]))
     
-    # Create DataLoader
-    dataloader = DataLoader(
-        dataset,
-        batch_size=batch_size,
-        collate_fn=model_onehot.collate_fn
-    )
+    # create the dataset
+    conf_dataset = model_onehot.EmbeddingDataset(
+        list(embeddings.values()), list(categories.values()), list(categories.keys()), mask_portion=0)
     
-    return dataloader
+    # set the validation set
+    logger.info("Setting the validation set.")
+    conf_dataset.set_validation(list(validation_categories.values()))
+    conf_dataset_loader = DataLoader(conf_dataset, batch_size=batch_size, collate_fn=model_onehot.collate_fn)
+    
+    return conf_dataset_loader
 
-def process_batches(p, conf_dataset_loader, device):
+def process_batches_per_model(p, conf_dataset_loader, device):
     """
-    Process batches and collect predictions and true labels
+    Process batches and collect predictions from each model separately
     """
-    logger.info("Processing batches to collect calibration data...")
+    logger.info("Processing batches to collect calibration data per model...")
     
-    all_probs = []
+    num_models = len(p.models)
+    logger.info(f"Found {num_models} models to process")
+    
+    # Create separate lists for each model's predictions
+    all_models_probs = [[] for _ in range(num_models)]
     all_labels = []
     
     # Put models in evaluation mode
@@ -194,115 +208,245 @@ def process_batches(p, conf_dataset_loader, device):
         model.eval()
     
     with torch.no_grad():
-        for embeddings_batch, categories_batch, masks_batch, idx_batch in conf_dataset_loader:
+        for batch_idx, (embeddings, categories, masks, _) in enumerate(conf_dataset_loader):
+            if batch_idx % 10 == 0:
+                logger.info(f"Processing batch {batch_idx}/{len(conf_dataset_loader)}")
+            
             # Move data to device
-            embeddings_batch = embeddings_batch.to(device)
-            categories_batch = categories_batch.to(device)
-            masks_batch = masks_batch.to(device)
+            embeddings = embeddings.to(device)
+            categories = categories.to(device)
+            masks = masks.to(device)
+            src_key_padding_mask = (masks != -2).to(device)
             
-            # Get padding mask
-            src_key_padding_mask = (masks_batch != -2).to(device)
+            # Process each model separately
+            for i, model in enumerate(p.models):
+                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                probs = torch.softmax(outputs, dim=-1).cpu().numpy()
+                
+                # Make sure we gather all valid predictions
+                valid_mask = masks.cpu().numpy() == 1
+                for j in range(probs.shape[0]):  # For each sample in the batch
+                    for k in range(probs.shape[1]):  # For each position in the sequence
+                        if valid_mask[j, k]:
+                            all_models_probs[i].append(probs[j, k])
             
-            # Get predictions
-            batch_scores = p.predict_batch(embeddings_batch, src_key_padding_mask)
-            
-            # Process results for each item in batch
-            for i, indices in enumerate(idx_batch):
-                if len(indices) > 0:  # If there are masked tokens
-                    for idx in indices:
-                        # Get the probability and true label for this token
-                        prob = batch_scores[i][idx].cpu().numpy()
-                        label = categories_batch[i][idx].item()
-                        if label != -1:  # Ignore padding tokens
-                            all_probs.append(prob)
-                            all_labels.append(label)
+            # Only collect labels once from the first model iteration
+            valid_mask = masks.cpu().numpy() == 1
+            for j in range(categories.shape[0]):  # For each sample in the batch
+                for k in range(categories.shape[1]):  # For each position in the sequence
+                    if valid_mask[j, k]:
+                        all_labels.append(categories[j, k].cpu().numpy())
     
     # Convert to numpy arrays
-    all_probs = np.array(all_probs)
+    for i in range(num_models):
+        all_models_probs[i] = np.array(all_models_probs[i])
     all_labels = np.array(all_labels)
     
-    logger.info(f"Collected {len(all_labels)} samples for calibration")
-    return all_probs, all_labels
+    logger.info(f"Collected {len(all_labels)} samples for calibration across {num_models} models")
+    return all_models_probs, all_labels
 
-def calibrate_probabilities(all_probs, all_labels, phrog_integer, num_classes):
+def calibrate_probabilities_per_model(all_models_probs, all_labels, phrog_integer, num_classes):
     """
-    Calibrate probabilities using isotonic regression for each class
+    Calibrate probabilities using isotonic regression for each class and each model separately
     """
-    logger.info("Calibrating probabilities with isotonic regression...")
+    logger.info("Calibrating probabilities with isotonic regression for each model...")
     
-    calibration_models = {}
-    calibration_stats = {}
+    num_models = len(all_models_probs)
+    logger.info(f"Processing calibration for {num_models} models")
     
-    # Create the reverse mapping from integer to category name
-    categories_map = dict(zip(range(num_classes), phrog_integer.keys()))
+    all_calibration_models = []
+    all_calibration_stats = []
     
-    # Create isotonic regression model for each class
-    for class_idx in range(num_classes):
-        class_name = categories_map.get(class_idx, f"Class_{class_idx}")
-        logger.info(f"Calibrating class {class_idx}: {class_name}")
+    # Store original probabilities and true labels
+    raw_scores = {
+        "model_probabilities": all_models_probs,
+        "true_labels": all_labels,
+        "calibrated_model_probabilities": [],
+        "model_predictions": [],
+        "calibrated_model_predictions": [],
+        "model_confidences": []
+    }
+    
+    # For averaging results across all models
+    avg_probs = np.zeros_like(all_models_probs[0])
+    avg_calibrated_probs = np.zeros_like(all_models_probs[0])
+    
+    # Process each model separately
+    for model_idx in range(num_models):
+        logger.info(f"Calibrating model {model_idx+1}/{num_models}")
         
-        # Get binary indicator for this class
-        y_true_binary = (all_labels == class_idx).astype(int)
+        model_probs = all_models_probs[model_idx]
+        avg_probs += model_probs / num_models  # For ensemble average
         
-        # Get predicted probabilities for this class
-        y_pred_proba = all_probs[:, class_idx]
+        calibration_models = {}
+        calibration_stats = {}
         
-        # Make sure we have samples of this class
-        if sum(y_true_binary) > 0:
-            # Fit isotonic regression
-            ir = IsotonicRegression(out_of_bounds='clip')
-            ir.fit(y_pred_proba, y_true_binary)
+        # Create arrays to store calibrated probabilities for this model
+        calibrated_probs = np.zeros_like(model_probs)
+        
+        # Create isotonic regression model for each class
+        for class_idx in phrog_integer.keys():
+            class_name = phrog_integer[class_idx]
+            logger.info(f"Calibrating class {class_idx} ({class_name})")
             
-            # Compute calibration metrics
-            y_calibrated = ir.transform(y_pred_proba)
-            brier = brier_score_loss(y_true_binary, y_pred_proba)
-            brier_cal = brier_score_loss(y_true_binary, y_calibrated)
-            logloss = log_loss(y_true_binary, y_pred_proba, eps=1e-15)
-            logloss_cal = log_loss(y_true_binary, y_calibrated, eps=1e-15)
+            # Extract probabilities for this class
+            class_probs = model_probs[:, class_idx]
             
-            # Store calibration model and statistics
-            calibration_models[class_name] = {
-                'calibrator': ir,
-                'num_samples': len(y_true_binary),
-                'positive_samples': sum(y_true_binary)
-            }
+            # One-vs-rest approach: binary labels for this class
+            binary_labels = (all_labels == class_idx).astype(int)
             
+            # Fit isotonic regression for this class
+            iso_reg = IsotonicRegression(out_of_bounds='clip')
+            iso_reg.fit(class_probs, binary_labels)
+            
+            # Predict calibrated probabilities
+            calibrated_class_probs = iso_reg.predict(class_probs)
+            calibrated_probs[:, class_idx] = calibrated_class_probs
+            
+            # Calculate calibration metrics
+            brier = brier_score_loss(binary_labels, class_probs)
+            calibrated_brier = brier_score_loss(binary_labels, calibrated_class_probs)
+            
+            # If any class_probs are 0 or 1, they cause warnings in log_loss, so clip them
+            clipped_probs = np.clip(class_probs, 1e-15, 1 - 1e-15)
+            clipped_calibrated = np.clip(calibrated_class_probs, 1e-15, 1 - 1e-15)
+            
+            logloss = log_loss(binary_labels, clipped_probs)
+            calibrated_logloss = log_loss(binary_labels, clipped_calibrated)
+            
+            # Store the calibration model and stats for this class
+            calibration_models[class_name] = iso_reg
             calibration_stats[class_name] = {
-                'brier_score_raw': brier,
-                'brier_score_calibrated': brier_cal,
-                'log_loss_raw': logloss,
-                'log_loss_calibrated': logloss_cal,
-                'brier_improvement': (brier - brier_cal) / brier if brier > 0 else 0,
-                'logloss_improvement': (logloss - logloss_cal) / logloss if logloss > 0 else 0
+                "brier_score_raw": brier,
+                "brier_score_calibrated": calibrated_brier,
+                "log_loss_raw": logloss,
+                "log_loss_calibrated": calibrated_logloss,
+                "brier_improvement": brier - calibrated_brier,
+                "logloss_improvement": logloss - calibrated_logloss
             }
             
-            logger.info(f"  - Samples: {len(y_true_binary)}, Positive: {sum(y_true_binary)}")
-            logger.info(f"  - Brier score: {brier:.4f} -> {brier_cal:.4f} ({calibration_stats[class_name]['brier_improvement']:.2%} improvement)")
-            logger.info(f"  - Log loss: {logloss:.4f} -> {logloss_cal:.4f} ({calibration_stats[class_name]['logloss_improvement']:.2%} improvement)")
-        else:
-            logger.warning(f"No positive samples for class {class_idx}: {class_name}. Skipping calibration.")
+        # Normalize calibrated probabilities to sum to 1
+        row_sums = calibrated_probs.sum(axis=1, keepdims=True)
+        calibrated_probs = np.divide(calibrated_probs, row_sums, out=np.zeros_like(calibrated_probs), where=row_sums!=0)
+        
+        # Add to ensemble average
+        avg_calibrated_probs += calibrated_probs / num_models
+        
+        # Store the calibration results for this model
+        all_calibration_models.append(calibration_models)
+        all_calibration_stats.append(calibration_stats)
+        
+        # Store predictions and calibrated probabilities for this model
+        raw_scores["calibrated_model_probabilities"].append(calibrated_probs)
+        raw_scores["model_predictions"].append(np.argmax(model_probs, axis=1))
+        raw_scores["calibrated_model_predictions"].append(np.argmax(calibrated_probs, axis=1))
+        raw_scores["model_confidences"].append(np.max(calibrated_probs, axis=1))
     
-    return calibration_models, calibration_stats
+    # Store the ensemble average results
+    raw_scores["ensemble_probabilities"] = avg_probs
+    raw_scores["ensemble_calibrated_probabilities"] = avg_calibrated_probs
+    raw_scores["ensemble_predictions"] = np.argmax(avg_probs, axis=1)
+    raw_scores["ensemble_calibrated_predictions"] = np.argmax(avg_calibrated_probs, axis=1)
+    raw_scores["ensemble_confidence"] = np.max(avg_calibrated_probs, axis=1)
+    
+    logger.info("Calibration completed for all models")
+    return all_calibration_models, all_calibration_stats, raw_scores
 
 def save_calibration_models(calibration_models, calibration_stats, output_path, phrog_integer):
     """
-    Save calibration models and statistics to disk
+    Save calibration models and statistics to files
     """
-    logger.info(f"Saving calibration models to {output_path}")
+    logger.info("Saving calibration models and statistics")
     
-    # Save the models
-    with open(os.path.join(output_path, 'calibration_models.pkl'), 'wb') as f:
-        pickle.dump(calibration_models, f)
+    # Create output directories if needed
+    os.makedirs(output_path, exist_ok=True)
+    models_dir = os.path.join(output_path, 'models')
+    os.makedirs(models_dir, exist_ok=True)
+    
+    # Save individual calibration models for each model
+    num_models = len(calibration_models)
+    
+    for model_idx, model_calibrations in enumerate(calibration_models):
+        model_dir = os.path.join(models_dir, f'model_{model_idx}')
+        os.makedirs(model_dir, exist_ok=True)
+        
+        # Save each class calibration separately
+        for class_name, model in model_calibrations.items():
+            class_path = os.path.join(model_dir, f'calibration_{class_name}.pkl')
+            with open(class_path, 'wb') as f:
+                dump(model, f)
+    
+    # Save all calibration models as a single file - use the first model as default
+    # This maintains compatibility with existing code
+    all_models_path = os.path.join(output_path, 'calibration_models.pkl')
+    with open(all_models_path, 'wb') as f:
+        dump(calibration_models[0], f)  # Use first model as default
+    logger.info(f"Saved default calibration models to {all_models_path}")
+    
+    # Also save the full collection of all model calibrations
+    all_models_collection_path = os.path.join(output_path, 'all_calibration_models.pkl')
+    with open(all_models_collection_path, 'wb') as f:
+        dump(calibration_models, f)
+    logger.info(f"Saved full collection of calibration models to {all_models_collection_path}")
     
     # Save calibration statistics
-    with open(os.path.join(output_path, 'calibration_stats.pkl'), 'wb') as f:
-        pickle.dump(calibration_stats, f)
+    stats_path = os.path.join(output_path, 'calibration_statistics.pkl')
+    with open(stats_path, 'wb') as f:
+        dump(calibration_stats, f)
+    logger.info(f"Saved calibration statistics to {stats_path}")
+    
+    # Save calibration stats as CSV for easy reading - one file per model
+    for model_idx, model_stats in enumerate(calibration_stats):
+        stats_csv = []
+        stats_csv.append("class_name,brier_score_raw,brier_score_calibrated,log_loss_raw,log_loss_calibrated,brier_improvement,logloss_improvement")
+        
+        for class_name, stats in model_stats.items():
+            stats_csv.append(f"{class_name},{stats['brier_score_raw']},{stats['brier_score_calibrated']},{stats['log_loss_raw']},{stats['log_loss_calibrated']},{stats['brier_improvement']},{stats['logloss_improvement']}")
+        
+        # Write CSV manually since we're not importing pandas
+        csv_path = os.path.join(output_path, f'calibration_statistics_model_{model_idx}.csv')
+        with open(csv_path, 'w') as f:
+            f.write('\n'.join(stats_csv))
+        logger.info(f"Saved calibration statistics as CSV for model {model_idx} to {csv_path}")
     
     # Also save a mapping from integer to category name for reference
     with open(os.path.join(output_path, 'category_mapping.pkl'), 'wb') as f:
-        pickle.dump(phrog_integer, f)
+        dump(phrog_integer, f)
     
     logger.info("Calibration models and statistics saved successfully")
+
+def save_detailed_prediction_data(raw_scores, output_path):
+    """
+    Save detailed prediction data in a format compatible with compute_confidence.py
+    """
+    detailed_dict = {
+        'scores': raw_scores["ensemble_probabilities"],
+        'true_labels': raw_scores["true_labels"],
+        'predictions': raw_scores["ensemble_predictions"],
+        'calibrated_scores': raw_scores["ensemble_calibrated_probabilities"],
+        'calibrated_predictions': raw_scores["ensemble_calibrated_predictions"],
+        'confidence': raw_scores["ensemble_confidence"],
+        'per_model_scores': raw_scores["model_probabilities"],
+        'per_model_calibrated_scores': raw_scores["calibrated_model_probabilities"],
+        'per_model_predictions': raw_scores["model_predictions"],
+        'per_model_calibrated_predictions': raw_scores["calibrated_model_predictions"],
+        'per_model_confidences': raw_scores["model_confidences"]
+    }
+    
+    detailed_output_path = os.path.join(output_path, "calibration_detailed.pkl")
+    logger.info(f"Saving detailed prediction data to {detailed_output_path}")
+    
+    with open(detailed_output_path, 'wb') as f:
+        dump(detailed_dict, f)
+    
+    # Also save in a format exactly matching compute_confidence output
+    compute_confidence_format = os.path.join(output_path, "confidence_detailed.pkl")
+    logger.info(f"Saving in compute_confidence compatible format to {compute_confidence_format}")
+    
+    with open(compute_confidence_format, 'wb') as f:
+        dump(detailed_dict, f)
+    
+    logger.info("Detailed prediction data saved successfully")
 
 if __name__ == "__main__":
     main()

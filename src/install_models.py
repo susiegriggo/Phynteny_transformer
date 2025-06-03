@@ -1,7 +1,7 @@
 """
 Module for handling models.
 
-Based on code from https://github.com/gbouras13/pharokka/blob/master/bin/databases.py
+Based on code from https://github.com/gbouras13/pharokka/blob/master/bin/databases.py (thankyou!)
 """
 #!/usr/bin/env python3
 import hashlib
@@ -33,7 +33,7 @@ PHYNTENY_MODEL_NAMES = ['fold_10transformer.model' ,
 VERSION_DICTIONARY = {
     "0.1.1": {
         "md5": "493657e916bbb9c63ef5304726da2671",
-        "db_url": "https://zenodo.org/records/15276214/files/phynteny_transformer_model0.1.1_2025-04-24.tar.gz",
+        "db_url": "https://zenodo.org/records/15584824/files/phynteny_transformer_models_2025-06-03.tar.gz",
         #"dir_name": "phynteny_transformer_models_zenodo",
         "dir_name": ".",
     }

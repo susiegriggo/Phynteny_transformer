@@ -64,8 +64,6 @@ class EmbeddingDataset(Dataset):
             self.noise_std = noise_std  # Add noise_std attribute
             self.strand_gene_length = strand_gene_length  # Add strand_gene_length attribute
             self.class_weights = self.calculate_class_weights()
-            logger.info(f"Computed class weights: {self.class_weights}")
-            logger.info(f'noise_std: {self.noise_std}')
             self.masked_category_counts = torch.zeros(num_classes)  # Add masked_category_counts attribute
         except Exception as e:
             logger.error(f"Error initializing EmbeddingDataset: {e}")
