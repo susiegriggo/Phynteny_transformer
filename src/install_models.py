@@ -32,7 +32,7 @@ PHYNTENY_MODEL_NAMES = ['fold_10transformer.model' ,
 
 VERSION_DICTIONARY = {
     "0.1.1": {
-        "md5": "493657e916bbb9c63ef5304726da2671",
+        "md5": "511358aca216d214b5d7ca7a57fe2250",
         "db_url": "https://zenodo.org/records/15584824/files/phynteny_transformer_models_2025-06-03.tar.gz",
         #"dir_name": "phynteny_transformer_models_zenodo",
         "dir_name": ".",
