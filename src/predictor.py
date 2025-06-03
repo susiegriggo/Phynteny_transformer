@@ -472,8 +472,6 @@ class Predictor:
                 
                 logger.info(f"Successfully wrote predictions to {output_file}")
                 logger.info(f"Statistics: {unknown_function_count} genes with unknown function, {predictions_added_count} predictions added")
-                logger.info(f"Skipped: {low_confidence_count} due to low confidence, {known_function_count} with known function")
-                    
             return None
             
         except Exception as e:
@@ -756,7 +754,7 @@ class Predictor:
                     except Exception as e:
                         logger.error(f"Error testing isotonic model {i} for class {key}: {e}")
         else:
-            logger.info(f"Single model calibration keys: {list(calibration_models.keys())}")
+            logger.debug(f"Single model calibration keys: {list(calibration_models.keys())}")
             # Verify isotonic models exist and can predict
             for key, iso_model in calibration_models.items():
                 try:
