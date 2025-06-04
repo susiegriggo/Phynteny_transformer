@@ -54,4 +54,4 @@ jobs:
         with:
           packages-dir: dist/
         env:
-          PYPI_API_TOKEN: ${{ secrets.PHYNTENY_TRANSFORMER_SECRET }}
+          PYPI_API_TOKEN: ${{ secrets.PHYNTENY_TRANSFORMER_API }}
