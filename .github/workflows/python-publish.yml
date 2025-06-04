@@ -54,5 +54,6 @@ jobs:
         with:
           packages-dir: dist/
         env:
+          user: __token__
           PYPI_API_TOKEN: ${{ secrets.PHYNTENY_TRANSFORMER_PYPI }}
           verbose: true
