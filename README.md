@@ -1,3 +1,9 @@
+[![Edwards Lab](https://img.shields.io/badge/Bioinformatics-EdwardsLab-03A9F4)](https://edwards.flinders.edu.au)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+![GitHub language count](https://img.shields.io/github/languages/count/susiegriggo/Phynteny_transformer)
+[![install with pip](https://img.shields.io/static/v1?label=Install%20with&message=PIP&color=success)](https://pypi.org/project/phynteny_transformer/)
+![GitHub last commit (branch)](https://img.shields.io/github/last-commit/susiegriggo/phynteny_transformer/main)
+
 # Phynteny-Transformer 
 ![Phynteny Transformer Logo](phynteny_logo.png)
 
