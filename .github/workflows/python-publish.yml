@@ -37,7 +37,7 @@ jobs:
       id-token: write
 
     environment:
-      name: phynteny_transformer_env
+      name: pypi
 
     steps:
       - name: Clear the cache (if any)
@@ -54,4 +54,4 @@ jobs:
         with:
           packages-dir: dist/
         env:
-          PYPI_API_TOKEN: ${{ secrets.PHYNTENY_TRANSFORMER_API }}
+          PYPI_API_TOKEN: ${{ secrets.PHYNTENY_TRANSFORMER_PYPI }}
