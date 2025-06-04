@@ -40,6 +40,9 @@ jobs:
       name: phynteny_transformer_env
 
     steps:
+      - name: Clear the cache (if any)
+        run: rm -rf ~/.cache/pypoetry
+
       - name: Retrieve release distributions
         uses: actions/download-artifact@v4
         with:
