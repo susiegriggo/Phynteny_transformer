@@ -3,17 +3,20 @@
 ![GitHub language count](https://img.shields.io/github/languages/count/susiegriggo/Phynteny_transformer)
 [![install with pip](https://img.shields.io/static/v1?label=Install%20with&message=PIP&color=success)](https://pypi.org/project/phynteny_transformer/)
 ![GitHub last commit (branch)](https://img.shields.io/github/last-commit/susiegriggo/phynteny_transformer/main)
+[![PyPI version](https://badge.fury.io/py/phynteny.svg)](https://badge.fury.io/py/phynteny_transformer)
+[![Anaconda-Server Badge](https://anaconda.org/bioconda/phynteny/badges/version.svg)](https://anaconda.org/bioconda/phynteny_transformer)
+![Conda](https://img.shields.io/conda/dn/bioconda/phynteny_transformer)
 
 # Phynteny-Transformer 
 ![Phynteny Transformer Logo](phynteny_logo.png)
 
-`Phynteny` is annotation tool for bacteriophage genomes that integrates protein language models and gene synteny. `Phynteny` leverages a transformer architecture with attention mechanisms and long short term memory to capture the positional information of genes.
+Phynteny is annotation tool for bacteriophage genomes that integrates protein language models and gene synteny. ```phynteny-transformer``` leverages a transformer architecture with attention mechanisms and long short term memory to capture the positional information of genes.
 
-`Phynteny` takes a genbank file with PHROG annotations as input. If you haven't already annotated your phage(s) with [Pharokka](https://github.com/gbouras13/pharokka) and [phold](https://github.com/gbouras13/phold) go do that and then come right back here! 
+```phynteny-transformer``` takes a genbank file with PHROG annotations as input. If you haven't already annotated your phage(s) with [Pharokka](https://github.com/gbouras13/pharokka) and [phold](https://github.com/gbouras13/phold) go do that and then come right back here! 
 
 ### Dependencies
 
-To run the Phynteny Transformer, you need the following dependencies:
+To run ```phynteny-transformer```, you need the following dependencies:
 
 - Python 3.9+
 - torch
@@ -31,18 +34,42 @@ You can install the dependencies using pip:
 
 ### Installation 
 
-You can install Phynteny Transformer from source 
+You can install Phynteny from bioconda at [https://anaconda.org/bioconda/phynteny](https://anaconda.org/bioconda/phynteny_transformer). Make sure you have [`conda`](https://docs.conda.io/en/latest/) installed. 
+```bash
+# create conda environment and install phynteny
+conda create -n phynteny_transformer -c bioconda phynteny_transformer
+ 
+# activate environment
+conda activate phynteny_transformer
+
+# install phynteny
+conda install -c bioconda phynteny_transformer
+```
+
+Now you can go to [Install Models](#install-models) to install pre-trained phynteny-transformer models. 
+
+### Option 2: Installing Phynteny using pip
+You can install Phynteny from PyPI at [https://pypi.org/project/phynteny/](https://pypi.org/project/phynteny_transformer/). 
+```
+pip install phynteny_transformer
+```
+
+Now you can go to [Install Models](#install-models) to install pre-trained phynteny models. 
+
+### Option 3: Installing Phynteny from source
+
+You can install Phynteny Transformer from source. 
+
 ```
 git clone https://github.com/susiegriggo/Phynteny_transformer 
 cd Phynteny_transformer 
 pip install . 
-``` 
-
-Pip and conda options coming soon 
+```
+**NOTE:** Source installation is recommended if you would like to train your own ```phynteny-trasformer``` models. 
 
 #### Install Models 
 
-Before you can run phynteny you'll need to install some databases
+Before you can run ```phynteny-transformer``` you'll need to install some databases
 
 ```
 install_models
@@ -54,7 +81,7 @@ If you would like to install them to a specific location
 install_models -o <path/to/database_dir>
  ```
 
-If this doesn't work you can download the models directly from [Zenodo](https://zenodo.org/records/15276214/files/phynteny_transformer_model0.1.1_2025-04-24.tar.gz) and untar them yourself and point Phynteny to them with the `-m` flag. 
+If this doesn't work you can download the models directly from [Zenodo](https://zenodo.org/records/15584824/files/phynteny_transformer_models_2025-06-03.tar.gz) and untar them yourself and point Phynteny to them with the `-m` flag. 
 
 ### Quick Start 
 ```
@@ -86,4 +113,4 @@ Phynteny Transformer allows you to train your own custom models. To train a mode
 If you break Phynteny or would like to make any suggestions please open an issue or email me at susie.grigson@gmail.com and I'll try to get back to you. 
 
 ## Wow! how can I cite this?
-Preprint available at ...
+Preprint coming soon
