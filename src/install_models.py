@@ -318,7 +318,7 @@ def untar(tarball_path: Path, output_path: Path):
 def get_model_zenodo(db_dir):
     """
     Download the phynteny model using the zenodo url
-    confidence_dict_exists = os.path.exists(os.path.join(db_dir, "confidence_dict.pkl"))
+    confidence_dict_exists = os.path.exists(os.path.join(db_dir, "all_calibration_models.pkl"))
 
     :param db_dir: directory to install the models
     """
@@ -427,7 +427,7 @@ def main(outfile, force):
     
     # Final verification and summary
     model_count = sum(1 for f in os.listdir(db_dir) if f.endswith('.model'))
-    confidence_dict_exists = os.path.exists(os.path.join(db_dir, "confidence_dict.pkl"))
+    confidence_dict_exists = os.path.exists(os.path.join(db_dir, "all_calibration_models.pkl"))
     
     print(f"\nInstallation Summary:")
     print(f"---------------------")
