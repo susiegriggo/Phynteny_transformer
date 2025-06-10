@@ -50,7 +50,7 @@ install_requires = [
     ]
 
 setuptools.setup(
-    name="phynteny",
+    name="phynteny_transformer",
     version=get_version(),
     zip_safe=True,
     author="Susanna Grigson",
