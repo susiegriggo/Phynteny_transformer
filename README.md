@@ -112,5 +112,9 @@ Phynteny Transformer allows you to train your own custom models. To train a mode
 ## Bugs and Suggestions 
 If you break Phynteny or would like to make any suggestions please open an issue or email me at susie.grigson@gmail.com and I'll try to get back to you. 
 
+## Acknowledgements 
+Thankyou to Laura Inglis for designing the Phynteny logo! 
+This model was trained using resources provided by the Pawsey Supercomputing Research Centre (Perth, Australia). 
+
 ## Wow! how can I cite this?
-Preprint coming soon
+Preprint coming soon!!
