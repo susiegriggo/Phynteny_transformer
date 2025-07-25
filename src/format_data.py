@@ -224,7 +224,7 @@ def extract_features(this_phage, key):
             feature_qualifiers[key_qual] = value_qual
         all_qualifiers.append(feature_qualifiers)
 
-    logger.debug(f"Extracted {len(all_qualifiers)} genes from {key}")
+    #logger.debug(f"Extracted {len(all_qualifiers)} genes from {key}")
 
     # get sequence and replace ambiguous amino acid J with X
     sequence = []
@@ -338,21 +338,27 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
 
     # check if the input data is a genbank file 
     if is_genbank_file(input_data):
-        logger.info("Input data is a genbank file")
+        #logger.info("Input data is a genbank file")
         genbank_files = [input_data]    
     else:
-        logger.info("Input data is a text file")
+        #logger.info("Input data is a text file")
         # read in the genbank files from the input data
         with open(input_data, "r") as file:
             genbank_files = file.readlines()
     
     skipped_genomes = []
 
-    for genbank in genbank_files:
-        # convert genbank to a dictionary
-        gb_dict = get_genbank(genbank)
-        gb_keys = list(gb_dict.keys())
 
+    for genbank in genbank_files:
+        try:
+            # Attempt to parse the GenBank file
+            gb_dict = get_genbank(genbank)
+        except ValueError as e:
+            logger.warning(f"Skipping {genbank.strip()} due to parsing error: {e}")
+            skipped_genomes.append(genbank.strip())
+            continue
+
+        gb_keys = list(gb_dict.keys())   
         for key in gb_keys:
             # extract the relevant features
             phage_dict = extract_features(gb_dict.get(key), key)
@@ -397,9 +403,9 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
                 ):
                     # update dictionary with this entry
                     g = re.split(r",|\.", re.split("/", genbank.strip())[-1])[0]
-                    logger.info(f"g: {g}")
-                    logger.info(f"genbank.strip(): {genbank.strip()}")
-                    logger.info(f're.split("/", genbank.strip())[-1]: {re.split("/", genbank.strip())[-1]}')
+                    #logger.info(f"g: {g}")
+                    #logger.info(f"genbank.strip(): {genbank.strip()}")
+                    #logger.info(f're.split("/", genbank.strip())[-1]: {re.split("/", genbank.strip())[-1]}')
                     
 
                     training_data[key] = phage_dict
