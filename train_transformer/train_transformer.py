@@ -3,7 +3,7 @@ import click
 import random
 import os
 from loguru import logger
-os.chdir('/home/grig0076/susie_scratch/GitHubs/latest/Phynteny_transformer')
+os.chdir('.')
 from src import model_onehot
 from src.model_onehot import fourier_positional_encoding
 from src.model_onehot import sinusoidal_positional_encoding
@@ -178,7 +178,11 @@ def load_model(model_path, params):
             use_lstm=use_lstm,
             use_positional_encoding=use_positional_encoding,
             positional_encoding=positional_encoding_func,
-            protein_dropout_rate=protein_dropout_rate
+            protein_dropout_rate=protein_dropout_rate,
+            pre_norm=pre_norm,
+            progressive_dropout=progressive_dropout,
+            initial_dropout_rate=initial_dropout_rate,
+            final_dropout_rate=final_dropout_rate
         )
     elif attention == "relative":
         model = model_onehot.TransformerClassifierRelativeAttention(
@@ -193,7 +197,11 @@ def load_model(model_path, params):
             use_lstm=use_lstm,
             use_positional_encoding=use_positional_encoding,
             positional_encoding=positional_encoding_func,
-            protein_dropout_rate=protein_dropout_rate
+            protein_dropout_rate=protein_dropout_rate,
+            pre_norm=pre_norm,
+            progressive_dropout=progressive_dropout,
+            initial_dropout_rate=initial_dropout_rate,
+            final_dropout_rate=final_dropout_rate
         )
     elif attention == "circular":
         model = model_onehot.TransformerClassifierCircularRelativeAttention(
@@ -220,6 +228,49 @@ def load_model(model_path, params):
     # Load the state dictionary - NOTE: Pass strict=False to load_state_dict, not torch.load
     logger.info("Loading model state dict with strict=False to handle missing/unexpected keys")
     state_dict = torch.load(model_path, map_location=device)
+    
+    # Handle dimension mismatches for relative and circular attention models
+    if attention in ["relative", "circular"]:
+        # Check if relative position embeddings have dimension mismatches
+        current_head_dim = hidden_dim // num_heads
+        
+        # Check all transformer layers for relative position embeddings
+        keys_to_remove = []
+        for key in state_dict.keys():
+            if ('relative_position_k' in key or 'relative_position_v' in key) and 'transformer_encoder.layers' in key:
+                saved_param = state_dict[key]
+                # Check if dimensions match
+                if len(saved_param.shape) >= 2 and saved_param.shape[1] != current_head_dim:
+                    logger.warning(f"Dimension mismatch for {key}: saved {saved_param.shape} vs expected [*, {current_head_dim}]")
+                    keys_to_remove.append(key)
+        
+        # Remove mismatched parameters
+        for key in keys_to_remove:
+            logger.warning(f"Removing {key} from state dict - will be randomly reinitialized")
+            del state_dict[key]
+    
+    # Handle dimension mismatches for embedding layers if they exist
+    # Check if embedding layer dimensions match
+    current_gene_feature_dim = 16 + 2 + 8  # Default values
+    current_protein_embedding_dim = hidden_dim - current_gene_feature_dim
+    
+    embedding_keys_to_remove = []
+    for key in state_dict.keys():
+        if 'embedding_layer.weight' in key:
+            saved_param = state_dict[key]
+            if len(saved_param.shape) >= 2 and saved_param.shape[0] != current_protein_embedding_dim:
+                logger.warning(f"Dimension mismatch for {key}: saved {saved_param.shape} vs expected [{current_protein_embedding_dim}, *]")
+                embedding_keys_to_remove.append(key)
+        elif 'embedding_layer.bias' in key:
+            saved_param = state_dict[key]
+            if len(saved_param.shape) >= 1 and saved_param.shape[0] != current_protein_embedding_dim:
+                logger.warning(f"Dimension mismatch for {key}: saved {saved_param.shape} vs expected [{current_protein_embedding_dim}]")
+                embedding_keys_to_remove.append(key)
+    
+    # Remove mismatched embedding parameters
+    for key in embedding_keys_to_remove:
+        logger.warning(f"Removing {key} from state dict - will be randomly reinitialized")
+        del state_dict[key]
     
     # Create a dummy forward pass to initialize buffers like fixed_mask
     if hasattr(model, 'protein_feature_dropout'):

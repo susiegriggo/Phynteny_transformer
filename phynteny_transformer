@@ -2,7 +2,6 @@
 
 # Standard library imports
 import os
-import pickle
 import sys
 import time
 import joblib
@@ -11,7 +10,6 @@ import joblib
 from loguru import logger
 import numpy as np
 import torch
-from torch.utils.data import DataLoader
 
 
 # Python 3.9+
@@ -89,6 +87,13 @@ def parse_arguments():
         "--debug", 
         action="store_true", 
         help="Enable verbose debug logging to console"
+    )
+    parser.add_basic_argument(
+        "--save-attention-weights", 
+        action="store_true", 
+        help="Save attention weight matrices to files during prediction. "
+             "Attention weights will be saved as pickle files in the output directory under 'attention_weights/' folder. "
+             "Each genome will have its own file containing attention weights from all models."
     )
     parser.add_basic_argument(
         "--version", 
@@ -456,7 +461,20 @@ def main():
     logger.info("Making predictions using batch inference")
     
     # Use the batch inference method
-    all_scores = p.predict_inference(X, y, batch_size=args.batch_size)
+    if args.save_attention_weights:
+        logger.info("Attention weight saving is enabled")
+        all_scores, attention_weights = p.predict_inference(
+            X, y, 
+            batch_size=args.batch_size, 
+            return_attention_weights=True, 
+            output_dir=args.out
+        )
+        logger.info(f"Saved attention weights for {len(attention_weights)} genomes")
+        
+        # Create a summary of attention weights
+        p.save_attention_weights_summary(attention_weights, args.out)
+    else:
+        all_scores = p.predict_inference(X, y, batch_size=args.batch_size)
     
     # Convert all_scores format to match what's expected by confidence calculation
     scores = [all_scores[key] for key in all_scores.keys()]
@@ -588,6 +606,17 @@ def main():
     )
     
     logger.info("Predictions completed")
+    
+    # Provide information about attention weights if they were saved
+    if args.save_attention_weights:
+        attention_dir = os.path.join(args.out, "attention_weights")
+        logger.info(f"Attention weights saved to: {attention_dir}")
+        logger.info("Attention weight files:")
+        logger.info("  - Individual genome files: {genome_id}_attention_weights.pkl")
+        logger.info("  - Summary statistics: attention_weights_summary.txt")
+        logger.info("Each pickle file contains a list of attention weight matrices, one per model.")
+        logger.info("Attention weight shape: [batch_size, num_heads, seq_length, seq_length]")
+    
     end_time = time.time()
     elapsed_time = end_time - start_time
     logger.info(f"Total execution time: {elapsed_time:.2f} seconds")

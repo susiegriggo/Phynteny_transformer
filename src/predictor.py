@@ -8,6 +8,7 @@ import torch
 import torch.nn.functional as F
 import os
 import numpy as np
+import pickle
 from sklearn.neighbors import KernelDensity
 from Bio import SeqIO
 from Bio.Seq import Seq
@@ -23,13 +24,14 @@ class Predictor:
         self.device = torch.device(device)
         self.models = []
 
-    def predict_batch(self, embeddings, src_key_padding_mask):
+    def predict_batch(self, embeddings, src_key_padding_mask, return_attention_weights=False):
         """
         Predict the scores for a batch of embeddings.
 
         :param embeddings: Tensor of input embeddings
         :param src_key_padding_mask: Mask tensor for padding in the input sequences
-        :return: Dictionary of predicted scores
+        :param return_attention_weights: Whether to return attention weights
+        :return: Dictionary of predicted scores, and optionally attention weights
         """
         self.models = [model.to(self.device) for model in self.models]
         embeddings = embeddings.to(self.device)  # Move embeddings to device
@@ -39,10 +41,16 @@ class Predictor:
             model.eval()
 
         all_scores = {}
+        all_attention_weights = [] if return_attention_weights else None
 
         with torch.no_grad():
             for model in self.models:
-                outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                if return_attention_weights:
+                    outputs, attn_weights = model(embeddings, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+                    all_attention_weights.append(attn_weights.cpu().numpy())
+                else:
+                    outputs = model(embeddings, src_key_padding_mask=src_key_padding_mask)
+                    
                 outputs = F.softmax(outputs, dim=-1)
                 
                 if len(all_scores) == 0:
@@ -50,7 +58,10 @@ class Predictor:
                 else:
                     all_scores += outputs.cpu().numpy()
         
-        return all_scores   
+        if return_attention_weights:
+            return all_scores, all_attention_weights
+        else:
+            return all_scores   
 
     def predict(self, X, y): # not sure if this is right 
         """
@@ -92,14 +103,16 @@ class Predictor:
         self.scores = all_scores
         return all_scores  # Remove the TODO comment if the return statement is necessary
     
-    def predict_inference(self, X, y, batch_size=128):
+    def predict_inference(self, X, y, batch_size=128, return_attention_weights=False, output_dir=None):
         """
         Predict using batch processing for inference.
         
         :param X: Dictionary of embeddings with keys as identifiers
         :param y: Dictionary of categories with keys as identifiers
         :param batch_size: Size of batches for processing
-        :return: Dictionary of predicted scores with keys matching input dictionaries
+        :param return_attention_weights: Whether to return attention weights
+        :param output_dir: Directory to save attention weights (if return_attention_weights=True)
+        :return: Dictionary of predicted scores with keys matching input dictionaries, and optionally attention weights
         """
         logger.info(f"Starting batch inference with batch size {batch_size}")
         
@@ -132,11 +145,19 @@ class Predictor:
         
         # Process batches
         all_scores = {}
+        all_attention_weights = {} if return_attention_weights else None
         batches_processed = 0
         total_samples_processed = 0
         
         # Track which indices we've processed for debugging
         processed_indices = set()
+        
+        # Create attention weights directory if needed
+        if return_attention_weights and output_dir:
+            import os
+            attention_dir = os.path.join(output_dir, "attention_weights")
+            os.makedirs(attention_dir, exist_ok=True)
+            logger.info(f"Attention weights will be saved to: {attention_dir}")
         
         for batch_idx, (embeddings_batch, categories_batch, masks_batch, idx_batch) in enumerate(data_loader):
             try:
@@ -147,7 +168,12 @@ class Predictor:
                 
                 # Get predictions for this batch
                 logger.debug(f"Processing batch {batch_idx} with {len(idx_batch)} items")
-                batch_scores = self.predict_batch(embeddings_batch, src_key_padding_mask)
+                if return_attention_weights:
+                    batch_scores, batch_attention_weights = self.predict_batch(
+                        embeddings_batch, src_key_padding_mask, return_attention_weights=True
+                    )
+                else:
+                    batch_scores = self.predict_batch(embeddings_batch, src_key_padding_mask)
                 
                 # Store scores by their original keys
                 # Calculate the absolute index in the dataset for this batch
@@ -169,6 +195,20 @@ class Predictor:
                             if i < len(batch_scores):
                                 all_scores[key] = batch_scores[i]
                                 total_samples_processed += 1
+                        
+                        # Store attention weights if requested
+                        if return_attention_weights and batch_attention_weights:
+                            all_attention_weights[key] = []
+                            for model_idx, model_attn_weights in enumerate(batch_attention_weights):
+                                if i < model_attn_weights.shape[0]:
+                                    all_attention_weights[key].append(model_attn_weights[i])
+                            
+                            # Save attention weights to file if output directory is specified
+                            if output_dir:
+                                import pickle
+                                attn_file = os.path.join(attention_dir, f"{key}_attention_weights.pkl")
+                                with open(attn_file, 'wb') as f:
+                                    pickle.dump(all_attention_weights[key], f)
                 
                 batches_processed += 1
                 logger.debug(f"Processed batch {batches_processed} with {len(idx_batch)} items (total: {total_samples_processed}/{len(keys_list)} samples)")
@@ -192,9 +232,64 @@ class Predictor:
         logger.info(f"Total batches processed: {batches_processed}")
         logger.info(f"Collected scores for {len(all_scores)}/{len(keys_list)} samples")
         
+        if return_attention_weights:
+            logger.info(f"Collected attention weights for {len(all_attention_weights)}/{len(keys_list)} samples")
+        
         # Store scores for compatibility with other methods
         self.scores = all_scores
-        return all_scores
+        
+        if return_attention_weights:
+            return all_scores, all_attention_weights
+        else:
+            return all_scores
+
+    def save_attention_weights_summary(self, attention_weights, output_dir):
+        """
+        Save a summary of attention weights statistics to a file.
+        
+        :param attention_weights: Dictionary of attention weights per genome
+        :param output_dir: Directory to save the summary file
+        """
+        import numpy as np
+        
+        summary_file = os.path.join(output_dir, "attention_weights_summary.txt")
+        
+        with open(summary_file, 'w') as f:
+            f.write("Attention Weights Summary\n")
+            f.write("=" * 50 + "\n\n")
+            
+            total_genomes = len(attention_weights)
+            f.write(f"Total genomes processed: {total_genomes}\n")
+            f.write(f"Total models used: {len(attention_weights[list(attention_weights.keys())[0]]) if total_genomes > 0 else 0}\n\n")
+            
+            # Statistics per genome
+            for genome_id, weights_list in attention_weights.items():
+                f.write(f"Genome: {genome_id}\n")
+                f.write(f"  Number of models: {len(weights_list)}\n")
+                
+                if weights_list:
+                    # Get stats from first model's weights
+                    first_model_weights = weights_list[0]
+                    f.write(f"  Attention matrix shape: {first_model_weights.shape}\n")
+                    f.write(f"  Batch size: {first_model_weights.shape[0]}\n")
+                    f.write(f"  Number of heads: {first_model_weights.shape[1]}\n")
+                    f.write(f"  Sequence length: {first_model_weights.shape[2]}\n")
+                    
+                    # Calculate some basic statistics
+                    mean_attention = np.mean(first_model_weights)
+                    std_attention = np.std(first_model_weights)
+                    max_attention = np.max(first_model_weights)
+                    min_attention = np.min(first_model_weights)
+                    
+                    f.write(f"  Mean attention weight: {mean_attention:.6f}\n")
+                    f.write(f"  Std attention weight: {std_attention:.6f}\n")
+                    f.write(f"  Max attention weight: {max_attention:.6f}\n")
+                    f.write(f"  Min attention weight: {min_attention:.6f}\n")
+                
+                f.write("\n")
+        
+        logger.info(f"Attention weights summary saved to: {summary_file}")
+        return summary_file
 
     def write_predictions_to_genbank(self, gb_dict, output_file, predictions, scores, confidence_scores, threshold=0.9, categories_map=None):
         """
