@@ -114,7 +114,8 @@ If you break Phynteny or would like to make any suggestions please open an issue
 
 ## Acknowledgements 
 Thankyou to Laura Inglis for designing the Phynteny logo! 
-This model was trained using resources provided by the Pawsey Supercomputing Research Centre (Perth, Australia). 
+
+Phynteny trained using resources provided by the Pawsey Supercomputing Research Centre (Perth, Australia) which is funded by the Australian Government. Analysis was performed using the Flinders University DeepThought High Performance Cluster (https://doi.org/10. 25957/FLINDERS.HPC.DEEPTHOUGHT).
 
 ## Wow! how can I cite this?
 Preprint coming soon!!
