@@ -12,7 +12,7 @@
 
 Phynteny is annotation tool for bacteriophage genomes that integrates protein language models and gene synteny. ```phynteny-transformer``` leverages a transformer architecture with attention mechanisms and long short term memory to capture the positional information of genes.
 
-```phynteny-transformer``` takes a genbank file with PHROG annotations as input. If you haven't already annotated your phage(s) with [Pharokka](https://github.com/gbouras13/pharokka) and [phold](https://github.com/gbouras13/phold) go do that and then come right back here! 
+```phynteny-transformer``` takes a genbank file with PHROG annotations as input. If you haven't already annotated your phage(s) with [Pharokka](https://github.com/gbouras13/pharokka) and [Phold](https://github.com/gbouras13/phold) go do that and then come right back here! 
 
 ### Dependencies
 
@@ -115,7 +115,10 @@ If you break Phynteny or would like to make any suggestions please open an issue
 ## Acknowledgements 
 Thankyou to Laura Inglis for designing the Phynteny logo! 
 
-Phynteny trained using resources provided by the Pawsey Supercomputing Research Centre (Perth, Australia) which is funded by the Australian Government. Analysis was performed using the Flinders University DeepThought High Performance Cluster (https://doi.org/10. 25957/FLINDERS.HPC.DEEPTHOUGHT).
+Phynteny was trained using resources provided by the Pawsey Supercomputing Research Centre (Perth, Australia) which is funded by the Australian Government. Analysis was performed using the Flinders University DeepThought High Performance Cluster (https://doi.org/10. 25957/FLINDERS.HPC.DEEPTHOUGHT).
 
 ## Wow! how can I cite this?
-Preprint coming soon!!
+Preprint for Phynteny is available [here](https://www.biorxiv.org/content/10.1101/2025.07.28.667340v1][https://www.biorxiv.org/content/10.1101/2025.07.28.667340v1).<br>
+You can cite Phynteny as:  <br>
+Grigson, S.R., Bouras, G., Papudeshi, B., Mallawaarachchi, V., Roach, M.J., Decewicz, P., & Edwards, R.A. (2025). Synteny-aware functional annotation of bacteriophage genomes with Phynteny. bioRxiv, 2025.07.28.667340. https://doi.org/10.1101/2025.07.28.667340.
+
