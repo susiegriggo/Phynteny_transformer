@@ -1033,3 +1033,80 @@ class Predictor:
                 logger.warning("This suggests a problem with the calibration process.")
         
         return predictions, confidence_scores, raw_scores, calibrated_scores
+
+    def show_model_info(self):
+        """
+        Display detailed information about the loaded models including parameter counts.
+        
+        :return: Dictionary containing model information
+        """
+        if not self.models:
+            logger.warning("No models loaded. Cannot display model information.")
+            return {}
+        
+        model_info = {}
+        
+        for i, model in enumerate(self.models):
+            logger.info(f"\n=== Model {i+1} Information ===")
+            
+            # Get model architecture info
+            model_type = type(model).__name__
+            logger.info(f"Model Type: {model_type}")
+            
+            # Count total parameters
+            total_params = sum(p.numel() for p in model.parameters())
+            trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+            
+            logger.info(f"Total Parameters: {total_params:,}")
+            logger.info(f"Trainable Parameters: {trainable_params:,}")
+            logger.info(f"Non-trainable Parameters: {total_params - trainable_params:,}")
+            
+            # Get detailed parameter breakdown by component
+            param_breakdown = {}
+            
+            for name, param in model.named_parameters():
+                component = name.split('.')[0]  # Get the first part of the parameter name
+                if component not in param_breakdown:
+                    param_breakdown[component] = 0
+                param_breakdown[component] += param.numel()
+            
+            logger.info("\nParameter Breakdown by Component:")
+            for component, count in sorted(param_breakdown.items()):
+                percentage = (count / total_params) * 100
+                logger.info(f"  {component}: {count:,} ({percentage:.1f}%)")
+            
+            # Get model configuration if available
+            if hasattr(model, 'input_dim'):
+                logger.info(f"\nModel Configuration:")
+                logger.info(f"  Input Dimension: {model.input_dim}")
+                logger.info(f"  Number of Classes: {model.num_classes}")
+                if hasattr(model, 'num_heads'):
+                    logger.info(f"  Number of Attention Heads: {model.num_heads}")
+                if hasattr(model, 'hidden_dim'):
+                    logger.info(f"  Hidden Dimension: {model.hidden_dim}")
+                if hasattr(model, 'num_layers'):
+                    logger.info(f"  Number of Layers: {model.num_layers}")
+                if hasattr(model, 'max_len'):
+                    logger.info(f"  Maximum Length: {model.max_len}")
+                if hasattr(model, 'use_lstm'):
+                    logger.info(f"  Uses LSTM: {model.use_lstm}")
+                if hasattr(model, 'dropout'):
+                    logger.info(f"  Dropout Rate: {model.dropout}")
+            
+            # Store info for this model
+            model_info[f'model_{i+1}'] = {
+                'type': model_type,
+                'total_params': total_params,
+                'trainable_params': trainable_params,
+                'param_breakdown': param_breakdown
+            }
+        
+        # Summary across all models
+        if len(self.models) > 1:
+            total_ensemble_params = sum(info['total_params'] for info in model_info.values())
+            logger.info(f"\n=== Ensemble Summary ===")
+            logger.info(f"Number of Models: {len(self.models)}")
+            logger.info(f"Total Ensemble Parameters: {total_ensemble_params:,}")
+            logger.info(f"Average Parameters per Model: {total_ensemble_params // len(self.models):,}")
+        
+        return model_info

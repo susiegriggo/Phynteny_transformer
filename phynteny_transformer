@@ -96,6 +96,11 @@ def parse_arguments():
              "Each genome will have its own file containing attention weights from all models."
     )
     parser.add_basic_argument(
+        "--show-model-info", 
+        action="store_true", 
+        help="Display detailed information about the model architecture including parameter counts and exit"
+    )
+    parser.add_basic_argument(
         "--version", 
         action="version", 
         version=f"%(prog)s {__version__}"
@@ -435,6 +440,30 @@ def main():
         output_dim=args.output_dim,
         num_layers=args.num_layers
     )
+
+    # If --show-model-info flag is set, display model info and exit
+    if args.show_model_info:
+        logger.info("Displaying model architecture information...")
+        model_info = p.show_model_info()
+        
+        # Also save model info to a file for reference
+        import json
+        model_info_file = os.path.join(args.out, "model_info.json")
+        with open(model_info_file, 'w') as f:
+            # Convert to JSON-serializable format
+            json_info = {}
+            for model_name, info in model_info.items():
+                json_info[model_name] = {
+                    'type': info['type'],
+                    'total_params': info['total_params'],
+                    'trainable_params': info['trainable_params'],
+                    'param_breakdown': info['param_breakdown']
+                }
+            json.dump(json_info, f, indent=2)
+        
+        logger.info(f"Model information saved to: {model_info_file}")
+        logger.info("Model information display complete. Exiting.")
+        sys.exit(0)
 
     # Read the calibration models - support both individual and ensemble calibration
     calibration_models_path = os.path.join(args.models, "calibration_models.pkl")
