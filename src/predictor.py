@@ -1020,11 +1020,6 @@ class Predictor:
             conf_array = np.array(all_confidences)
             logger.info(f"Overall confidence statistics:")
             logger.info(f"Min: {np.min(conf_array):.4f}, Max: {np.max(conf_array):.4f}, Mean: {np.mean(conf_array):.4f}")
-            logger.info(f"Confidence distribution:")
-            for threshold in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.95, 0.99, 0.999, 1.0]:
-                count = np.sum(conf_array >= threshold)
-                pct = 100 * count / len(conf_array)
-                logger.info(f"  >= {threshold:.3f}: {count} ({pct:.1f}%)")
             
             # Check if many scores are exactly 1.0 (suspicious)
             exact_ones = np.sum(conf_array == 1.0)
