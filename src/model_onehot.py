@@ -38,6 +38,20 @@ torch.manual_seed(random_seed)
 if torch.cuda.is_available():
     torch.cuda.manual_seed_all(random_seed)
 
+def count_parameters(model):
+    """
+    Count the total number of parameters in a model.
+    
+    Parameters:
+    model (nn.Module): The model to count parameters for
+    
+    Returns:
+    tuple: (total_params, trainable_params) - total and trainable parameter counts
+    """
+    total_params = sum(p.numel() for p in model.parameters())
+    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    return total_params, trainable_params
+
 class EmbeddingDataset(Dataset):
     def __init__(self, embeddings, categories, labels, num_classes = 9, mask_token=-1, mask_portion=0.15, shuffle_features=False, zero_idx=False, strand_gene_length=True, noise_std=0):
         """
@@ -489,6 +503,11 @@ class TransformerClassifier(nn.Module):
         # Set the number of classes
         self.num_classes = num_classes
 
+        # Store embedding dimensions for dynamic reconstruction
+        self.function_embedding_dim = function_embedding_dim
+        self.strand_embedding_dim = strand_embedding_dim  
+        self.length_embedding_dim = length_embedding_dim
+
         # Embedding layers
         self.func_embedding = nn.Embedding(num_classes, function_embedding_dim).to(device)
         self.strand_embedding = nn.Linear(2, strand_embedding_dim).to(device)  # Change to linear layer
@@ -499,12 +518,17 @@ class TransformerClassifier(nn.Module):
         self.dropout = nn.Dropout(dropout).to(device)  
 
         # Add protein feature dropout layer
-        self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate, 
-                                                                 progressive_dropout=progressive_dropout,
-                                                                 initial_dropout_rate=initial_dropout_rate,
-                                                                 final_dropout_rate=final_dropout_rate, 
-                                                                 protein_idx=self.gene_feature_dim,
-                                                                 total_epochs=progressive_epochs)  
+        self.protein_feature_dropout = MaskedTokenFeatureDropout(
+            dropout_rate=protein_dropout_rate, 
+            progressive_dropout=progressive_dropout,
+            initial_dropout_rate=initial_dropout_rate,
+            final_dropout_rate=final_dropout_rate, 
+            protein_idx=self.gene_feature_dim,
+            total_epochs=progressive_epochs,
+            function_embedding_dim=function_embedding_dim,
+            strand_embedding_dim=strand_embedding_dim,
+            length_embedding_dim=length_embedding_dim
+        )
 
         self.dropout = nn.Dropout(dropout).to(device)
 
@@ -554,6 +578,10 @@ class TransformerClassifier(nn.Module):
             self.positional_encoding = positional_encoding(1000, hidden_dim, device).to(device)
         else:
             self.positional_encoding = None
+
+        # Add parameter counting and logging at the end of __init__
+        total_params, trainable_params = count_parameters(self)
+        logger.info(f"TransformerClassifier initialized with {total_params:,} total parameters ({trainable_params:,} trainable)")
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False, idx=None):
         """
@@ -854,6 +882,11 @@ class TransformerClassifierRelativeAttention(nn.Module):
         # Set the number of classes
         self.num_classes = num_classes
 
+        # Store embedding dimensions for dynamic reconstruction
+        self.function_embedding_dim = function_embedding_dim
+        self.strand_embedding_dim = strand_embedding_dim  
+        self.length_embedding_dim = length_embedding_dim
+
         # Embedding layers
         self.func_embedding = nn.Embedding(self.num_classes, function_embedding_dim).to(device)
         self.strand_embedding = nn.Linear(2, strand_embedding_dim).to(device)  # Change to linear layer
@@ -864,12 +897,17 @@ class TransformerClassifierRelativeAttention(nn.Module):
         self.dropout = nn.Dropout(dropout).to(device)
         
         # Add protein feature dropout layer
-        self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate, 
-                                                                 progressive_dropout=progressive_dropout,
-                                                                 initial_dropout_rate=initial_dropout_rate,
-                                                                 final_dropout_rate=final_dropout_rate, 
-                                                                 protein_idx=self.gene_feature_dim,
-                                                                 total_epochs=progressive_epochs)
+        self.protein_feature_dropout = MaskedTokenFeatureDropout(
+            dropout_rate=protein_dropout_rate, 
+            progressive_dropout=progressive_dropout,
+            initial_dropout_rate=initial_dropout_rate,
+            final_dropout_rate=final_dropout_rate, 
+            protein_idx=self.gene_feature_dim,
+            total_epochs=progressive_epochs,
+            function_embedding_dim=function_embedding_dim,
+            strand_embedding_dim=strand_embedding_dim,
+            length_embedding_dim=length_embedding_dim
+        )
         self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device)
         
         # Add positional normalization
@@ -906,6 +944,9 @@ class TransformerClassifierRelativeAttention(nn.Module):
         else:
             self.positional_encoding = None
 
+        # Add parameter counting and logging at the end of __init__
+        total_params, trainable_params = count_parameters(self)
+        logger.info(f"TransformerClassifierRelativeAttention initialized with {total_params:,} total parameters ({trainable_params:,} trainable)")
 
     def forward(self, x, src_key_padding_mask=None, return_attn_weights=False, idx=None):
         """
@@ -1218,7 +1259,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         progressive_dropout=False,
         initial_dropout_rate=1.0,
         final_dropout_rate=0.4,
-        progressive_epochs=25,
+        progressive_epochs=25
     ):
         super(TransformerClassifierCircularRelativeAttention, self).__init__()
 
@@ -1226,6 +1267,11 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
 
         # Set the number of classes
         self.num_classes = num_classes
+
+        # Store embedding dimensions for dynamic reconstruction
+        self.function_embedding_dim = function_embedding_dim
+        self.strand_embedding_dim = strand_embedding_dim  
+        self.length_embedding_dim = length_embedding_dim
 
         # Embedding layers
         self.func_embedding = nn.Embedding(self.num_classes,function_embedding_dim).to(device)
@@ -1243,12 +1289,17 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         #self.protein_norm = nn.LayerNorm(hidden_dim - self.gene_feature_dim).to(device)
         
         # Add protein feature dropout layer
-        self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate, 
-                                                                 progressive_dropout=progressive_dropout,  # Default value set to False
-                                                                 initial_dropout_rate=initial_dropout_rate,
-                                                                 final_dropout_rate=final_dropout_rate, 
-                                                                 protein_idx=self.gene_feature_dim,  # just added this 
-                                                                 total_epochs=progressive_epochs) 
+        self.protein_feature_dropout = MaskedTokenFeatureDropout(
+            dropout_rate=protein_dropout_rate, 
+            progressive_dropout=progressive_dropout,
+            initial_dropout_rate=initial_dropout_rate,
+            final_dropout_rate=final_dropout_rate, 
+            protein_idx=self.gene_feature_dim,
+            total_epochs=progressive_epochs,
+            function_embedding_dim=function_embedding_dim,
+            strand_embedding_dim=strand_embedding_dim,
+            length_embedding_dim=length_embedding_dim
+        )
         #self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes
         self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device) if use_positional_encoding else None
         
@@ -1267,99 +1318,70 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
                 pre_norm=pre_norm
             )
             self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers).to(device)
-            
-            # LSTM takes transformer output as input
-            if use_lstm:
-                self.lstm = nn.LSTM(
-                    hidden_dim,  # Input size matches transformer's output dimension
-                    lstm_hidden_dim, 
-                    batch_first=True, 
-                    bidirectional=True
-                ).to(device)
-                self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)
-            else:
-                self.lstm = None
-                self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)
         else:
             # Create an identity module when no transformer layers are needed
             self.transformer_encoder = nn.Identity().to(device)
             logger.info("Using Identity layer instead of transformer encoder (num_layers=0)")
-            
-            # If no transformer, LSTM takes embedding output directly
-            if use_lstm:
-                self.lstm = nn.LSTM(
-                    hidden_dim,
-                    lstm_hidden_dim, 
-                    batch_first=True, 
-                    bidirectional=True
-                ).to(device)
-                self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)
-            else:
-                self.lstm = None
-                self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)
 
-    def forward(self, x, src_key_padding_mask=None, idx=None, return_attn_weights=False, save_lstm_output=False, save_transformer_output=False):
+        if use_positional_encoding:
+            self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device)
+        else:
+            self.positional_encoding = None
+
+        # Add parameter counting and logging at the end of __init__
+        total_params, trainable_params = count_parameters(self)
+        logger.info(f"TransformerClassifierCircularRelativeAttention initialized with {total_params:,} total parameters ({trainable_params:,} trainable)")
+
+    def forward(self, x, src_key_padding_mask=None, return_attn_weights=False, idx=None):
+        """
+        Forward pass of the model.
+
+        Parameters:
+        x (torch.Tensor): Input tensor.
+        src_key_padding_mask (torch.Tensor, optional): Mask tensor for padding.
+        return_attn_weights (bool, optional): If True, return attention weights.
+        idx (torch.Tensor, optional): Indices for masked token feature dropout.
+
+        Returns:
+        torch.Tensor: Output tensor.
+        """
         x = x.float()
-
-        # Extract the different components from the input tensor
         func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:self.num_classes], x[:,:,self.num_classes:self.num_classes+2], x[:,:,self.num_classes+2:self.num_classes+3], x[:,:,self.num_classes+3:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
-        strand_embeds = self.strand_embedding(strand_ids.float())
+        strand_embeds = self.strand_embedding(strand_ids.float())  # Change to linear layer
         length_embeds = self.length_embedding(gene_length)
         protein_embeds = self.embedding_layer(protein_embeds)
 
-        # Concatenate the embeddings 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
-
-        # Apply protein feature dropout to the masked tokens 
+        
+        # Apply protein feature dropout if idx is provided
         if idx is not None:
             x = self.protein_feature_dropout(x, idx)
-
-        # Apply positional encoding
+            
         if self.positional_encoding is not None:
             x = x + self.positional_encoding[: x.size(1), :].to(x.device)
-            
+
         # Normalize combined features after positional encoding
         x = self.pos_norm(x)
 
-        # Apply dropout
         x = self.dropout(x)
-
-        # TRANSFORMER FIRST: Apply transformer encoder
-        if return_attn_weights and isinstance(self.transformer_encoder, nn.TransformerEncoder) and hasattr(self.transformer_encoder, 'layers') and len(self.transformer_encoder.layers) > 0:
+        if self.lstm:
+            x, _ = self.lstm(x)
+        if return_attn_weights:
             x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
             for layer in self.transformer_encoder.layers[1:]:
                 x = layer(x, src_key_padding_mask=src_key_padding_mask)
+            x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
+            return x, attn_weights
         else:
-            x = self.transformer_encoder(x)
-        
-        if save_transformer_output:
-            self.saved_transformer_output = x.clone().detach().cpu().numpy()
-        
-        # THEN LSTM: Apply LSTM after transformer
-        if self.lstm:
-            x, _ = self.lstm(x)
-            if save_lstm_output:
-                self.saved_lstm_output = x.clone().detach().cpu().numpy()
-        
-        # Final classification
-        x = self.fc(x)
-        if self.output_dim != self.num_classes:
-            x = F.softmax(x, dim=-1)
-        
-        # Return with attention weights if requested
-        if return_attn_weights:
-            if 'attn_weights' in locals():
-                return x, attn_weights
-            else:
-                # Create dummy attention weights
-                batch_size = x.size(0)
-                seq_len = x.size(1)
-                dummy_attn_weights = torch.zeros(batch_size, self.num_heads, seq_len, seq_len, device=x.device)
-                return x, dummy_attn_weights
-        else:
+            x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
+            x = self.fc(x)
+            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
+                x = F.softmax(x, dim=-1)
             return x
-                
+
 
 def masked_loss(output, target, mask, idx, ignore_index=-1):
     """
@@ -1761,7 +1783,7 @@ def train(
             # Update masked category counts
             masked_category_counts += train_dataloader.dataset.masked_category_counts.to(device)
             #logger.info(f"Masked Category Counts - prior: {masked_category_counts.cpu().numpy()}")
-            train_dataloader.dataset.masked_category_counts.zero_()  # Reset counts after each batch
+            train_dataloader.dataset.masked_category_counts.zero_()   # Reset counts after each batch
 
         # Calculate average training loss and accuracy for the epoch
         avg_train_loss = total_loss / len(train_dataloader)
@@ -1943,7 +1965,7 @@ def train(
         num_classes=model.num_classes,
         num_heads=model.transformer_encoder.layers[0].self_attn.num_heads,
         num_layers=len(model.transformer_encoder.layers),
-        hidden_dim=model.embedding_layer.out_features + 28,
+        hidden_dim=model.embedding_layer.out_features + model.gene_feature_dim,
         lstm_hidden_dim=model.lstm.hidden_size if model.lstm else None,
         dropout=model.dropout.p,
         intialisation='random',  # Adjust as needed
@@ -1951,18 +1973,25 @@ def train(
         use_lstm=model.lstm is not None,
         positional_encoding=sinusoidal_positional_encoding,
         use_positional_encoding=model.positional_encoding is not None,
-        protein_dropout_rate=model.protein_feature_dropout.dropout_rate if hasattr(model, 'protein_feature_dropout') else 0.0
+        protein_dropout_rate=model.protein_feature_dropout.dropout_rate if hasattr(model, 'protein_feature_dropout') else 0.0,
+        function_embedding_dim=getattr(model, 'function_embedding_dim', 16),
+        strand_embedding_dim=getattr(model, 'strand_embedding_dim', 2),
+        length_embedding_dim=getattr(model, 'length_embedding_dim', 8)
     ).to(device)
 
     # Log the parameters used for reloading the model
     logger.info(f'Model type: {type(model)}')
     logger.info(f"Reloaded model parameters: input_dim={model.embedding_layer.in_features}, "
                 f"num_classes={model.num_classes}, num_heads={model.transformer_encoder.layers[0].self_attn.num_heads}, "
-                f"num_layers={len(model.transformer_encoder.layers)}, hidden_dim={model.embedding_layer.out_features + 28}, "
+                f"num_layers={len(model.transformer_encoder.layers)}, hidden_dim={model.embedding_layer.out_features + model.gene_feature_dim}, "
+                f"gene_feature_dim={model.gene_feature_dim}, "
                 f"lstm_hidden_dim={model.lstm.hidden_size if model.lstm else None}, dropout={model.dropout.p}, "
                 f"output_dim={model.output_dim}, use_lstm={model.lstm is not None}, "
                 f"use_positional_encoding={model.positional_encoding is not None}, "
-                f"protein_dropout_rate={model.protein_feature_dropout.dropout_rate if hasattr(model, 'protein_feature_dropout') else 0.0}")
+                f"protein_dropout_rate={model.protein_feature_dropout.dropout_rate if hasattr(model, 'protein_feature_dropout') else 0.0}, "
+                f"function_embedding_dim={getattr(model, 'function_embedding_dim', 16)}, "
+                f"strand_embedding_dim={getattr(model, 'strand_embedding_dim', 2)}, "
+                f"length_embedding_dim={getattr(model, 'length_embedding_dim', 8)}")
 
     reloaded_model.load_state_dict(torch.load(best_model_path, map_location=device, strict=False))
     reloaded_model.eval()
@@ -2465,9 +2494,17 @@ class ProteinFeatureDropout(nn.Module):
     During inference, applies a consistent dropout mask for stability.
     """
 
-    def __init__(self, dropout_rate=0.2):
+    def __init__(self, dropout_rate=0.2, protein_idx=None, 
+                 function_embedding_dim=16, strand_embedding_dim=2, length_embedding_dim=8):
         super().__init__()
         self.dropout_rate = dropout_rate
+        
+        # Calculate protein_idx dynamically if not provided
+        if protein_idx is None:
+            self.protein_idx = function_embedding_dim + strand_embedding_dim + length_embedding_dim
+        else:
+            self.protein_idx = protein_idx
+            
         # Register buffer to store fixed mask for inference
         self.register_buffer('fixed_mask', None)
         
@@ -2483,14 +2520,9 @@ class ProteinFeatureDropout(nn.Module):
         Returns:
             torch.Tensor: The input tensor with dropout applied only to protein features
         """
-        # Default protein index if not specified (assuming format from EmbeddingDataset)
-        if (protein_idx is None):
-            # Default: after one-hot class encoding, strand info, and gene length
-            # num_classes + 2 (strand) + 1 (length)
-            if hasattr(self, 'num_classes'):
-                protein_idx = self.num_classes + 3
-            else:
-                protein_idx = 12  # Default assuming 9 classes + 3 features
+        # Use stored protein_idx if not specified
+        if protein_idx is None:
+            protein_idx = self.protein_idx
                 
         # Use module's training state if not specified
         is_training = self.training if is_training is None else is_training
@@ -2528,11 +2560,16 @@ class MaskedTokenFeatureDropout(nn.Module):
     to first learn gene order and gradually incorporate protein features.
     """
 
-    def __init__(self, dropout_rate=0.2, protein_idx=28, progressive_dropout=False, 
-                 initial_dropout_rate=1.0, final_dropout_rate=None, total_epochs=15):
+    def __init__(self, dropout_rate=0.2, protein_idx=None, progressive_dropout=False, 
+                 initial_dropout_rate=1.0, final_dropout_rate=None, total_epochs=15,
+                 function_embedding_dim=16, strand_embedding_dim=2, length_embedding_dim=8):
         super().__init__()
 
-        self.protein_idx = protein_idx 
+        # Calculate protein_idx dynamically if not provided
+        if protein_idx is None:
+            self.protein_idx = function_embedding_dim + strand_embedding_dim + length_embedding_dim
+        else:
+            self.protein_idx = protein_idx 
         self.progressive_dropout = progressive_dropout
 
         # Set up progesssive dropout parameters 

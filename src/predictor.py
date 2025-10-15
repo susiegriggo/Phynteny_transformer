@@ -687,6 +687,11 @@ class Predictor:
         # Load the state dictionary with strict=False to handle missing/unexpected keys
         model.load_state_dict(state_dict, strict=False)
         
+        # Log parameter information for the loaded model
+        from src.model_onehot import count_parameters
+        total_params, trainable_params = count_parameters(model)
+        logger.info(f"Loaded model from {model_path}: {total_params:,} total parameters ({trainable_params:,} trainable)")
+        
         return model
 
     def read_models_from_directory(self, directory_path, input_dim=1280, num_classes=9, num_heads=8, hidden_dim=512, lstm_hidden_dim=512, dropout=0.1, use_lstm=True, max_len=1500, protein_dropout_rate=0.6, attention='circular', positional_encoding_type='sinusoidal', pre_norm=False, progressive_dropout=True, initial_dropout_rate=1.0, final_dropout_rate=0.4, output_dim=None, num_layers=2):
@@ -725,6 +730,8 @@ class Predictor:
                     f"protein_dropout_rate={protein_dropout_rate}, attention={attention}, "
                     f"positional_encoding_type={positional_encoding_type}, pre_norm={pre_norm}")
 
+        total_model_params = 0
+        
         for filename in os.listdir(directory_path):
             if filename.endswith(".model"):  # Assuming model files have .model extension
                 model_path = os.path.join(directory_path, filename)
@@ -735,7 +742,13 @@ class Predictor:
                     initial_dropout_rate, final_dropout_rate, output_dim, num_layers
                 )
                 self.models.append(model)
-
+                
+                # Track total parameters across all models
+                from src.model_onehot import count_parameters
+                model_params, _ = count_parameters(model)
+                total_model_params += model_params
+        
+        logger.info(f"Loaded {len(self.models)} models with total of {total_model_params:,} parameters")
 
     def compute_confidence(self, scores, confidence_dict, categories):
         """
