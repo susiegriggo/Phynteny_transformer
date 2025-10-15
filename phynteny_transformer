@@ -100,12 +100,6 @@ def parse_arguments():
         action="version", 
         version=f"%(prog)s {__version__}"
     )
-    parser.add_basic_argument(
-        "--show-model-params", 
-        action="store_true", 
-        help="Display detailed model parameter information including total parameters, "
-             "memory usage, and parameter breakdown by component"
-    )
     
     # Advanced arguments (hidden by default)
     parser.add_advanced_argument(
@@ -441,37 +435,6 @@ def main():
         output_dim=args.output_dim,
         num_layers=args.num_layers
     )
-
-    # Add parameter counting summary only if requested
-    if args.show_model_params and p.models:
-        from src.model_onehot import count_parameters
-        
-        # Count parameters for each model and get ensemble totals
-        total_ensemble_params = 0
-        model_param_counts = []
-        
-        for i, model in enumerate(p.models):
-            total_params, trainable_params = count_parameters(model)
-            model_param_counts.append((total_params, trainable_params))
-            total_ensemble_params += total_params
-            logger.info(f"Model {i+1}: {total_params:,} parameters ({trainable_params:,} trainable)")
-        
-        # Report ensemble summary
-        num_models = len(p.models)
-        avg_params_per_model = total_ensemble_params / num_models if num_models > 0 else 0
-        
-        logger.info("=" * 60)
-        logger.info("MODEL PARAMETER SUMMARY")
-        logger.info("=" * 60)
-        logger.info(f"Number of models in ensemble: {num_models}")
-        logger.info(f"Total parameters across all models: {total_ensemble_params:,}")
-        logger.info(f"Average parameters per model: {avg_params_per_model:,.0f}")
-        logger.info(f"Estimated memory usage for ensemble: {(total_ensemble_params * 4) / (1024**3):.2f} GB")
-        logger.info("=" * 60)
-        
-        # For your report, you can use these values:
-        logger.info(f"REPORT VALUES - Total model parameters (p): {total_ensemble_params:,}")
-        logger.info(f"REPORT VALUES - Parameters per individual model: {model_param_counts[0][0]:,}" if model_param_counts else "No models loaded")
 
     # Read the calibration models - support both individual and ensemble calibration
     calibration_models_path = os.path.join(args.models, "calibration_models.pkl")
