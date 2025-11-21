@@ -26,7 +26,7 @@ from src import advanced_argparse
 __author__ = "Susanna Grigson"
 __maintainer__ = "Susanna Grigson"
 __license__ = "MIT"
-__version__ = "0"
+__version__ = "0.1.3"
 __email__ = "susie.grigson@flinders.edu.au"
 __status__ = "development"
 

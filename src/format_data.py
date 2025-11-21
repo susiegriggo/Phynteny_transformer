@@ -822,15 +822,15 @@ def read_annotations_information():
 
     :return: tuple of category_dict and phrog_integer_category
     """
-    # Try to find the phrog_annot_v4.tsv file using pkg_resources
+    # Try to find the phold_annots.tsv file using pkg_resources
     try:
-        phrog_file_path = pkg_resources.resource_filename('src', 'phrog_annotation_info/phrog_annot_v4.tsv')
+        phrog_file_path = pkg_resources.resource_filename('src', 'phrog_annotation_info/phold_annots.tsv')
         if not os.path.exists(phrog_file_path):
             # Fallback to alternate locations
             alternate_paths = [
-                pkg_resources.resource_filename('phynteny_utils', 'phrog_annotation_info/phrog_annot_v4.tsv'),
-                os.path.join(os.path.dirname(__file__), 'phrog_annotation_info/phrog_annot_v4.tsv'),
-                "src/phrog_annotation_info/phrog_annot_v4.tsv"  # Original path as last resort
+                pkg_resources.resource_filename('phynteny_utils', 'phrog_annotation_info/phold_annots.tsv'),
+                os.path.join(os.path.dirname(__file__), 'phrog_annotation_info/phold_annots.tsv'),
+                "src/phrog_annotation_info/phold_annots.tsv"  # Original path as last resort
             ]
             
             for path in alternate_paths:
@@ -842,10 +842,10 @@ def read_annotations_information():
         phrogs = pd.read_csv(phrog_file_path, sep="\t")
         
     except (pkg_resources.DistributionNotFound, FileNotFoundError) as e:
-        logger.error(f"Error finding phrog_annot_v4.tsv: {e}")
+        logger.error(f"Error finding phold_annots.tsv: {e}")
         # Fallback to original path
         logger.warning("Falling back to hardcoded path")
-        phrogs = pd.read_csv("src/phrog_annotation_info/phrog_annot_v4.tsv", sep="\t")
+        phrogs = pd.read_csv("src/phrog_annotation_info/phold_annots.tsv", sep="\t")
     
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
 
