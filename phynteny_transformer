@@ -208,6 +208,18 @@ def parse_arguments():
         default=0.1, 
         help="Dropout rate for the model"
     )
+    parser.add_advanced_argument(
+        "--disable-sinusoidal-pe", 
+        action="store_true", 
+        default=False, 
+        help="Disable sinusoidal positional encoding (use only circular relative attention)"
+    )
+    parser.add_advanced_argument(
+        "--analyze-untrained-attention", 
+        action="store_true", 
+        default=False, 
+        help="Save attention patterns from untrained model for comparison"
+    )
     
     return parser.parse_args()
 
@@ -418,7 +430,8 @@ def main():
                 f"attention={args.attention}, positional_encoding_type={args.positional_encoding_type}, "
                 f"pre_norm={args.pre_norm}, progressive_dropout={args.progressive_dropout}, "
                 f"initial_dropout_rate={args.initial_dropout_rate}, final_dropout_rate={args.final_dropout_rate}, "
-                f"output_dim={args.output_dim}, num_layers={args.num_layers}")
+                f"output_dim={args.output_dim}, num_layers={args.num_layers}, "
+                f"disable_sinusoidal_pe={args.disable_sinusoidal_pe}")
                 
     p.read_models_from_directory(
         args.models, 
@@ -438,7 +451,8 @@ def main():
         initial_dropout_rate=args.initial_dropout_rate, 
         final_dropout_rate=args.final_dropout_rate, 
         output_dim=args.output_dim,
-        num_layers=args.num_layers
+        num_layers=args.num_layers,
+        disable_sinusoidal_pe=args.disable_sinusoidal_pe
     )
 
     # If --show-model-info flag is set, display model info and exit

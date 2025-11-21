@@ -159,6 +159,7 @@ def load_model(model_path, params):
     progressive_dropout = params.get("progressive_dropout", False)
     initial_dropout_rate = params.get("initial_dropout_rate", 1.0)
     final_dropout_rate = params.get("final_dropout_rate", 0.4)
+    disable_sinusoidal_pe = params.get("disable_sinusoidal_pe", False)  # New parameter
     
     # Determine which positional encoding to use
     positional_encoding_type = params.get("positional_encoding_type", "fourier")
@@ -220,7 +221,8 @@ def load_model(model_path, params):
             pre_norm=pre_norm,
             progressive_dropout=progressive_dropout,
             initial_dropout_rate=initial_dropout_rate,
-            final_dropout_rate=final_dropout_rate
+            final_dropout_rate=final_dropout_rate,
+            disable_sinusoidal_pe=disable_sinusoidal_pe  # Add this parameter
         )
     else:
         raise ValueError(f"Invalid attention type: {attention}")
@@ -465,6 +467,24 @@ def load_model(model_path, params):
     type=float,
     help="Final protein dropout rate when using progressive dropout"
 )
+@click.option(
+    "--disable_sinusoidal_pe",
+    is_flag=True,
+    default=False,
+    help="Disable sinusoidal positional encoding (use only circular relative attention)."
+)
+@click.option(
+    "--analyze_untrained_attention",
+    is_flag=True,
+    default=False,
+    help="Analyze attention patterns of untrained model for comparison."
+)
+@click.option(
+    "--attention_analysis_samples",
+    default=10,
+    type=int,
+    help="Number of samples to analyze for attention patterns."
+)
 def main(
     x_path,
     y_path,
@@ -501,6 +521,9 @@ def main(
     progressive_dropout,  # Add progressive_dropout parameter
     initial_dropout_rate,  # Add initial_dropout_rate parameter
     final_dropout_rate,  # Add final_dropout_rate parameter
+    disable_sinusoidal_pe,  # Add new parameter
+    analyze_untrained_attention,  # Add new parameter
+    attention_analysis_samples,  # Add new parameter
 ):
     setup_output_directory(out, force)
 
@@ -523,13 +546,14 @@ def main(
         "progressive_dropout": progressive_dropout,
         "initial_dropout_rate": initial_dropout_rate,
         "final_dropout_rate": final_dropout_rate,
+        "disable_sinusoidal_pe": disable_sinusoidal_pe,  # Add to params
     }
 
     # generate loguru object
     logger.add(out + "/trainer.log", level="DEBUG")
 
     # Log parameter values
-    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}, use_lstm={use_lstm}, use_positional_encoding={use_positional_encoding}, positional_encoding_type={positional_encoding_type}, noise_std={noise_std}, zero_idx={zero_idx}, ignore_strand_gene_length={ignore_strand_gene_length}, protein_dropout_rate={protein_dropout_rate}, pre_norm={pre_norm}, progressive_dropout={progressive_dropout}, initial_dropout_rate={initial_dropout_rate}, final_dropout_rate={final_dropout_rate}")  # Log use_lstm
+    logger.info(f"Parameters: x_path={x_path}, y_path={y_path}, mask_portion={mask_portion}, attention={attention}, shuffle={shuffle}, lr={lr}, min_lr_ratio={min_lr_ratio}, epochs={epochs}, hidden_dim={hidden_dim}, num_heads={num_heads}, batch_size={batch_size}, out={out}, dropout={dropout}, device={device}, intialisation={intialisation}, lambda_penalty={lambda_penalty}, parallel_kfolds={parallel_kfolds}, num_layers={num_layers}, fold_index={fold_index}, output_dim={output_dim}, lstm_hidden_dim={lstm_hidden_dim}, use_lstm={use_lstm}, use_positional_encoding={use_positional_encoding}, positional_encoding_type={positional_encoding_type}, noise_std={noise_std}, zero_idx={zero_idx}, ignore_strand_gene_length={ignore_strand_gene_length}, protein_dropout_rate={protein_dropout_rate}, pre_norm={pre_norm}, progressive_dropout={progressive_dropout}, initial_dropout_rate={initial_dropout_rate}, final_dropout_rate={final_dropout_rate}, disable_sinusoidal_pe={disable_sinusoidal_pe}, analyze_untrained_attention={analyze_untrained_attention}")  # Log use_lstm
 
     # Log progressive dropout settings
     if progressive_dropout:
@@ -610,6 +634,53 @@ def main(
     except Exception as e:
         logger.error(f"Error during training: {e}")
         raise
+
+    # Analyze untrained model attention if requested
+    if analyze_untrained_attention:
+        logger.info("Analyzing attention patterns of untrained model...")
+        
+        # Create an untrained model for comparison
+        if attention == "circular":
+            untrained_model = model_onehot.TransformerClassifierCircularRelativeAttention(
+                input_dim=input_size,
+                num_classes=9,
+                num_heads=num_heads,
+                hidden_dim=hidden_dim,
+                lstm_hidden_dim=lstm_hidden_dim,
+                dropout=dropout,
+                num_layers=num_layers,
+                output_dim=output_dim,
+                use_lstm=use_lstm,
+                positional_encoding=positional_encoding_func,
+                use_positional_encoding=(use_positional_encoding == "True"),
+                protein_dropout_rate=protein_dropout_rate,
+                pre_norm=pre_norm,
+                progressive_dropout=progressive_dropout,
+                initial_dropout_rate=initial_dropout_rate,
+                final_dropout_rate=final_dropout_rate,
+                disable_sinusoidal_pe=disable_sinusoidal_pe
+            )
+            
+            # Create a small dataloader for analysis
+            from torch.utils.data import DataLoader
+            analysis_loader = DataLoader(
+                train_dataset, 
+                batch_size=4, 
+                shuffle=False, 
+                collate_fn=model_onehot.collate_fn
+            )
+            
+            # Analyze untrained model
+            untrained_output_dir = os.path.join(out, "untrained_attention_analysis")
+            untrained_model.save_attention_weights_for_analysis(
+                analysis_loader, 
+                untrained_output_dir, 
+                num_samples=attention_analysis_samples
+            )
+            
+            logger.info(f"Untrained model attention analysis saved to {untrained_output_dir}")
+        else:
+            logger.warning("Untrained attention analysis only supported for circular attention model")
 
     if run_test_model:  # Use the updated parameter name
         test_model(out, params, fold=fold_index)  # Pass fold_index to test_model
