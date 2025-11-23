@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=train_transformer_grid
+#SBATCH --job-name=train_transformer_comparison
 #SBATCH --output=train_transformer_%A_%a.log
 #SBATCH --error=train_transformer_%A_%a.err
 #SBATCH --time=23:59:30
 #SBATCH --partition=gpu-highmem
 #SBATCH --account=pawsey1018-gpu
 #SBATCH --gres=gpu:8
-#SBATCH --array=0-10 # set this to the total num of combinations
+#SBATCH --array=0-19 # 10 folds x 2 model types = 20 total combinations
 
 # Load necessary modules
 module load singularity/4.1.0-slurm
@@ -14,22 +14,24 @@ module load singularity/4.1.0-slurm
 export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
 
 # Activate virtual environment
-export containerImage=/scratch/pawsey1018/grig0076/docker/phynteny_transformer_v1_12102024_2.sif
+#export containerImage=/scratch/pawsey1018/grig0076/docker/phynteny_transformer_v1_12102024_2.sif
+export containerImage=/home/grig0076/susie_scratch/docker/phynteny_transformer_v1_hugging_face_5.sif
 
-# Define parameter values
+# Define parameter values - using your original parameters
 FOLDS=(1 2 3 4 5 6 7 8 9 10)
-BATCH_SIZES=(64)
-MASK_PORTIONS=(0.3)
-ATTENTIONS=("circular")
-LRS=(1e-5)
-DROPOUTS=(0.05)
-HIDDEN_DIMS=(256) 
-NUM_HEADS=(4)
-NUM_LAYERS=(2)
-LAMBDA_PENALTIES=(100)
+MODEL_TYPES=("original" "no_sinusoidal")
+BATCH_SIZE=64
+MASK_PORTION=0.3
+ATTENTION="circular"
+LR=1e-5
+DROPOUT=0.05
+HIDDEN_DIM=256
+NUM_HEADS=4
+NUM_LAYERS=2
+LAMBDA_PENALTY=100
 
 # Calculate the total number of combinations
-TOTAL_COMBINATIONS=${#FOLDS[@]}*${#BATCH_SIZES[@]}*${#MASK_PORTIONS[@]}*${#ATTENTIONS[@]}*${#LRS[@]}*${#DROPOUTS[@]}*${#HIDDEN_DIMS[@]}*${#NUM_HEADS[@]}*${#NUM_LAYERS[@]}*${#LAMBDA_PENALTIES[@]}
+TOTAL_COMBINATIONS=${#FOLDS[@]}*${#MODEL_TYPES[@]}
 
 # Ensure the array index is within the range of total combinations
 if [ $SLURM_ARRAY_TASK_ID -ge $TOTAL_COMBINATIONS ]; then
@@ -39,33 +41,39 @@ fi
 
 # Calculate the indices for each parameter
 FOLD_IDX=$((SLURM_ARRAY_TASK_ID % ${#FOLDS[@]}))
-BATCH_SIZE_IDX=$(((SLURM_ARRAY_TASK_ID / ${#FOLDS[@]}) % ${#BATCH_SIZES[@]}))
-MASK_PORTION_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]})) % ${#MASK_PORTIONS[@]}))
-ATTENTION_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]} * ${#MASK_PORTIONS[@]})) % ${#ATTENTIONS[@]}))
-LR_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]} * ${#MASK_PORTIONS[@]} * ${#ATTENTIONS[@]})) % ${#LRS[@]}))
-DROPOUT_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]} * ${#MASK_PORTIONS[@]} * ${#ATTENTIONS[@]} * ${#LRS[@]})) % ${#DROPOUTS[@]}))
-HIDDEN_DIM_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]} * ${#MASK_PORTIONS[@]} * ${#ATTENTIONS[@]} * ${#LRS[@]} * ${#DROPOUTS[@]})) % ${#HIDDEN_DIMS[@]}))
-NUM_HEADS_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]} * ${#MASK_PORTIONS[@]} * ${#ATTENTIONS[@]} * ${#LRS[@]} * ${#DROPOUTS[@]} * ${#HIDDEN_DIMS[@]})) % ${#NUM_HEADS[@]}))
-NUM_LAYERS_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]} * ${#MASK_PORTIONS[@]} * ${#ATTENTIONS[@]} * ${#LRS[@]} * ${#DROPOUTS[@]} * ${#HIDDEN_DIMS[@]} * ${#NUM_HEADS[@]})) % ${#NUM_LAYERS[@]}))
-LAMBDA_PENALTY_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]} * ${#MASK_PORTIONS[@]} * ${#ATTENTIONS[@]} * ${#LRS[@]} * ${#DROPOUTS[@]} * ${#HIDDEN_DIMS[@]} * ${#NUM_HEADS[@]} * ${#NUM_LAYERS[@]})) % ${#LAMBDA_PENALTIES[@]}))
+MODEL_TYPE_IDX=$(((SLURM_ARRAY_TASK_ID / ${#FOLDS[@]}) % ${#MODEL_TYPES[@]}))
 
 # Get the parameter values for this task
 FOLD=${FOLDS[$FOLD_IDX]}
-BATCH_SIZE=${BATCH_SIZES[$BATCH_SIZE_IDX]}
-MASK_PORTION=${MASK_PORTIONS[$MASK_PORTION_IDX]}
-ATTENTION=${ATTENTIONS[$ATTENTION_IDX]}
-LR=${LRS[$LR_IDX]}
-DROPOUT=${DROPOUTS[$DROPOUT_IDX]}
-HIDDEN_DIM=${HIDDEN_DIMS[$HIDDEN_DIM_IDX]}
-NUM_HEADS=${NUM_HEADS[$NUM_HEADS_IDX]}
-NUM_LAYERS=${NUM_LAYERS[$NUM_LAYERS_IDX]}
-LAMBDA_PENALTY=${LAMBDA_PENALTIES[$LAMBDA_PENALTY_IDX]}
+MODEL_TYPE=${MODEL_TYPES[$MODEL_TYPE_IDX]}
+
+# Set model-specific parameters
+if [ "$MODEL_TYPE" == "no_sinusoidal" ]; then
+    DISABLE_SINUSOIDAL_PE="--disable_sinusoidal_pe"
+    OUTPUT_SUFFIX="_no_sinusoidal"
+    echo "Training model WITHOUT sinusoidal positional encoding for fold $FOLD"
+else
+    DISABLE_SINUSOIDAL_PE=""
+    OUTPUT_SUFFIX="_original"
+    echo "Training ORIGINAL model with sinusoidal positional encoding for fold $FOLD"
+fi
+
+# Create output directory path
+OUTPUT_DIR="/home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/sinusoidal_comparison_${MODEL_TYPE}_fold_${FOLD}"
+
+echo "Starting training for:"
+echo "  Model type: $MODEL_TYPE"
+echo "  Fold: $FOLD"
+echo "  Output directory: $OUTPUT_DIR"
+echo "  Parameters: batch_size=$BATCH_SIZE, mask_portion=$MASK_PORTION, attention=$ATTENTION"
+echo "  Learning rate: $LR, dropout=$DROPOUT, hidden_dim=$HIDDEN_DIM"
+echo "  Num heads: $NUM_HEADS, num_layers=$NUM_LAYERS, lambda_penalty=$LAMBDA_PENALTY"
 
 # Run the script with the selected parameters
 singularity exec --rocm $containerImage python3 /home/grig0076/GitHubs/Phynteny_transformer/train_transformer.py \
   --fold_index $FOLD \
-  --x_path /home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/merged_data.X.pkl \
-  --y_path /home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/merged_data.y.pkl \
+  --x_path /home/grig0076/susie_scratch/phynteny_transformer/data/phynteny_processed_training_files_and_splits_v0.1/data.X.pkl \
+  --y_path /home/grig0076/susie_scratch/phynteny_transformer/data/phynteny_processed_training_files_and_splits_v0.1/data.y.pkl \
   --mask_portion $MASK_PORTION \
   --epochs 100 \
   --attention $ATTENTION \
@@ -76,4 +84,7 @@ singularity exec --rocm $containerImage python3 /home/grig0076/GitHubs/Phynteny_
   --num_layers $NUM_LAYERS \
   --batch_size $BATCH_SIZE \
   --lambda_penalty $LAMBDA_PENALTY \
-  --out /home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/grid_search_11022025_origoutputdim/${BATCH_SIZE}_${MASK_PORTION}_${ATTENTION}_${LR}_${DROPOUT}_${HIDDEN_DIM}_${NUM_HEADS}_${NUM_LAYERS}_${LAMBDA_PENALTY}_${FOLD}
+  --out $OUTPUT_DIR \
+  $DISABLE_SINUSOIDAL_PE
+
+echo "Completed training for model type: $MODEL_TYPE, fold: $FOLD"
