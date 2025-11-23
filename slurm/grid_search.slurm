@@ -30,22 +30,31 @@ NUM_HEADS=4
 NUM_LAYERS=2
 LAMBDA_PENALTY=100
 
-# Calculate the total number of combinations
-TOTAL_COMBINATIONS=${#FOLDS[@]}*${#MODEL_TYPES[@]}
+# Calculate the total number of combinations using proper arithmetic
+FOLD_COUNT=${#FOLDS[@]}
+MODEL_TYPE_COUNT=${#MODEL_TYPES[@]}
+TOTAL_COMBINATIONS=$((FOLD_COUNT * MODEL_TYPE_COUNT))
+
+echo "Debug: FOLD_COUNT=$FOLD_COUNT, MODEL_TYPE_COUNT=$MODEL_TYPE_COUNT, TOTAL_COMBINATIONS=$TOTAL_COMBINATIONS"
+echo "Debug: SLURM_ARRAY_TASK_ID=$SLURM_ARRAY_TASK_ID"
 
 # Ensure the array index is within the range of total combinations
 if [ $SLURM_ARRAY_TASK_ID -ge $TOTAL_COMBINATIONS ]; then
-  echo "Array index out of range"
+  echo "Array index $SLURM_ARRAY_TASK_ID out of range (max: $((TOTAL_COMBINATIONS - 1)))"
   exit 1
 fi
 
-# Calculate the indices for each parameter
-FOLD_IDX=$((SLURM_ARRAY_TASK_ID % ${#FOLDS[@]}))
-MODEL_TYPE_IDX=$(((SLURM_ARRAY_TASK_ID / ${#FOLDS[@]}) % ${#MODEL_TYPES[@]}))
+# Calculate the indices for each parameter using proper arithmetic
+FOLD_IDX=$((SLURM_ARRAY_TASK_ID % FOLD_COUNT))
+MODEL_TYPE_IDX=$((SLURM_ARRAY_TASK_ID / FOLD_COUNT))
+
+echo "Debug: FOLD_IDX=$FOLD_IDX, MODEL_TYPE_IDX=$MODEL_TYPE_IDX"
 
 # Get the parameter values for this task
 FOLD=${FOLDS[$FOLD_IDX]}
 MODEL_TYPE=${MODEL_TYPES[$MODEL_TYPE_IDX]}
+
+echo "Debug: Selected FOLD=$FOLD, MODEL_TYPE=$MODEL_TYPE"
 
 # Set model-specific parameters
 if [ "$MODEL_TYPE" == "no_sinusoidal" ]; then
@@ -70,7 +79,7 @@ echo "  Learning rate: $LR, dropout=$DROPOUT, hidden_dim=$HIDDEN_DIM"
 echo "  Num heads: $NUM_HEADS, num_layers=$NUM_LAYERS, lambda_penalty=$LAMBDA_PENALTY"
 
 # Run the script with the selected parameters
-singularity exec --rocm $containerImage python3 /home/grig0076/GitHubs/Phynteny_transformer/train_transformer.py \
+singularity exec --rocm $containerImage python3 /home/grig0076/GitHubs/Phynteny_transformer_15012025/Phynteny_transformer/train_transformer/train_transformer.py \
   --fold_index $FOLD \
   --x_path /home/grig0076/susie_scratch/phynteny_transformer/data/phynteny_processed_training_files_and_splits_v0.1/data.X.pkl \
   --y_path /home/grig0076/susie_scratch/phynteny_transformer/data/phynteny_processed_training_files_and_splits_v0.1/data.y.pkl \
