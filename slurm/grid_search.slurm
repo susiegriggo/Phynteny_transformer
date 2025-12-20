@@ -14,7 +14,7 @@ module load singularity/4.1.0-slurm
 export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
 
 # Activate virtual environment
-export containerImage=/scratch/pawsey1018/grig0076/docker/phynteny_transformer_v1_12102024_2.sif
+export containerImage=/scratch/pawsey1018/grig0076/docker/phynteny_transformer_v1_hugging_face_5.sif
 
 # Define parameter values - using published Phynteny parameters
 FOLDS=(1 2 3 4 5 6 7 8 9 10)
@@ -68,7 +68,7 @@ PROTEIN_DROPOUT=${PROTEIN_DROPOUT_RATES[$PROTEIN_DROPOUT_IDX]}
 POSITIONAL_ENCODING=${POSITIONAL_ENCODING_TYPES[$POSITIONAL_ENCODING_IDX]}
 
 # Run the script with the selected parameters
-singularity exec --rocm $containerImage python3 /home/grig0076/GitHubs/Phynteny_transformer/train_transformer.py \
+singularity exec --rocm $containerImage python3 /home/grig0076/susie_scratch/GitHubs/Phynteny_transformer/train_transformer.py \
   --fold_index $FOLD \
   --x_path /home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/merged_data.X.pkl \
   --y_path /home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/merged_data.y.pkl \
