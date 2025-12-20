@@ -6,7 +6,7 @@
 #SBATCH --partition=gpu-highmem
 #SBATCH --account=pawsey1018-gpu
 #SBATCH --gres=gpu:8
-#SBATCH --array=0-10 # set this to the total num of combinations
+#SBATCH --array=0-19 # set this to the total num of combinations (updated for positional encoding types)
 
 # Load necessary modules
 module load singularity/4.1.0-slurm
@@ -27,9 +27,10 @@ HIDDEN_DIMS=(256)
 NUM_HEADS=(4)
 NUM_LAYERS=(2)
 LAMBDA_PENALTIES=(100)
+POSITIONAL_ENCODING_TYPES=("sinusoidal" "none")  # Compare sinusoidal (reviewer's concern) vs none
 
 # Calculate the total number of combinations
-TOTAL_COMBINATIONS=${#FOLDS[@]}*${#BATCH_SIZES[@]}*${#MASK_PORTIONS[@]}*${#ATTENTIONS[@]}*${#LRS[@]}*${#DROPOUTS[@]}*${#HIDDEN_DIMS[@]}*${#NUM_HEADS[@]}*${#NUM_LAYERS[@]}*${#LAMBDA_PENALTIES[@]}
+TOTAL_COMBINATIONS=${#FOLDS[@]}*${#BATCH_SIZES[@]}*${#MASK_PORTIONS[@]}*${#ATTENTIONS[@]}*${#LRS[@]}*${#DROPOUTS[@]}*${#HIDDEN_DIMS[@]}*${#NUM_HEADS[@]}*${#NUM_LAYERS[@]}*${#LAMBDA_PENALTIES[@]}*${#POSITIONAL_ENCODING_TYPES[@]}
 
 # Ensure the array index is within the range of total combinations
 if [ $SLURM_ARRAY_TASK_ID -ge $TOTAL_COMBINATIONS ]; then
@@ -48,6 +49,7 @@ HIDDEN_DIM_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]} * ${
 NUM_HEADS_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]} * ${#MASK_PORTIONS[@]} * ${#ATTENTIONS[@]} * ${#LRS[@]} * ${#DROPOUTS[@]} * ${#HIDDEN_DIMS[@]})) % ${#NUM_HEADS[@]}))
 NUM_LAYERS_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]} * ${#MASK_PORTIONS[@]} * ${#ATTENTIONS[@]} * ${#LRS[@]} * ${#DROPOUTS[@]} * ${#HIDDEN_DIMS[@]} * ${#NUM_HEADS[@]})) % ${#NUM_LAYERS[@]}))
 LAMBDA_PENALTY_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]} * ${#MASK_PORTIONS[@]} * ${#ATTENTIONS[@]} * ${#LRS[@]} * ${#DROPOUTS[@]} * ${#HIDDEN_DIMS[@]} * ${#NUM_HEADS[@]} * ${#NUM_LAYERS[@]})) % ${#LAMBDA_PENALTIES[@]}))
+POSITIONAL_ENCODING_IDX=$(((SLURM_ARRAY_TASK_ID / (${#FOLDS[@]} * ${#BATCH_SIZES[@]} * ${#MASK_PORTIONS[@]} * ${#ATTENTIONS[@]} * ${#LRS[@]} * ${#DROPOUTS[@]} * ${#HIDDEN_DIMS[@]} * ${#NUM_HEADS[@]} * ${#NUM_LAYERS[@]} * ${#LAMBDA_PENALTIES[@]})) % ${#POSITIONAL_ENCODING_TYPES[@]}))
 
 # Get the parameter values for this task
 FOLD=${FOLDS[$FOLD_IDX]}
@@ -60,6 +62,7 @@ HIDDEN_DIM=${HIDDEN_DIMS[$HIDDEN_DIM_IDX]}
 NUM_HEADS=${NUM_HEADS[$NUM_HEADS_IDX]}
 NUM_LAYERS=${NUM_LAYERS[$NUM_LAYERS_IDX]}
 LAMBDA_PENALTY=${LAMBDA_PENALTIES[$LAMBDA_PENALTY_IDX]}
+POSITIONAL_ENCODING=${POSITIONAL_ENCODING_TYPES[$POSITIONAL_ENCODING_IDX]}
 
 # Run the script with the selected parameters
 singularity exec --rocm $containerImage python3 /home/grig0076/GitHubs/Phynteny_transformer/train_transformer.py \
@@ -76,4 +79,5 @@ singularity exec --rocm $containerImage python3 /home/grig0076/GitHubs/Phynteny_
   --num_layers $NUM_LAYERS \
   --batch_size $BATCH_SIZE \
   --lambda_penalty $LAMBDA_PENALTY \
-  --out /home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/grid_search_11022025_origoutputdim/${BATCH_SIZE}_${MASK_PORTION}_${ATTENTION}_${LR}_${DROPOUT}_${HIDDEN_DIM}_${NUM_HEADS}_${NUM_LAYERS}_${LAMBDA_PENALTY}_${FOLD}
+  --positional_encoding_type $POSITIONAL_ENCODING \
+  --out /home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/grid_search_11022025_origoutputdim/${BATCH_SIZE}_${MASK_PORTION}_${ATTENTION}_${LR}_${DROPOUT}_${HIDDEN_DIM}_${NUM_HEADS}_${NUM_LAYERS}_${LAMBDA_PENALTY}_${POSITIONAL_ENCODING}_${FOLD}

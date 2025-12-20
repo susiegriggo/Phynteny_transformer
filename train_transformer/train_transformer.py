@@ -5,8 +5,7 @@ import os
 from loguru import logger
 os.chdir('.')
 from src import model_onehot
-from src.model_onehot import fourier_positional_encoding
-from src.model_onehot import sinusoidal_positional_encoding
+from src.model_onehot import fourier_positional_encoding, sinusoidal_positional_encoding
 import os
 import torch
 
@@ -162,7 +161,17 @@ def load_model(model_path, params):
     
     # Determine which positional encoding to use
     positional_encoding_type = params.get("positional_encoding_type", "fourier")
-    positional_encoding_func = fourier_positional_encoding if positional_encoding_type == "fourier" else sinusoidal_positional_encoding
+    
+    if positional_encoding_type == "none":
+        positional_encoding_func = fourier_positional_encoding  # Default function (won't be used)
+        use_positional_encoding = False  # Override to disable positional encoding
+        logger.info("Loading model without positional encoding (type='none')")
+    elif not use_positional_encoding:
+        positional_encoding_func = fourier_positional_encoding  # Default function (won't be used)
+        logger.info("Loading model without positional encoding (use_positional_encoding=False)")
+    else:
+        positional_encoding_func = fourier_positional_encoding if positional_encoding_type == "fourier" else sinusoidal_positional_encoding
+        logger.info(f"Loading model with {positional_encoding_type} positional encoding")
     
     # Initialize the model
     if attention == "absolute":
@@ -403,13 +412,13 @@ def load_model(model_path, params):
     "--use_positional_encoding",
     type=click.Choice(["True", "False"]),
     default="True",
-    help="Include positional encoding in the model.",
+    help="Include positional encoding in the model. Set to 'False' to disable all positional encodings (equivalent to --positional_encoding_type=none). Useful for analyzing whether attention patterns are due to learned biology or positional encoding artifacts.",
 )
 @click.option(
     "--positional_encoding_type",
-    type=click.Choice(["fourier", "sinusoidal"]),
+    type=click.Choice(["fourier", "sinusoidal", "none"]),
     default="fourier",
-    help="Type of positional encoding to use (fourier or sinusoidal).",
+    help="Type of positional encoding to use. 'fourier' uses Fourier positional encoding, 'sinusoidal' uses sinusoidal positional encoding, 'none' disables positional encoding entirely (useful for investigating attention patterns without positional encoding artifacts).",
 )
 @click.option(
     "--noise_std",
@@ -515,8 +524,8 @@ def main(
         "num_layers": num_layers,
         "output_dim": output_dim,
         "use_lstm": use_lstm,
-        "use_positional_encoding": use_positional_encoding,
-        "positional_encoding_type": positional_encoding_type,  # Add this to params
+        "use_positional_encoding": use_positional_encoding_bool,
+        "positional_encoding_type": positional_encoding_type,
         "protein_dropout_rate": protein_dropout_rate,  # Add this parameter to params dictionary
         "num_classes": 9,  # Hardcoded for now
         "pre_norm": pre_norm,  # Add pre_norm to params
@@ -569,10 +578,21 @@ def main(
 
     # Train the model
     logger.info("\nTraining model...")
-    use_positional_encoding=(use_positional_encoding == "True"), # Convert to boolean
-    try:
+    
+    # Convert string to boolean and select positional encoding function
+    use_positional_encoding_bool = (use_positional_encoding == "True") and (positional_encoding_type != "none")
+    
+    if positional_encoding_type == "none":
+        positional_encoding_func = fourier_positional_encoding  # Default function (won't be used since use_positional_encoding_bool=False)
+        logger.info("Positional encoding disabled (type='none'). Model will rely only on learnable circular relative positions.")
+    elif use_positional_encoding_bool:
         positional_encoding_func = fourier_positional_encoding if positional_encoding_type == "fourier" else sinusoidal_positional_encoding
-        logger.info(f"Using {positional_encoding_type} positional encoding")
+        logger.info(f"Using {positional_encoding_type} positional encoding with use_positional_encoding={use_positional_encoding_bool}")
+    else:
+        positional_encoding_func = fourier_positional_encoding  # Default function (won't be used since use_positional_encoding_bool=False)
+        logger.info("Positional encoding disabled (use_positional_encoding=False). Model will rely only on learnable circular relative positions.")
+    
+    try:
         model_onehot.train_crossValidation(
             train_dataset,
             attention,
@@ -597,7 +617,7 @@ def main(
             lstm_hidden_dim=lstm_hidden_dim,
             use_lstm=use_lstm,
             positional_encoding=positional_encoding_func,  # Pass the selected encoding function
-            use_positional_encoding=use_positional_encoding,
+            use_positional_encoding=use_positional_encoding_bool,
             noise_std=noise_std,
             zero_idx=zero_idx,
             strand_gene_length=not ignore_strand_gene_length,

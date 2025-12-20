@@ -623,7 +623,14 @@ class Predictor:
         logger.info(f'Reading model with input_dim={input_dim}, num_classes={num_classes}, output_dim={output_dim}, num_heads={num_heads}, hidden_dim={hidden_dim}, lstm_hidden_dim={lstm_hidden_dim}, dropout={dropout}, use_lstm={use_lstm}, max_len={max_len}, protein_dropout_rate={protein_dropout_rate}, attention={attention}, positional_encoding_type={positional_encoding_type}, pre_norm={pre_norm}, num_layers={num_layers}')
 
         # Select the positional encoding function based on the type
-        positional_encoding_func = model_onehot.fourier_positional_encoding if positional_encoding_type == 'fourier' else model_onehot.sinusoidal_positional_encoding
+        if positional_encoding_type == 'none':
+            positional_encoding_func = model_onehot.fourier_positional_encoding  # Default function (won't be used)
+            use_positional_encoding_bool = False
+            logger.info("Loading model without positional encoding (type='none')")
+        else:
+            positional_encoding_func = model_onehot.fourier_positional_encoding if positional_encoding_type == 'fourier' else model_onehot.sinusoidal_positional_encoding
+            use_positional_encoding_bool = True
+            logger.info(f"Loading model with {positional_encoding_type} positional encoding")
         
         # Create the appropriate model based on attention type
         if attention == 'circular':
@@ -637,6 +644,7 @@ class Predictor:
                 max_len=max_len,
                 use_lstm=use_lstm, 
                 positional_encoding=positional_encoding_func,
+                use_positional_encoding=use_positional_encoding_bool,
                 protein_dropout_rate=protein_dropout_rate,
                 pre_norm=pre_norm,
                 progressive_dropout=progressive_dropout,
@@ -655,6 +663,7 @@ class Predictor:
                 max_len=max_len,
                 use_lstm=use_lstm,
                 positional_encoding=positional_encoding_func,
+                use_positional_encoding=use_positional_encoding_bool,
                 protein_dropout_rate=protein_dropout_rate,
                 output_dim=output_dim
             )
@@ -669,6 +678,7 @@ class Predictor:
                 num_layers=num_layers,  # Use the passed parameter instead of hardcoded value
                 use_lstm=use_lstm,
                 positional_encoding=positional_encoding_func,
+                use_positional_encoding=use_positional_encoding_bool,
                 protein_dropout_rate=protein_dropout_rate,
                 output_dim=output_dim
             )
