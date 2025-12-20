@@ -513,6 +513,9 @@ def main(
 ):
     setup_output_directory(out, force)
 
+    # Convert string to boolean and determine positional encoding settings
+    use_positional_encoding_bool = (use_positional_encoding == "True") and (positional_encoding_type != "none")
+
     # Generate the script with training parameters
     params = {
         "attention": attention,
@@ -579,9 +582,7 @@ def main(
     # Train the model
     logger.info("\nTraining model...")
     
-    # Convert string to boolean and select positional encoding function
-    use_positional_encoding_bool = (use_positional_encoding == "True") and (positional_encoding_type != "none")
-    
+    # Select positional encoding function based on type
     if positional_encoding_type == "none":
         positional_encoding_func = fourier_positional_encoding  # Default function (won't be used since use_positional_encoding_bool=False)
         logger.info("Positional encoding disabled (type='none'). Model will rely only on learnable circular relative positions.")
