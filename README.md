@@ -7,6 +7,42 @@
 [![Anaconda-Server Badge](https://anaconda.org/bioconda/phynteny/badges/version.svg)](https://anaconda.org/bioconda/phynteny_transformer)
 ![Conda](https://img.shields.io/conda/dn/bioconda/phynteny_transformer)
 
+## !! Patch 
+
+This branch contains a patch that will eventually be properly integrated to deal with the deprecated `pkg_resources`. To implement this patch: 
+```
+# create new env for patched phynteny
+conda create -n phynteny_transformer_pkgresource_patch -c conda-forge -c bioconda \
+   python=3.10 \
+     transformers=4.49.0 \
+     phynteny_transformer 
+
+
+# activate the new env
+conda activate phynteny_transformer_pkgresource_patch 
+
+# clone the patched version 
+git clone https://github.com/susiegriggo/Phynteny_transformer.git
+cd Phynteny_transformer 
+
+# switch to the patched branch 
+git checkout phynteny_importlib 
+
+# install the patch
+pip install . 
+
+# install models (should work now without pkg resources)
+install_models 
+
+``` 
+Then you should be able to run this here without any issues 
+
+```
+
+phynteny_transformer test_data/test_phage.gbk -o patched_test 
+
+``` 
+
 # Phynteny-Transformer 
 ![Phynteny Transformer Logo](phynteny_logo.png)
 
