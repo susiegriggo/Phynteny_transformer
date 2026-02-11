@@ -452,7 +452,6 @@ def main():
         final_dropout_rate=args.final_dropout_rate, 
         output_dim=args.output_dim,
         num_layers=args.num_layers,
-        disable_sinusoidal_pe=args.disable_sinusoidal_pe
     )
 
     # If --show-model-info flag is set, display model info and exit

@@ -581,8 +581,7 @@ class TransformerClassifier(nn.Module):
         if idx is not None:
             x = self.protein_feature_dropout(x, idx)
             
-        # Apply positional encoding only if enabled and not disabled
-        if self.positional_encoding is not None and not self.disable_sinusoidal_pe:
+        if self.positional_encoding is not None:
             x = x + self.positional_encoding[: x.size(1), :].to(x.device)
 
         # Normalize combined features after positional encoding
@@ -832,8 +831,7 @@ class TransformerClassifierRelativeAttention(nn.Module):
         function_embedding_dim=16,  # Add configurable embedding dimensions
         strand_embedding_dim=2,
         length_embedding_dim=8,
-        progressive_epochs=25,
-        disable_sinusoidal_pe=False,  # New parameter to disable sinusoidal PE
+        progressive_epochs=25
     ):
         """
         Initialize the Transformer Classifier with Relative Attention.
@@ -855,7 +853,6 @@ class TransformerClassifierRelativeAttention(nn.Module):
 
         # Set the number of classes
         self.num_classes = num_classes
-        self.disable_sinusoidal_pe = disable_sinusoidal_pe  # Store the flag
 
         # Embedding layers
         self.func_embedding = nn.Embedding(self.num_classes, function_embedding_dim).to(device)
@@ -871,21 +868,10 @@ class TransformerClassifierRelativeAttention(nn.Module):
                                                                  progressive_dropout=progressive_dropout,
                                                                  initial_dropout_rate=initial_dropout_rate,
                                                                  final_dropout_rate=final_dropout_rate, 
-                                                                 protein_idx=self.gene_feature_dim,  # just added this 
+                                                                 protein_idx=self.gene_feature_dim,
                                                                  total_epochs=progressive_epochs)
-        # Positional Encoding (now learnable) -  could try using the fixed sinusoidal embeddings instead
-        logger.info(f"Initialising positional encoding with {intialisation} values")
-        if intialisation == 'random':
-            self.positional_encoding = nn.Parameter(
-                torch.randn(1000, hidden_dim)
-            ).to(device)
-        elif intialisation == 'zeros':
-            self.positional_encoding = nn.Parameter(
-                torch.zeros(1000, hidden_dim) 
-            ).to(device)
-        else: 
-            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zeros'.")
-
+        self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device)
+        
         # Add positional normalization
         self.pos_norm = nn.LayerNorm(hidden_dim).to(device)
         self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
@@ -915,18 +901,13 @@ class TransformerClassifierRelativeAttention(nn.Module):
             self.transformer_encoder = nn.Identity().to(device)
             logger.info("Using Identity layer instead of transformer encoder (num_layers=0)")
 
-        # Positional Encoding
-        if use_positional_encoding and not disable_sinusoidal_pe:
+        if use_positional_encoding:
             self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device)
-            logger.info("Using sinusoidal positional encoding")
-        elif disable_sinusoidal_pe:
-            self.positional_encoding = None
-            logger.info("Sinusoidal positional encoding disabled - using only circular relative attention")
         else:
             self.positional_encoding = None
-            logger.info("Positional encoding disabled")
 
-    def forward(self, x, src_key_padding_mask=None, idx=None, return_attn_weights=False, save_lstm_output=False, save_transformer_output=False):
+
+    def forward(self, x, src_key_padding_mask=None, return_attn_weights=False, idx=None):
         """
         Forward pass of the model.
 
@@ -952,8 +933,7 @@ class TransformerClassifierRelativeAttention(nn.Module):
         if idx is not None:
             x = self.protein_feature_dropout(x, idx)
             
-        # Apply positional encoding only if enabled and not disabled
-        if self.positional_encoding is not None and not self.disable_sinusoidal_pe:
+        if self.positional_encoding is not None:
             x = x + self.positional_encoding[: x.size(1), :].to(x.device)
 
         # Normalize combined features after positional encoding
@@ -963,7 +943,9 @@ class TransformerClassifierRelativeAttention(nn.Module):
         if self.lstm:
             x, _ = self.lstm(x)
         if return_attn_weights:
-            x, attn_weights = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+            x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+            for layer in self.transformer_encoder.layers[1:]:
+                x = layer(x, src_key_padding_mask=src_key_padding_mask)
             x = self.fc(x)
             if self.output_dim != 9:  # Apply softmax if output_dim is not 9
                 x = F.softmax(x, dim=-1)
@@ -975,64 +957,6 @@ class TransformerClassifierRelativeAttention(nn.Module):
                 x = F.softmax(x, dim=-1)
             return x
 
-    def save_attention_weights_for_analysis(self, dataloader, output_dir, device='cuda', num_samples=5):
-        """
-        Extract and save attention weights for analysis of untrained vs trained models.
-        
-        Args:
-            dataloader: DataLoader containing evaluation data
-            output_dir: Directory to save attention weights
-            device: Device to run inference on
-            num_samples: Number of samples to analyze
-        """
-        self.eval()
-        self.to(device)
-        
-        os.makedirs(output_dir, exist_ok=True)
-        
-        attention_data = []
-        sample_count = 0
-        
-        with torch.no_grad():
-            for batch_idx, (embeddings, categories, masks, idx) in enumerate(dataloader):
-                if sample_count >= num_samples:
-                    break
-                    
-                embeddings = embeddings.to(device).float()
-                masks = masks.to(device).float()
-                src_key_padding_mask = (masks != -2).bool().to(device)
-                
-                # Get attention weights
-                outputs, attn_weights = self.forward(
-                    embeddings, 
-                    src_key_padding_mask=src_key_padding_mask, 
-                    idx=idx, 
-                    return_attn_weights=True
-                )
-                
-                # Store data for each sample in the batch
-                for i in range(embeddings.size(0)):
-                    if sample_count >= num_samples:
-                        break
-                        
-                    sample_data = {
-                        'attention_weights': attn_weights[i].cpu().numpy(),
-                        'seq_length': src_key_padding_mask[i].sum().item(),
-                        'sample_id': f'batch_{batch_idx}_sample_{i}',
-                        'categories': categories[i].cpu().numpy(),
-                        'mask': masks[i].cpu().numpy(),
-                        'model_state': 'trained' if any(p.requires_grad for p in self.parameters()) else 'untrained'
-                    }
-                    attention_data.append(sample_data)
-                    sample_count += 1
-        
-        # Save attention data
-        import pickle
-        with open(os.path.join(output_dir, 'attention_analysis_data.pkl'), 'wb') as f:
-            pickle.dump(attention_data, f)
-        
-        logger.info(f"Saved attention weights for {len(attention_data)} samples to {output_dir}")
-        return attention_data
 
 class CircularRelativePositionAttention(nn.Module):
     def __init__(self, d_model, num_heads, max_len=1500, batch_first=True, intialisation = 'random'):
@@ -1286,7 +1210,7 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         use_lstm=False,
         positional_encoding=fourier_positional_encoding,
         use_positional_encoding=True,
-        protein_dropout_rate=0.0,  
+        protein_dropout_rate=0.0,  # Add parameter for protein feature dropout
         function_embedding_dim=16,
         strand_embedding_dim=2,
         length_embedding_dim=8,
@@ -1295,148 +1219,147 @@ class TransformerClassifierCircularRelativeAttention(nn.Module):
         initial_dropout_rate=1.0,
         final_dropout_rate=0.4,
         progressive_epochs=25,
-        disable_sinusoidal_pe=False,  # New parameter to disable sinusoidal PE
     ):
-        """
-        Initialize the Transformer Classifier with Relative Attention.
-
-        Parameters:
-        input_dim (int): Input dimension size.
-        num_classes (int): Number of output classes.
-        num_heads (int): Number of attention heads.
-        num_layers (int): Number of transformer layers.
-        hidden_dim (int): Hidden dimension size.
-        dropout (float): Dropout rate.
-        max_len (int): Maximum sequence length.
-        intialisation (str): Initialization method for positional encoding ('random' or 'zero').
-        """
         super(TransformerClassifierCircularRelativeAttention, self).__init__()
 
-        # Check if CUDA is available
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Set the number of classes
         self.num_classes = num_classes
-        self.disable_sinusoidal_pe = disable_sinusoidal_pe  # Store the flag
 
         # Embedding layers
-        self.func_embedding = nn.Embedding(self.num_classes, function_embedding_dim).to(device)
-        self.strand_embedding = nn.Linear(2, strand_embedding_dim).to(device)  # Change to linear layer
+        self.func_embedding = nn.Embedding(self.num_classes,function_embedding_dim).to(device)
+        self.strand_embedding = nn.Linear(2, strand_embedding_dim).to(device)
         self.length_embedding = nn.Linear(1, length_embedding_dim).to(device)
-        self.gene_feature_dim = function_embedding_dim + strand_embedding_dim + length_embedding_dim  # function + strand + length embedding dimensions
-        self.embedding_layer = nn.Linear(input_dim, hidden_dim - self.gene_feature_dim).to(device)  # Use input_dim
-
+        self.gene_feature_dim = function_embedding_dim + strand_embedding_dim + length_embedding_dim
+        #logger.info(f'gene feature dim: {self.gene_feature_dim}')
+        self.embedding_layer = nn.Linear(input_dim, hidden_dim - self.gene_feature_dim).to(device)
+        self.num_layers = num_layers
+        self.num_heads = num_heads
         self.dropout = nn.Dropout(dropout).to(device)
+     
+        
+        # Add protein feature normalization
+        #self.protein_norm = nn.LayerNorm(hidden_dim - self.gene_feature_dim).to(device)
         
         # Add protein feature dropout layer
         self.protein_feature_dropout = MaskedTokenFeatureDropout(dropout_rate=protein_dropout_rate, 
-                                                                 progressive_dropout=progressive_dropout,
+                                                                 progressive_dropout=progressive_dropout,  # Default value set to False
                                                                  initial_dropout_rate=initial_dropout_rate,
                                                                  final_dropout_rate=final_dropout_rate, 
                                                                  protein_idx=self.gene_feature_dim,  # just added this 
-                                                                 total_epochs=progressive_epochs)
-        # Positional Encoding (now learnable) -  could try using the fixed sinusoidal embeddings instead
-        logger.info(f"Initialising positional encoding with {intialisation} values")
-        if intialisation == 'random':
-            self.positional_encoding = nn.Parameter(
-                torch.randn(1000, hidden_dim)
-            ).to(device)
-        elif intialisation == 'zeros':
-            self.positional_encoding = nn.Parameter(
-                torch.zeros(1000, hidden_dim) 
-            ).to(device)
-        else: 
-            ValueError(f"Invalid initialization value: {intialisation}. Must be 'random' or 'zeros'.")
-
+                                                                 total_epochs=progressive_epochs) 
+        #self.protein_feature_dropout.num_classes = num_classes  # Pass num_classes
+        self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device) if use_positional_encoding else None
+        
         # Add positional normalization
         self.pos_norm = nn.LayerNorm(hidden_dim).to(device)
-        self.output_dim = output_dim if output_dim else num_classes  # Set output_dim
-        if use_lstm:
-            self.lstm = nn.LSTM(
-                hidden_dim, lstm_hidden_dim, batch_first=True, bidirectional=True  # Use lstm_hidden_dim
-            ).to(device)
-            self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)  # Use lstm_hidden_dim
-            d_model = lstm_hidden_dim * 2  # Use lstm_hidden_dim
-        else:
-            self.lstm = None  # Ensure lstm attribute exists
-            self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)  # Use hidden_dim directly
-            d_model = hidden_dim  # Use hidden_dim directly
+        self.output_dim = output_dim if output_dim else num_classes
 
         # Create transformer encoder only if num_layers > 0
         if num_layers > 0:
-            encoder_layers = CustomTransformerEncoderLayer(
-                d_model=d_model,
+            encoder_layers = CircularTransformerEncoderLayer(
+                d_model=hidden_dim,  # Transformer's input dimension matches the embedding dim
                 num_heads=num_heads,
                 dropout=dropout,
                 max_len=max_len,
-                intialisation=intialisation
+                intialisation=intialisation,
+                pre_norm=pre_norm
             )
             self.transformer_encoder = nn.TransformerEncoder(encoder_layers, num_layers=num_layers).to(device)
+            
+            # LSTM takes transformer output as input
+            if use_lstm:
+                self.lstm = nn.LSTM(
+                    hidden_dim,  # Input size matches transformer's output dimension
+                    lstm_hidden_dim, 
+                    batch_first=True, 
+                    bidirectional=True
+                ).to(device)
+                self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)
+            else:
+                self.lstm = None
+                self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)
         else:
             # Create an identity module when no transformer layers are needed
             self.transformer_encoder = nn.Identity().to(device)
             logger.info("Using Identity layer instead of transformer encoder (num_layers=0)")
-
-        # Positional Encoding
-        if use_positional_encoding and not disable_sinusoidal_pe:
-            self.positional_encoding = positional_encoding(max_len, hidden_dim, device).to(device)
-            logger.info("Using sinusoidal positional encoding")
-        elif disable_sinusoidal_pe:
-            self.positional_encoding = None
-            logger.info("Sinusoidal positional encoding disabled - using only circular relative attention")
-        else:
-            self.positional_encoding = None
-            logger.info("Positional encoding disabled")
+            
+            # If no transformer, LSTM takes embedding output directly
+            if use_lstm:
+                self.lstm = nn.LSTM(
+                    hidden_dim,
+                    lstm_hidden_dim, 
+                    batch_first=True, 
+                    bidirectional=True
+                ).to(device)
+                self.fc = nn.Linear(2 * lstm_hidden_dim, self.output_dim).to(device)
+            else:
+                self.lstm = None
+                self.fc = nn.Linear(hidden_dim, self.output_dim).to(device)
 
     def forward(self, x, src_key_padding_mask=None, idx=None, return_attn_weights=False, save_lstm_output=False, save_transformer_output=False):
-        """
-        Forward pass of the model.
-
-        Parameters:
-        x (torch.Tensor): Input tensor.
-        src_key_padding_mask (torch.Tensor, optional): Mask tensor for padding.
-        return_attn_weights (bool, optional): If True, return attention weights.
-        idx (torch.Tensor, optional): Indices for masked token feature dropout.
-
-        Returns:
-        torch.Tensor: Output tensor.
-        """
         x = x.float()
+
+        # Extract the different components from the input tensor
         func_ids, strand_ids, gene_length, protein_embeds = x[:,:,:self.num_classes], x[:,:,self.num_classes:self.num_classes+2], x[:,:,self.num_classes+2:self.num_classes+3], x[:,:,self.num_classes+3:]
         func_embeds = self.func_embedding(func_ids.argmax(-1))
-        strand_embeds = self.strand_embedding(strand_ids.float())  # Change to linear layer
+        strand_embeds = self.strand_embedding(strand_ids.float())
         length_embeds = self.length_embedding(gene_length)
         protein_embeds = self.embedding_layer(protein_embeds)
 
+        # Concatenate the embeddings 
         x = torch.cat([func_embeds, strand_embeds, length_embeds, protein_embeds], dim=-1)
-        
-        # Apply protein feature dropout if idx is provided
+
+        # Apply protein feature dropout to the masked tokens 
         if idx is not None:
             x = self.protein_feature_dropout(x, idx)
-            
-        # Apply positional encoding only if enabled and not disabled
-        if self.positional_encoding is not None and not self.disable_sinusoidal_pe:
-            x = x + self.positional_encoding[: x.size(1), :].to(x.device)
 
+        # Apply positional encoding
+        if self.positional_encoding is not None:
+            x = x + self.positional_encoding[: x.size(1), :].to(x.device)
+            
         # Normalize combined features after positional encoding
         x = self.pos_norm(x)
 
+        # Apply dropout
         x = self.dropout(x)
+
+        # TRANSFORMER FIRST: Apply transformer encoder
+        if return_attn_weights and isinstance(self.transformer_encoder, nn.TransformerEncoder) and hasattr(self.transformer_encoder, 'layers') and len(self.transformer_encoder.layers) > 0:
+            x, attn_weights = self.transformer_encoder.layers[0](x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
+            for layer in self.transformer_encoder.layers[1:]:
+                x = layer(x, src_key_padding_mask=src_key_padding_mask)
+        else:
+            x = self.transformer_encoder(x)
+        
+        if save_transformer_output:
+            self.saved_transformer_output = x.clone().detach().cpu().numpy()
+        
+        # THEN LSTM: Apply LSTM after transformer
         if self.lstm:
             x, _ = self.lstm(x)
+            if save_lstm_output:
+                self.saved_lstm_output = x.clone().detach().cpu().numpy()
+        
+        # Final classification
+        x = self.fc(x)
+        if self.output_dim != self.num_classes:
+            x = F.softmax(x, dim=-1)
+        
+        # Return with attention weights if requested
         if return_attn_weights:
-            x, attn_weights = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask, return_attn_weights=True)
-            x = self.fc(x)
-            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
-                x = F.softmax(x, dim=-1)
-            return x, attn_weights
+            if 'attn_weights' in locals():
+                return x, attn_weights
+            else:
+                # Create dummy attention weights
+                batch_size = x.size(0)
+                seq_len = x.size(1)
+                dummy_attn_weights = torch.zeros(batch_size, self.num_heads, seq_len, seq_len, device=x.device)
+                return x, dummy_attn_weights
         else:
-            x = self.transformer_encoder(x, src_key_padding_mask=src_key_padding_mask)
-            x = self.fc(x)
-            if self.output_dim != 9:  # Apply softmax if output_dim is not 9
-                x = F.softmax(x, dim=-1)
             return x
-
+                
 
 def masked_loss(output, target, mask, idx, ignore_index=-1):
     """
@@ -2531,6 +2454,8 @@ def save_logits(model, dataloader, device, output_dir="logits_output"):
      # Save the logits to a file
     np.save(os.path.join(output_dir, "logits.npy"), all_logits)
     logger.info("Logits saved successfully")
+
+
 
 class ProteinFeatureDropout(nn.Module):
     """

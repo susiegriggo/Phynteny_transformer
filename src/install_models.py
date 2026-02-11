@@ -15,7 +15,11 @@ from pathlib import Path
 import requests
 from loguru import logger
 import click
-import pkg_resources
+from importlib.resources import files as importlib_files
+try:
+    from importlib.resources import as_file
+except ImportError:
+    from importlib_resources import as_file
 
 
 PHYNTENY_MODEL_NAMES = ['fold_10transformer.model' ,
@@ -391,14 +395,16 @@ def main(outfile, force):
     if outfile == None:
         print("Downloading Phynteny models to the default location")
         try:
-            # Get the phynteny_utils directory
-            phynteny_utils_dir = pkg_resources.resource_filename("phynteny_utils", "")
+            # Get the phynteny_utils directory using importlib.resources
+            phynteny_utils_ref = importlib_files("phynteny_utils")
+            with as_file(phynteny_utils_ref) as phynteny_utils_path:
+                phynteny_utils_dir = str(phynteny_utils_path)
             # Create models subdirectory
             db_dir = os.path.join(phynteny_utils_dir, "models")
             print(f"Default package location determined as: {os.path.abspath(db_dir)}")
             # Make sure the directory exists
             os.makedirs(db_dir, exist_ok=True)
-        except (ImportError, pkg_resources.DistributionNotFound) as e:
+        except (ImportError, ModuleNotFoundError) as e:
             print(f"Could not determine package location: {e}")
             # Fallback to a local directory
             script_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

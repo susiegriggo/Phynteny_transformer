@@ -19,7 +19,11 @@ import sys
 import click  # Add this import for click.open_file
 from transformers import EsmModel, EsmTokenizer
 from transformers import EsmForMaskedLM
-import pkg_resources
+from importlib.resources import files as importlib_files
+try:
+    from importlib.resources import as_file
+except ImportError:
+    from importlib_resources import as_file
 
 
 def get_dict(dict_path):
@@ -822,30 +826,45 @@ def read_annotations_information():
 
     :return: tuple of category_dict and phrog_integer_category
     """
-    # Try to find the phold_annots.tsv file using pkg_resources
+    # Try to find the phold_annots.tsv file using importlib.resources
+    phrog_file_path = None
     try:
-        phrog_file_path = pkg_resources.resource_filename('src', 'phrog_annotation_info/phold_annots.tsv')
+        # Try using importlib.resources first
+        src_ref = importlib_files('src').joinpath('phrog_annotation_info/phold_annots.tsv')
+        with as_file(src_ref) as path:
+            phrog_file_path = str(path)
         if not os.path.exists(phrog_file_path):
-            # Fallback to alternate locations
-            alternate_paths = [
-                pkg_resources.resource_filename('phynteny_utils', 'phrog_annotation_info/phold_annots.tsv'),
-                os.path.join(os.path.dirname(__file__), 'phrog_annotation_info/phold_annots.tsv'),
-                "src/phrog_annotation_info/phold_annots.tsv"  # Original path as last resort
-            ]
-            
-            for path in alternate_paths:
-                if os.path.exists(path):
-                    phrog_file_path = path
-                    break
+            phrog_file_path = None
+    except (ImportError, ModuleNotFoundError, TypeError):
+        pass
+    
+    # Fallback to alternate locations if not found
+    if phrog_file_path is None or not os.path.exists(phrog_file_path):
+        alternate_paths = [
+            os.path.join(os.path.dirname(__file__), 'phrog_annotation_info/phold_annots.tsv'),
+            "src/phrog_annotation_info/phold_annots.tsv"  # Original path as last resort
+        ]
         
-        logger.info(f"Using phrog annotation file: {phrog_file_path}")
-        phrogs = pd.read_csv(phrog_file_path, sep="\t")
+        # Try phynteny_utils package
+        try:
+            utils_ref = importlib_files('phynteny_utils').joinpath('phrog_annotation_info/phold_annots.tsv')
+            with as_file(utils_ref) as path:
+                alternate_paths.insert(0, str(path))
+        except (ImportError, ModuleNotFoundError, TypeError):
+            pass
         
-    except (pkg_resources.DistributionNotFound, FileNotFoundError) as e:
-        logger.error(f"Error finding phold_annots.tsv: {e}")
-        # Fallback to original path
+        for path in alternate_paths:
+            if os.path.exists(path):
+                phrog_file_path = path
+                break
+    
+    if phrog_file_path is None or not os.path.exists(phrog_file_path):
+        logger.error("Error finding phold_annots.tsv in any location")
         logger.warning("Falling back to hardcoded path")
-        phrogs = pd.read_csv("src/phrog_annotation_info/phold_annots.tsv", sep="\t")
+        phrog_file_path = "src/phrog_annotation_info/phold_annots.tsv"
+    
+    logger.info(f"Using phrog annotation file: {phrog_file_path}")
+    phrogs = pd.read_csv(phrog_file_path, sep="\t")
     
     category_dict = dict(zip(phrogs["phrog"], phrogs["category"]))
 
@@ -857,27 +876,34 @@ def read_annotations_information():
     category_dict['defensefinder'] = 'moron, auxiliary metabolic gene and host takeover'
 
     # Try to find the integer_category.pkl file
+    integer_file_path = None
     try:
-        integer_file_path = pkg_resources.resource_filename('phynteny_utils', 'integer_category.pkl')
+        utils_ref = importlib_files('phynteny_utils').joinpath('integer_category.pkl')
+        with as_file(utils_ref) as path:
+            integer_file_path = str(path)
         if not os.path.exists(integer_file_path):
-            alternate_paths = [
-                "phynteny_utils/integer_category.pkl",  # Original path
-                os.path.join(os.path.dirname(__file__), '../phynteny_utils/integer_category.pkl'),
-                os.path.join(os.path.dirname(__file__), 'phynteny_utils/integer_category.pkl')
-            ]
-            for path in alternate_paths:
-                if os.path.exists(path):
-                    integer_file_path = path
-                    break
-            else:
-                raise FileNotFoundError("integer_category.pkl not found in any known locations.")
-        
-        logger.info(f"Using integer category file: {integer_file_path}")
-        phrog_integer = pickle.load(open(integer_file_path, "rb"))
-        
-    except (pkg_resources.DistributionNotFound, FileNotFoundError) as e:
-        logger.error(f"Error finding integer_category.pkl: {e}")
+            integer_file_path = None
+    except (ImportError, ModuleNotFoundError, TypeError):
+        pass
+    
+    # Fallback to alternate locations if not found
+    if integer_file_path is None or not os.path.exists(integer_file_path):
+        alternate_paths = [
+            "phynteny_utils/integer_category.pkl",  # Original path
+            os.path.join(os.path.dirname(__file__), '../phynteny_utils/integer_category.pkl'),
+            os.path.join(os.path.dirname(__file__), 'phynteny_utils/integer_category.pkl')
+        ]
+        for path in alternate_paths:
+            if os.path.exists(path):
+                integer_file_path = path
+                break
+    
+    if integer_file_path is None or not os.path.exists(integer_file_path):
+        logger.error("Error finding integer_category.pkl in any location")
         sys.exit("Critical error: integer_category.pkl file is missing. Please ensure it is correctly installed.")
+    
+    logger.info(f"Using integer category file: {integer_file_path}")
+    phrog_integer = pickle.load(open(integer_file_path, "rb"))
     
     phrog_integer = dict(
         zip(
