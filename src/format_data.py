@@ -19,7 +19,13 @@ import sys
 import click  # Add this import for click.open_file
 from transformers import EsmModel, EsmTokenizer
 from transformers import EsmForMaskedLM
-import pkg_resources
+# pkg_resources is imported lazily, inside read_annotations_information()
+# below (its only user) rather than here at module import time. This module
+# is imported unconditionally by the phynteny_transformer entry point before
+# argv is even parsed, so a module-level `import pkg_resources` fires its
+# deprecation warning (UserWarning: "pkg_resources is deprecated as an API"
+# -- slated for removal, setuptools docs) on every invocation, including
+# `phynteny_transformer --version`, polluting output that scripts may parse.
 
 
 def get_dict(dict_path):
@@ -822,6 +828,10 @@ def read_annotations_information():
 
     :return: tuple of category_dict and phrog_integer_category
     """
+    # Imported here rather than at module level -- see the comment above the
+    # module's other imports for why.
+    import pkg_resources
+
     # Try to find the phold_annots.tsv file using pkg_resources
     try:
         phrog_file_path = pkg_resources.resource_filename('src', 'phrog_annotation_info/phold_annots.tsv')

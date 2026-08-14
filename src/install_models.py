@@ -15,7 +15,11 @@ from pathlib import Path
 import requests
 from loguru import logger
 import click
-import pkg_resources
+# pkg_resources is imported lazily inside main() below (its only user) --
+# see the equivalent comment in src/format_data.py for why: a module-level
+# import here fires pkg_resources' deprecation UserWarning on every
+# invocation of this entry point, whether or not the code path that needs it
+# is even reached.
 
 
 PHYNTENY_MODEL_NAMES = ['fold_10transformer.model' ,
@@ -391,6 +395,10 @@ def main(outfile, force):
     if outfile == None:
         print("Downloading Phynteny models to the default location")
         try:
+            # Imported here rather than at module level -- see the comment
+            # above this module's other imports for why.
+            import pkg_resources
+
             # Get the phynteny_utils directory
             phynteny_utils_dir = pkg_resources.resource_filename("phynteny_utils", "")
             # Create models subdirectory

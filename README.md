@@ -85,7 +85,7 @@ If you would like to install them to a specific location
 install_models -o <path/to/database_dir>
  ```
 
-If this doesn't work you can download the models directly from [Zenodo](https://zenodo.org/records/15584824/files/phynteny_transformer_models_2025-06-03.tar.gz) and untar them yourself and point Phynteny to them with the `-m` flag. 
+If this doesn't work you can download the models directly from [Zenodo](https://zenodo.org/records/17336733/files/phynteny_transformer_models_2025-06-03.tar.gz) and untar them yourself and point Phynteny to them with the `-m` flag. 
 
 ### Quick Start 
 ```
