@@ -1648,11 +1648,12 @@ def train(
     min_lr_ratio=0.1,
     save_path="model",
     device="cuda",
-    checkpoint_interval=1, 
+    checkpoint_interval=1,
     lambda_penalty=0.1,
     num_classes=9,  # Add num_classes parameter
     zero_idx=False,  # Add zero_idx parameter
-    strand_gene_length=True  # Add strand_gene_length parameter
+    strand_gene_length=True,  # Add strand_gene_length parameter
+    untrained=False,  # If True, skip training entirely and dump attention from the randomly initialised model
 ):
     """
     Train the model.
@@ -1669,10 +1670,58 @@ def train(
     checkpoint_interval (int, optional): Interval for saving checkpoints.
     lambda_penalty (float, optional): Penalty for diagonal attention.
     num_classes (int, optional): Number of classes.
+    untrained (bool, optional): If True, no training steps are taken - the randomly
+        initialised model is run once over the validation set (in eval mode) purely
+        to dump its state dict and attention weights, for reviewer-requested
+        "before learning" attention comparisons.
     """
-    logger.info("Training on " + str(device)) 
+    logger.info("Training on " + str(device))
     model.to(device)
     logger.info(f"Model is on device: {next(model.parameters()).device}")
+
+    if untrained:
+        logger.info("untrained=True: skipping the training loop and dumping attention "
+                     "weights from the randomly initialised model instead.")
+        model.eval()
+
+        final_validation_weights = []
+        final_validation_attention = []
+        final_validation_categories = []
+        final_validation_masks = []
+
+        with torch.no_grad():
+            for embeddings, categories, masks, idx in test_dataloader:
+                embeddings, categories, masks = (
+                    embeddings.to(device).float(),
+                    categories.to(device).long(),
+                    masks.to(device).float(),
+                )
+                src_key_padding_mask = (masks != -2).bool().to(device)
+                outputs, attn_weights = model(
+                    embeddings, src_key_padding_mask=src_key_padding_mask, idx=idx, return_attn_weights=True
+                )
+
+                final_validation_weights.append(outputs.cpu().detach().numpy())
+                final_validation_attention.append(attn_weights.cpu().detach().numpy())
+                final_validation_categories.append(categories.cpu().detach().numpy())
+                final_validation_masks.append(masks.cpu().detach().numpy())
+
+        model_save_path = os.path.join(save_path, "transformer_state_dict.pth")
+        torch.save(model.state_dict(), model_save_path)
+        logger.info(f"Randomly initialised (untrained) model state dictionary saved at {model_save_path}")
+
+        with open(os.path.join(save_path, "final_validation_weights.pkl"), "wb") as f:
+            pickle.dump(final_validation_weights, f)
+        with open(os.path.join(save_path, "final_validation_attention.pkl"), "wb") as f:
+            pickle.dump(final_validation_attention, f)
+        with open(os.path.join(save_path, "final_validation_categories.pkl"), "wb") as f:
+            pickle.dump(final_validation_categories, f)
+        with open(os.path.join(save_path, "final_validation_masks.pkl"), "wb") as f:
+            pickle.dump(final_validation_masks, f)
+
+        gc.collect()
+        torch.cuda.empty_cache()
+        return
 
     # Initialize optimizer
     optimizer = optim.AdamW(model.parameters(), lr=lr, betas=(0.9,0.95), weight_decay=0.1)
@@ -2045,7 +2094,7 @@ def train(
     gc.collect()
     torch.cuda.empty_cache()
 
-def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding=fourier_positional_encoding, use_positional_encoding=True, zero_idx=False, strand_gene_length=True, protein_dropout_rate=0.0, pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4):
+def train_fold(fold, train_index, val_index, device_id, dataset, attention, batch_size, epochs, lr, min_lr_ratio, save_path, num_heads, hidden_dim, lstm_hidden_dim, dropout, checkpoint_interval, intialisation, lambda_penalty, num_layers, output_dim, input_size, use_lstm, positional_encoding=fourier_positional_encoding, use_positional_encoding=True, zero_idx=False, strand_gene_length=True, protein_dropout_rate=0.0, pre_norm=False, progressive_dropout=False, initial_dropout_rate=1.0, final_dropout_rate=0.4, untrained=False):
     fold_logger = None
     try:
         device = torch.device(device_id)
@@ -2206,7 +2255,8 @@ def train_fold(fold, train_index, val_index, device_id, dataset, attention, batc
             lambda_penalty=lambda_penalty,
             num_classes=num_classes,  # Pass num_classes
             zero_idx=zero_idx,  # Pass zero_idx
-            strand_gene_length=strand_gene_length  # Pass strand_gene_length
+            strand_gene_length=strand_gene_length,  # Pass strand_gene_length
+            untrained=untrained,  # Pass untrained flag
         )
 
         fold_logger.info(f"FOLD: {fold} - Training completed")
@@ -2255,6 +2305,7 @@ def train_crossValidation(
     progressive_dropout=False,
     initial_dropout_rate=1.0,
     final_dropout_rate=0.4,
+    untrained=False,
 ):
     """
     Train the model using K-Fold cross-validation.
@@ -2309,6 +2360,7 @@ def train_crossValidation(
                     progressive_dropout,
                     initial_dropout_rate,
                     final_dropout_rate,
+                    untrained,
                 )
                 break
     else:
@@ -2353,6 +2405,7 @@ def train_crossValidation(
                         progressive_dropout,
                         initial_dropout_rate,
                         final_dropout_rate,
+                        untrained,
                     ),
                 )
                 p.start()
@@ -2406,6 +2459,7 @@ def train_crossValidation(
                     progressive_dropout,
                     initial_dropout_rate,
                     final_dropout_rate,
+                    untrained,
                 )
 
             gc.collect()
