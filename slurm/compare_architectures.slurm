@@ -94,8 +94,8 @@ echo "  Num heads: $NUM_HEADS, num_layers=$NUM_LAYERS, lambda_penalty=$LAMBDA_PE
 # Run the script with the selected parameters
 singularity exec --rocm $containerImage python3 train_transformer.py \
   --fold_index $FOLD \
-  --x_path /home/grig0076/susie_scratch/phynteny_transformer/data/phynteny_processed_training_files_and_splits_v0.1/data.X.pkl \
-  --y_path /home/grig0076/susie_scratch/phynteny_transformer/data/phynteny_processed_training_files_and_splits_v0.1/data.y.pkl \
+  --x_path /home/grig0076/susie_scratch/phynteny_transformer/phynteny_processed_training_files_and_splits_v0.1/data.X.pkl \
+  --y_path /home/grig0076/susie_scratch/phynteny_transformer/phynteny_processed_training_files_and_splits_v0.1/data.y.pkl \
   --mask_portion $MASK_PORTION \
   --epochs $EPOCHS \
   --attention $ATTENTION \
