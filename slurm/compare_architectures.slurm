@@ -13,6 +13,15 @@ module load singularity/4.1.0-slurm
 
 export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
 
+# Work around a broken numpy/scipy pairing baked into the container (numpy linked
+# against openblas64/ILP64 while scipy expects the standard LP64 build, which breaks
+# scipy.interpolate at import time). This directory must already contain a correctly
+# installed numpy - set it up ONCE from the login node before submitting this job:
+#   singularity exec --rocm $containerImage python3 -m pip install \
+#     --target=/home/grig0076/susie_scratch/pyfix --no-deps \
+#     --index-url https://pypi.org/simple numpy==1.26.4
+export SINGULARITYENV_PYTHONPATH=/home/grig0076/susie_scratch/pyfix
+
 # Activate virtual environment
 #export containerImage=/scratch/pawsey1018/grig0076/docker/phynteny_transformer_v1_12102024_2.sif
 export containerImage=/home/grig0076/susie_scratch/docker/phynteny_transformer_v1_hugging_face_5.sif
