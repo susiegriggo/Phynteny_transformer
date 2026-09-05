@@ -2,11 +2,11 @@
 #SBATCH --job-name=train_transformer_comparison
 #SBATCH --output=train_transformer_%A_%a.log
 #SBATCH --error=train_transformer_%A_%a.err
-#SBATCH --time=23:59:30
+#SBATCH --time=01:59:30
 #SBATCH --partition=gpu-highmem
 #SBATCH --account=pawsey1018-gpu
 #SBATCH --gres=gpu:8
-#SBATCH --array=0-19 # 10 folds x 2 model types = 20 total combinations
+#SBATCH --array=0-1 # 10 folds x 2 model types = 20 total combinations
 
 # Load necessary modules
 module load singularity/4.1.0-slurm
@@ -15,7 +15,7 @@ export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
 
 # Activate virtual environment
 #export containerImage=/scratch/pawsey1018/grig0076/docker/phynteny_transformer_v1_12102024_2.sif
-export containerImage=/home/grig0076/susie_scratch/docker/phynteny_transformer_v1_hugging_face_5.sif
+export containerImage=/home/grig0076/susie_scratch/docker/phynteny_transformer_v1_alive_progress_2.sif
 
 # Define parameter values - using your original parameters
 FOLDS=(1 2 3 4 5 6 7 8 9 10)
@@ -68,7 +68,7 @@ else
 fi
 
 # Create output directory path
-OUTPUT_DIR="/home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/sinusoidal_comparison_${MODEL_TYPE}_fold_${FOLD}"
+OUTPUT_DIR="/home/grig0076/susie_scratch/phynteny_transformer/trained_models/sinusoidal_comparison_${MODEL_TYPE}_fold_${FOLD}"
 
 echo "Starting training for:"
 echo "  Model type: $MODEL_TYPE"
@@ -81,8 +81,8 @@ echo "  Num heads: $NUM_HEADS, num_layers=$NUM_LAYERS, lambda_penalty=$LAMBDA_PE
 # Run the script with the selected parameters
 singularity exec --rocm $containerImage python3 train_transformer.py \
   --fold_index $FOLD \
-  --x_path /home/grig0076/susie_scratch/phynteny_transformer/data/phynteny_processed_training_files_and_splits_v0.1/data.X.pkl \
-  --y_path /home/grig0076/susie_scratch/phynteny_transformer/data/phynteny_processed_training_files_and_splits_v0.1/data.y.pkl \
+  --x_path /home/grig0076/susie_scratch/phynteny_transformer/phynteny_processed_training_files_and_splits_v0.1/data.X.pkl \
+  --y_path /home/grig0076/susie_scratch/phynteny_transformer/phynteny_processed_training_files_and_splits_v0.1/data.y.pkl \
   --mask_portion $MASK_PORTION \
   --epochs 50 \
   --attention $ATTENTION \

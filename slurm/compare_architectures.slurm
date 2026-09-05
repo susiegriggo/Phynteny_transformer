@@ -2,7 +2,7 @@
 #SBATCH --job-name=train_transformer_comparison
 #SBATCH --output=train_transformer_%A_%a.log
 #SBATCH --error=train_transformer_%A_%a.err
-#SBATCH --time=23:59:30
+#SBATCH --time=00:14:30
 #SBATCH --partition=gpu-highmem
 #SBATCH --account=pawsey1018-gpu
 #SBATCH --gres=gpu:8
