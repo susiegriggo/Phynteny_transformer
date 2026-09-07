@@ -524,7 +524,7 @@ def main(
         "num_layers": num_layers,
         "output_dim": output_dim,
         "use_lstm": use_lstm,
-        "use_positional_encoding": use_positional_encoding,
+        "use_positional_encoding": use_positional_encoding == "True",
         "positional_encoding_type": positional_encoding_type,  # Add this to params
         "protein_dropout_rate": protein_dropout_rate,  # Add this parameter to params dictionary
         "num_classes": 9,  # Hardcoded for now
@@ -578,7 +578,7 @@ def main(
 
     # Train the model
     logger.info("\nTraining model...")
-    use_positional_encoding=(use_positional_encoding == "True"), # Convert to boolean
+    use_positional_encoding = (use_positional_encoding == "True")  # Convert to boolean
     try:
         positional_encoding_func = fourier_positional_encoding if positional_encoding_type == "fourier" else sinusoidal_positional_encoding
         logger.info(f"Using {positional_encoding_type} positional encoding")
