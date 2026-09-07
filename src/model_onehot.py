@@ -1992,7 +1992,7 @@ def train(
         num_classes=model.num_classes,
         num_heads=model.transformer_encoder.layers[0].self_attn.num_heads,
         num_layers=len(model.transformer_encoder.layers),
-        hidden_dim=model.embedding_layer.out_features + 28,
+        hidden_dim=model.embedding_layer.out_features + model.gene_feature_dim,
         lstm_hidden_dim=model.lstm.hidden_size if model.lstm else None,
         dropout=model.dropout.p,
         intialisation='random',  # Adjust as needed
@@ -2007,7 +2007,7 @@ def train(
     logger.info(f'Model type: {type(model)}')
     logger.info(f"Reloaded model parameters: input_dim={model.embedding_layer.in_features}, "
                 f"num_classes={model.num_classes}, num_heads={model.transformer_encoder.layers[0].self_attn.num_heads}, "
-                f"num_layers={len(model.transformer_encoder.layers)}, hidden_dim={model.embedding_layer.out_features + 28}, "
+                f"num_layers={len(model.transformer_encoder.layers)}, hidden_dim={model.embedding_layer.out_features + model.gene_feature_dim}, "
                 f"lstm_hidden_dim={model.lstm.hidden_size if model.lstm else None}, dropout={model.dropout.p}, "
                 f"output_dim={model.output_dim}, use_lstm={model.lstm is not None}, "
                 f"use_positional_encoding={model.positional_encoding is not None}, "
