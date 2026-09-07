@@ -2013,7 +2013,7 @@ def train(
                 f"use_positional_encoding={model.positional_encoding is not None}, "
                 f"protein_dropout_rate={model.protein_feature_dropout.dropout_rate if hasattr(model, 'protein_feature_dropout') else 0.0}")
 
-    reloaded_model.load_state_dict(torch.load(best_model_path, map_location=device, strict=False))
+    reloaded_model.load_state_dict(torch.load(best_model_path, map_location=device), strict=False)
     reloaded_model.eval()
 
     # Test the reloaded model on validation data
