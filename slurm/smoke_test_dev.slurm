@@ -3,7 +3,7 @@
 #SBATCH --output=smoke_test_%A_%a.log
 #SBATCH --error=smoke_test_%A_%a.err
 #SBATCH --time=00:30:00
-#SBATCH --partition=dev
+#SBATCH --partition=gpu-dev
 #SBATCH --account=pawsey1018-gpu
 #SBATCH --gres=gpu:1
 #SBATCH --array=0-2 # 1 fold x 3 model types = 3 total combinations
@@ -13,7 +13,7 @@
 module load singularity/4.1.0-slurm
 
 export PYTORCH_HIP_ALLOC_CONF=expandable_segments:True
-export containerImage=/home/grig0076/susie_scratch/docker/phynteny_transformer_v1_alive_progress_2.sif
+export containerImage=/home/grig0076/susie_scratch/docker/phynteny_transformer_v1_hugging_face_5.sif
 
 # Work around the numpy/scipy ABI mismatch baked into the container (numpy linked
 # against openblas64/ILP64 while scipy expects the standard LP64 build). Must already
