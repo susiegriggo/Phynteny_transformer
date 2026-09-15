@@ -2,11 +2,11 @@
 #SBATCH --job-name=train_transformer_comparison
 #SBATCH --output=train_transformer_%A_%a.log
 #SBATCH --error=train_transformer_%A_%a.err
-#SBATCH --time=00:14:30
+#SBATCH --time=23:54:30
 #SBATCH --partition=gpu-highmem
 #SBATCH --account=pawsey1018-gpu
 #SBATCH --gres=gpu:8
-#SBATCH --array=0-29 # 10 folds x 3 model types = 30 total combinations
+#SBATCH --array=0-5 # 10 folds x 3 model types = 30 total combinations
 
 # Load necessary modules
 module load singularity/4.1.0-slurm

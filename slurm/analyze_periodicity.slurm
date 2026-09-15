@@ -3,9 +3,9 @@
 #SBATCH --output=analyze_periodicity_%A_%a.log
 #SBATCH --error=analyze_periodicity_%A_%a.err
 #SBATCH --time=00:30:00
-#SBATCH --partition=gpu-dev
+#SBATCH --partition=gpu-highmem
 #SBATCH --account=pawsey1018-gpu
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:8
 #SBATCH --array=0-2 # one task per model type: original, no_sinusoidal, untrained
 # NOTE: no GPU is actually needed for this - it's pure numpy aggregation over the
 # already-saved final_validation_*.pkl files. --gres=gpu:1/gpu-dev is only here to
@@ -20,7 +20,8 @@ MODEL_TYPES=("original" "no_sinusoidal" "untrained")
 MODEL_TYPE=${MODEL_TYPES[$SLURM_ARRAY_TASK_ID]}
 
 # Update this to wherever the trained_models directory actually lives
-BASE_DIR=/home/grig0076/susie_scratch/phynteny_transformer/trained_models
+#BASE_DIR=/home/grig0076/susie_scratch/phynteny_transformer/trained_models
+BASE_DIR=/home/grig0076/susie_scratch/phynteny_transformer/data/PhageScope/
 OUT_DIR=/home/grig0076/susie_scratch/phynteny_transformer/periodicity_results
 mkdir -p $OUT_DIR
 

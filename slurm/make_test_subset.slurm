@@ -2,10 +2,10 @@
 #SBATCH --job-name=make_test_subset
 #SBATCH --output=make_test_subset_%j.log
 #SBATCH --error=make_test_subset_%j.err
-#SBATCH --time=00:20:00
+#SBATCH --time=02:00:00
 #SBATCH --partition=gpu-highmem
 #SBATCH --account=pawsey1018-gpu
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:8
 
 # One-off job: build a small subset of X.pkl/y.pkl for fast smoke-testing on the
 # dev queue. This still has to load the FULL data once, so it runs on the same
@@ -24,7 +24,7 @@ DATA_DIR=/home/grig0076/susie_scratch/phynteny_transformer/phynteny_processed_tr
 OUT_DIR=/home/grig0076/susie_scratch/phynteny_transformer/dev_test_data
 mkdir -p $OUT_DIR
 
-singularity exec --rocm $containerImage python3 scripts/make_test_subset.py \
+singularity exec --rocm $containerImage python3 /home/grig0076/susie_scratch/GitHubs/Phynteny_transformer/scripts/make_test_subset.py \
   --x_path $DATA_DIR/data.X.pkl \
   --y_path $DATA_DIR/data.y.pkl \
   --n_genomes 20 \
