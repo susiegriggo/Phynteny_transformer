@@ -156,6 +156,24 @@ def quantify_periodicity(offsets, profile, min_period=4, max_period=None):
     }
 
 
+def batch_seq_len_histogram(mask_batches):
+    """
+    Distribution of padded batch sequence lengths, weighted by the number of genomes
+    in each batch. The circular relative attention folds any relative distance d to
+    min(d, seq_len - d) (src/model_onehot.py ~line 1044), so if validation batches
+    commonly pad out to a similar seq_len, that folding creates a consistent
+    "reflection point" at roughly seq_len/2 - an architectural artifact independent
+    of training or of the positional encoding, that would show up as a spurious peak
+    in the relative-distance attention profile at that lag.
+    """
+    lengths, weights = [], []
+    for mask in mask_batches:
+        batch_size, seq_len = mask.shape
+        lengths.append(seq_len)
+        weights.append(batch_size)
+    return np.array(lengths), np.array(weights)
+
+
 @click.command()
 @click.option("--base_dir", required=True, type=click.Path(exists=True), help="Directory containing sinusoidal_comparison_<model_type>_fold_<N> directories.")
 @click.option("--model_type", required=True, type=click.Choice(["original", "no_sinusoidal", "untrained"]), help="Which model type to aggregate.")
@@ -188,6 +206,14 @@ def main(base_dir, model_type, folds, max_lag, out):
     periodicity = quantify_periodicity(offsets, attn_profile)
     logger.info(f"Periodicity summary: {periodicity.get('best_period')=} {periodicity.get('best_autocorr')=}")
 
+    seq_lens, seq_len_weights = batch_seq_len_histogram(all_masks)
+    if seq_lens.size > 0:
+        median_len = float(np.average(seq_lens, weights=seq_len_weights))
+        logger.info(
+            f"Median (genome-weighted) padded batch seq_len: {median_len:.1f} "
+            f"(half of that = {median_len / 2:.1f} - compare against best_period above)"
+        )
+
     os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
     np.savez(
         out,
@@ -201,6 +227,8 @@ def main(base_dir, model_type, folds, max_lag, out):
         agreement_counts=agreement_counts,
         periodicity_lags=np.array(periodicity.get("lags", [])),
         periodicity_autocorr=np.array(periodicity.get("autocorr_curve", [])),
+        seq_lens=seq_lens,
+        seq_len_weights=seq_len_weights,
         periodicity_best_period=periodicity.get("best_period") if periodicity.get("best_period") is not None else -1,
         periodicity_best_autocorr=periodicity.get("best_autocorr") if periodicity.get("best_autocorr") is not None else np.nan,
     )
