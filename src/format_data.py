@@ -220,6 +220,10 @@ def extract_features(this_phage, key):
     protein_id = [p[0] if p is not None else None for p in protein_id]
     phrogs = [this_CDS[i].qualifiers.get("phrog") for i in range(len(this_CDS))]
     phrogs = ["No_PHROG" if i is None else i[0] for i in phrogs]
+    functions = [this_CDS[i].qualifiers.get("function") for i in range(len(this_CDS))]
+    functions = ["unknown function" if i is None else ','.join(i) for i in functions]
+    logger.debug(phrogs)
+    logger.debug(functions)
     
     # Save all original feature qualifiers - critical for preserving information
     all_qualifiers = []
@@ -262,6 +266,7 @@ def extract_features(this_phage, key):
     return {
         "length": phage_length,
         "phrogs": phrogs,
+        "functions": functions,
         "protein_id": protein_id,
         "sense": sense,
         "position": position,
@@ -383,8 +388,13 @@ def fetch_data(input_data, gene_categories, phrog_integer, maximum_genes=False):
                 continue
 
             # integer encoding of phrog categories
-            integer = phrog_to_integer(phage_dict.get("phrogs"), phrog_integer)
+            phrogs = phrog_to_integer(phage_dict.get("phrogs"), phrog_integer)
+            functions = phrog_to_integer(phage_dict.get("functions"), phrog_integer)
+            integer = [f if p == -1 else p for p, f in zip(phrogs, functions)]
             phage_dict["categories"] = integer
+            logger.debug(phrogs)
+            logger.debug(functions)
+            logger.debug(phage_dict["categories"])
 
             # evaluate the number of categories present in the phage
             categories_present = set(integer)
@@ -905,6 +915,7 @@ def read_annotations_information():
             [phrog_integer_reverse.get(k) for k in list(category_dict.values())],
         )
     )
+    phrog_integer_category.update(phrog_integer_reverse)
     phrog_integer_category["No_PHROG"] = -1
 
     return category_dict, phrog_integer_category
