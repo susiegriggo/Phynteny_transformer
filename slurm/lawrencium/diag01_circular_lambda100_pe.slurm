@@ -27,15 +27,13 @@
 
 module load gcc/11.4.0
 module load cuda/12.8.0
-# TODO: adjust if Lawrencium exposes conda differently (e.g. `module load anaconda3`)
-module load anaconda3
-CONDA_ENV=phynteny_transformer   # TODO: set to your actual conda env name
-source activate $CONDA_ENV
 
-# TODO: point these at wherever you transfer data.X.pkl / data.y.pkl on Lawrencium
-BASE_DIR=/global/scratch/users/$USER/phynteny_transformer   # TODO: confirm your Lawrencium scratch path
-DATA_DIR=$BASE_DIR/phynteny_processed_training_files_and_splits_v0.1
-OUT_DIR=$BASE_DIR/diagnostic_runs
+SCRATCH=/global/home/users/susiegrigson/scratch
+source $SCRATCH/big_conda/etc/profile.d/conda.sh
+conda activate $SCRATCH/big_conda/phynteny_transformer
+
+DATA_DIR=$SCRATCH/Phynteny_data/phynteny_processed_training_files_and_splits_v0.1
+OUT_DIR=$SCRATCH/phynteny_diagnostic_runs
 mkdir -p $OUT_DIR
 
 FOLD=1   # single-fold diagnostic - same 10-fold split (random_state=42) as every other run, so comparable fold-for-fold

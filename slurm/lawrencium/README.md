@@ -34,17 +34,17 @@ embeddings for every gene) - not duplicated here since it predates this sweep.
 
 ## Before submitting
 
-Every script has `# TODO` comments marking cluster-specific values that need
-filling in once, consistently, across all 10:
+Resolved: all 10 scripts load `gcc/11.4.0` + `cuda/12.8.0`, activate the
+`phynteny_transformer` conda env at `$SCRATCH/big_conda/` (a prefix env, not a
+named one - activated via `conda activate <full path>`), read data from
+`$SCRATCH/Phynteny_data/phynteny_processed_training_files_and_splits_v0.1`,
+and write outputs to `$SCRATCH/phynteny_diagnostic_runs/`, where
+`SCRATCH=/global/home/users/susiegrigson/scratch`.
 
-- `--account` / `--partition` / `--qos` SBATCH directives (currently copied
-  from `example_slurm/example_script.slurm`: `pc_microbiome` / `es2` /
-  `es2_normal` - confirm these are right for this allocation).
-- The `module load anaconda3` line and `CONDA_ENV` name - set up a conda env
-  with this repo's dependencies on Lawrencium first, then point these at it.
-- `BASE_DIR` - wherever `data.X.pkl` / `data.y.pkl` end up on Lawrencium
-  scratch once the transfer finishes. Outputs are written under
-  `$BASE_DIR/diagnostic_runs/`.
+Still outstanding: the `--account` / `--partition` / `--qos` SBATCH directives
+are still copied from `example_slurm/example_script.slurm` (`pc_microbiome` /
+`es2` / `es2_normal`) - confirm these are right for this allocation before
+submitting, since they weren't given to me directly.
 
 Submit individually with `sbatch slurm/lawrencium/diag01_circular_lambda100_pe.slurm`
 (run from the repo root, since the scripts use relative paths to the training
