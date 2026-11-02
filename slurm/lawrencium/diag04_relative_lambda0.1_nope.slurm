@@ -1,15 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=diag04_relative_l0.1_nope
-#SBATCH --output=diag04_relative_l0.1_nope_%j.log
-#SBATCH --error=diag04_relative_l0.1_nope_%j.err
-#SBATCH --time=24:00:00
-#SBATCH --account=pc_microbiome      # TODO: confirm account/allocation on Lawrencium
-#SBATCH --partition=es2              # TODO: confirm partition
-#SBATCH --qos=es2_normal             # TODO: confirm qos
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
+#SBATCH --time=16:00:00
+#SBATCH --account=pc_microbiome
+#SBATCH --partition=es1
+#SBATCH --qos=es_normal
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=7
-#SBATCH --gres=gpu:H100:1
+#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:A40:1
 
 # Diagnostic run 4/7: relative (LINEAR, non-circular) attention,
 # lambda_penalty=0.1, PE off.
@@ -26,6 +26,10 @@ module load cuda/12.8.0
 SCRATCH=/global/home/users/susiegrigson/scratch
 source $SCRATCH/big_conda/etc/profile.d/conda.sh
 conda activate $SCRATCH/big_conda/phynteny_transformer
+
+REPO=/global/home/users/susiegrigson/GitHubs/Phynteny_transformer
+cd $REPO
+export PYTHONPATH=$REPO:$PYTHONPATH   # make sure `from src...` resolves this checkout, not any installed copy
 
 DATA_DIR=$SCRATCH/Phynteny_data/phynteny_processed_training_files_and_splits_v0.1
 OUT_DIR=$SCRATCH/phynteny_diagnostic_runs

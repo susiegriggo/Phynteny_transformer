@@ -34,21 +34,28 @@ embeddings for every gene) - not duplicated here since it predates this sweep.
 
 ## Before submitting
 
-Resolved: all 10 scripts load `gcc/11.4.0` + `cuda/12.8.0`, activate the
-`phynteny_transformer` conda env at `$SCRATCH/big_conda/` (a prefix env, not a
-named one - activated via `conda activate <full path>`), read data from
-`$SCRATCH/Phynteny_data/phynteny_processed_training_files_and_splits_v0.1`,
-and write outputs to `$SCRATCH/phynteny_diagnostic_runs/`, where
-`SCRATCH=/global/home/users/susiegrigson/scratch`.
+All 10 scripts are fully filled in and ready to submit:
 
-Still outstanding: the `--account` / `--partition` / `--qos` SBATCH directives
-are still copied from `example_slurm/example_script.slurm` (`pc_microbiome` /
-`es2` / `es2_normal`) - confirm these are right for this allocation before
-submitting, since they weren't given to me directly.
+- Load `gcc/11.4.0` + `cuda/12.8.0`, activate the `phynteny_transformer`
+  conda env at `$SCRATCH/big_conda/` (a prefix env, not a named one -
+  activated via `conda activate <full path>`).
+- `cd` into the repo checkout
+  (`/global/home/users/susiegrigson/GitHubs/Phynteny_transformer`) and export
+  `PYTHONPATH` to it explicitly, so `from src...` always resolves this
+  checkout regardless of submission directory or conda-env install state.
+- Read data from
+  `$SCRATCH/Phynteny_data/phynteny_processed_training_files_and_splits_v0.1`
+  and write outputs to `$SCRATCH/phynteny_diagnostic_runs/`, where
+  `SCRATCH=/global/home/users/susiegrigson/scratch`.
+- SBATCH directives (`--account=pc_microbiome`, `--partition=es1`,
+  `--qos=es_normal`, `--cpus-per-task=8`, `--gres=gpu:A40:1`, `--time=16:00:00`
+  except diag07's lighter 12h) match the confirmed Lawrencium template.
+  `--output`/`--error` use `%x-%j.out`/`%x-%j.err`, so each job's log/err
+  files are automatically named after its own `--job-name` plus job ID.
 
-Submit individually with `sbatch slurm/lawrencium/diag01_circular_lambda100_pe.slurm`
-(run from the repo root, since the scripts use relative paths to the training
-scripts), or all at once with `slurm/lawrencium/submit_all.sh`.
+Submit individually with `sbatch slurm/lawrencium/diag01_circular_lambda100_pe.slurm`,
+or all at once with `slurm/lawrencium/submit_all.sh` (self-navigates to the
+repo root, so it can be invoked with a path from anywhere).
 
 ## Notes
 

@@ -1,15 +1,15 @@
 #!/bin/bash
 #SBATCH --job-name=diag01_circular_l100_pe
-#SBATCH --output=diag01_circular_l100_pe_%j.log
-#SBATCH --error=diag01_circular_l100_pe_%j.err
-#SBATCH --time=24:00:00
-#SBATCH --account=pc_microbiome      # TODO: confirm account/allocation on Lawrencium
-#SBATCH --partition=es2              # TODO: confirm partition
-#SBATCH --qos=es2_normal             # TODO: confirm qos
+#SBATCH --output=%x-%j.out
+#SBATCH --error=%x-%j.err
+#SBATCH --time=16:00:00
+#SBATCH --account=pc_microbiome
+#SBATCH --partition=es1
+#SBATCH --qos=es_normal
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=7            # 7 CPUs per H100 (matches example_slurm/example_script.slurm ratio)
-#SBATCH --gres=gpu:H100:1
+#SBATCH --cpus-per-task=8
+#SBATCH --gres=gpu:A40:1
 
 # Diagnostic run 1/7 of 7: single-fold sweep to isolate two suspected
 # contributors to the Reviewer 3 Figure 4D periodicity artifact:
@@ -31,6 +31,10 @@ module load cuda/12.8.0
 SCRATCH=/global/home/users/susiegrigson/scratch
 source $SCRATCH/big_conda/etc/profile.d/conda.sh
 conda activate $SCRATCH/big_conda/phynteny_transformer
+
+REPO=/global/home/users/susiegrigson/GitHubs/Phynteny_transformer
+cd $REPO
+export PYTHONPATH=$REPO:$PYTHONPATH   # make sure `from src...` resolves this checkout, not any installed copy
 
 DATA_DIR=$SCRATCH/Phynteny_data/phynteny_processed_training_files_and_splits_v0.1
 OUT_DIR=$SCRATCH/phynteny_diagnostic_runs
