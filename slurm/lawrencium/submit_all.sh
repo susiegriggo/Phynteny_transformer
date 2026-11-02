@@ -9,7 +9,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
-for script in slurm/lawrencium/diag0*.slurm; do
+for script in slurm/lawrencium/diag*.slurm; do
     echo "Submitting $script"
     sbatch "$script"
 done
