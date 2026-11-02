@@ -11,6 +11,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:A40:1
 
+set -euo pipefail   # fail the job (and report a nonzero exit code) if any command fails
+
 # Diagnostic run 5/7: relative (linear, non-circular) attention,
 # lambda_penalty=0.1, PE ON.
 # Same as diag04 but keeps sinusoidal PE on, as a control to isolate whether

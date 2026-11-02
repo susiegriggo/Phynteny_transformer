@@ -11,6 +11,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:A40:1
 
+set -euo pipefail   # fail the job (and report a nonzero exit code) if any command fails
+
 # Leave-one-out run 1/3: same backbone as diag02 (circular attention,
 # lambda_penalty=0.1, PE on) but with the BiLSTM turned on.
 #
@@ -23,6 +25,13 @@
 #
 # Compares against diag02 (same backbone, LSTM off) to isolate the BiLSTM's
 # contribution to gene-order modelling on its own.
+#
+# lstm_hidden_dim is set to 128 (not train_transformer.py's CLI default of
+# 512) so the post-LSTM d_model (2*lstm_hidden_dim=256) matches hidden_dim=256
+# used by every other run. Without this, the transformer ends up 4x wider
+# (d_model=1024) than the diag02 backbone it's meant to be compared against -
+# both an unfair, confounded comparison (bigger model, not just +LSTM) and the
+# direct cause of this run's first attempt OOM-ing on an A40.
 
 module load gcc/11.4.0
 module load cuda/12.8.0
@@ -52,6 +61,7 @@ EPOCHS=50
 ATTENTION=circular
 LAMBDA_PENALTY=0.1
 USE_PE=True
+LSTM_HIDDEN_DIM=128   # 2*128=256, matching hidden_dim so the backbone stays the same size
 
 OUTPUT_DIR="$OUT_DIR/diag08_lstm_fold_${FOLD}"
 
@@ -74,6 +84,7 @@ python3 train_transformer/train_transformer.py \
   --lambda_penalty $LAMBDA_PENALTY \
   --use_positional_encoding $USE_PE \
   --use_lstm \
+  --lstm_hidden_dim $LSTM_HIDDEN_DIM \
   --out $OUTPUT_DIR \
   --force
 

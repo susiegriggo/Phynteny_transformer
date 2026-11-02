@@ -11,6 +11,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:A40:1
 
+set -euo pipefail   # fail the job (and report a nonzero exit code) if any command fails
+
 # Diagnostic run 3/7: circular attention, lambda_penalty=0.1, PE OFF.
 # Lambda fix plus dropping the redundant absolute sinusoidal PE (since the
 # circular relative-position bias already encodes position - stacking both is

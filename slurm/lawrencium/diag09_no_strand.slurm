@@ -11,6 +11,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:A40:1
 
+set -euo pipefail   # fail the job (and report a nonzero exit code) if any command fails
+
 # Leave-one-out run 2/3: same backbone as diag02 (circular attention,
 # lambda_penalty=0.1, PE on, LSTM off), but every gene's strand feature is
 # zeroed out before it reaches the model (train_no_strand.py) - the model

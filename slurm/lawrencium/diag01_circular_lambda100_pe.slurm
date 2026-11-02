@@ -11,6 +11,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:A40:1
 
+set -euo pipefail   # fail the job (and report a nonzero exit code) if any command fails
+
 # Diagnostic run 1/7 of 7: single-fold sweep to isolate two suspected
 # contributors to the Reviewer 3 Figure 4D periodicity artifact:
 #   (a) lambda_penalty=100 in every training script, vs the CLI's documented

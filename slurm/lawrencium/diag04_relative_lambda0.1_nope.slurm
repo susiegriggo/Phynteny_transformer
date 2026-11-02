@@ -11,6 +11,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:A40:1
 
+set -euo pipefail   # fail the job (and report a nonzero exit code) if any command fails
+
 # Diagnostic run 4/7: relative (LINEAR, non-circular) attention,
 # lambda_penalty=0.1, PE off.
 # Uses the rewritten RelativePositionAttention (fixed this session - it was

@@ -11,6 +11,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:A40:1
 
+set -euo pipefail   # fail the job (and report a nonzero exit code) if any command fails
+
 # Diagnostic run 7/7: context-free baseline (ESM protein embedding + strand +
 # length -> MLP). No attention, no positional encoding, no access to any other
 # gene in the genome. Needs retraining since the old Setonix checkpoints were

@@ -11,6 +11,8 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:A40:1
 
+set -euo pipefail   # fail the job (and report a nonzero exit code) if any command fails
+
 # Diagnostic run 6/7: absolute attention (TransformerClassifier - no relative
 # or circular position bias at all), PE on, lambda_penalty=0.1.
 # PE must stay on here: with absolute attention and PE off there would be no
