@@ -36,9 +36,14 @@ embeddings for every gene) - not duplicated here since it predates this sweep.
 
 All 10 scripts are fully filled in and ready to submit:
 
-- Load `gcc/11.4.0` + `cuda/12.8.0`, activate the `phynteny_transformer`
-  conda env at `$SCRATCH/big_conda/` (a prefix env, not a named one -
-  activated via `conda activate <full path>`).
+- Load `gcc/11.4.0` + `cuda/12.8.0`. **Conda is not activated inside the
+  scripts** - activate the `phynteny_transformer` env yourself
+  (`conda activate $SCRATCH/big_conda/phynteny_transformer`) before running
+  `sbatch`; `sbatch` inherits your shell's environment by default, so the job
+  picks up whatever's already active. (An earlier version activated conda
+  in-script via `source $SCRATCH/big_conda/etc/profile.d/conda.sh`, but that
+  path doesn't exist on this cluster - `conda.sh` lives somewhere else or
+  conda needs `conda init` run first.)
 - `cd` into the repo checkout
   (`/global/home/users/susiegrigson/GitHubs/Phynteny_transformer`) and export
   `PYTHONPATH` to it explicitly, so `from src...` always resolves this

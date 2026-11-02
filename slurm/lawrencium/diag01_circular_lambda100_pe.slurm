@@ -28,9 +28,10 @@
 module load gcc/11.4.0
 module load cuda/12.8.0
 
+# Activate the phynteny_transformer conda env (at $SCRATCH/big_conda/) yourself
+# before submitting this job with sbatch - sbatch inherits your shell's
+# environment, so no conda activation happens inside the script itself.
 SCRATCH=/global/home/users/susiegrigson/scratch
-source $SCRATCH/big_conda/etc/profile.d/conda.sh
-conda activate $SCRATCH/big_conda/phynteny_transformer
 
 REPO=/global/home/users/susiegrigson/GitHubs/Phynteny_transformer
 cd $REPO
