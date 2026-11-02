@@ -10,6 +10,7 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
 #SBATCH --gres=gpu:A40:1
+#SBATCH --exclude=n0001.es1,n0002.es1       # both repeatedly faulty: n0002 fails python/logging imports, n0001 OOMs regardless of model size
 
 set -euo pipefail   # fail the job (and report a nonzero exit code) if any command fails
 
